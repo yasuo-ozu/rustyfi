@@ -1718,8 +1718,8 @@ fn cjk_leading_kern(c: char) -> f64 {
     }
 }
 
-/// The glue SATySFi puts between two directly adjacent CJK characters, as
-/// `(natural, shrink, stretch)` ratios of `font_size` — `space_between_chunks`
+/// The glue SATySFi puts between two directly adjacent CJK characters, as an
+/// absolute `(natural, shrink, stretch)` — `space_between_chunks`
 /// (`convertText.ml:220`) with `ideographic_single`'s compensating kerns
 /// (`convertText.ml:266`) folded in.
 ///
@@ -1733,46 +1733,59 @@ fn cjk_leading_kern(c: char) -> f64 {
 /// bulk of a Japanese line's elasticity. Two punctuation marks in a row
 /// (`」、`, `」。`) get NO space back, so the pair sets 0.5em tighter.
 ///
-/// KNOWN, MEASURED deviation: every ratio here applies to `ctx.font_size`,
-/// where upstream applies the kerns and all four `pure_halfwidth_space_*` sizes
-/// to `get_corrected_font_size ctx script` (`convertText.ml:76`) — font size
-/// TIMES the script's ratio (0.88 for stdja's CJK face, so a half-width kern at
-/// 12pt is −5.28pt not −6pt). Only `adjacent_space` (`:102`) and the
-/// inter-script glue (`:225`) take the RAW size.
+/// **Which font size each part scales against is not uniform, and that is the
+/// point of taking three sizes rather than one.** Upstream applies the kerns
+/// (`halfwidth_kern`/`quarterwidth_kern`, `convertText.ml:110-118`) and all
+/// four `pure_halfwidth_space_*` sizes to `get_corrected_font_size ctx script`
+/// (`convertText.ml:76-79`) — the font size TIMES the script's own ratio, 0.88
+/// for stdja's CJK face, so a half-width kern at 12pt is −5.28pt and not −6pt.
+/// Only `adjacent_space` (`:101-106`) takes the RAW `ctx.font_size`. Scaling
+/// everything by the raw size made every JLreq class space 13.6% too elastic
+/// (0.25 × 12 = 3pt of stretch where upstream has 0.25 × 10.56 = 2.64pt);
+/// since punctuation carries ten times the stretch of an ordinary
+/// inter-character gap, that error set the stretch budget of a whole Japanese
+/// line and so its justified glyph positions.
 ///
-/// Correcting it was written and measured, and does not land: it moves NO line
-/// break on any corpus document (identical to four decimals across all six),
-/// and fails the fidelity gate on word-count (xpath 5 -> 8, easytable 100 ->
-/// 110), because a smaller class space closes gaps upstream doesn't have fewer
-/// of. The missing width is elsewhere — the per-character kerns this port does
-/// not emit at a CJK↔Latin boundary or run edge (see [`cjk_trailing_kern`]).
-/// The two changes are a package; do NOT re-derive either half from
-/// `convertText.ml` alone.
-fn cjk_pair_space(a: char, b: char, adjacent_stretch: f64) -> (f64, f64, f64) {
+/// `size_a`/`size_b` are the corrected sizes of the LEFT and RIGHT characters,
+/// upstream's `size1`/`size2` (`convertText.ml:196-198`); the `hwsoftM`/
+/// `hwhardM` arms take `Length::max` of the two, exactly as `sizeM` does. They
+/// differ only when the two characters resolve to different `font_scheme` slots
+/// (`Kana` vs `HanIdeographic`) carrying different ratios.
+fn cjk_pair_space(
+    a: char,
+    size_a: Length,
+    b: char,
+    size_b: Length,
+    raw_size: Length,
+    adjacent_stretch: f64,
+) -> (Length, Length, Length) {
     use JlClass::*;
     let (ca, cb) = (jl_class(a), jl_class(b));
-    // Kerns from `ideographic_single`, as a NEGATIVE ratio of font_size. Between
-    // two CJK characters the pair's kern is exactly `a`'s trailing plus `b`'s
-    // leading one, which is what makes the pair form equivalent to upstream's
-    // per-character one here.
-    let kern = cjk_trailing_kern(a) + cjk_leading_kern(b);
-    // `pure_space_between_classes`, in its own match order.
-    let hwsoft = (0.5, 0.25, 0.25);
-    let hwhard = (0.5, 0.0, 0.25);
+    // Kerns from `ideographic_single`, each a NEGATIVE ratio of its OWN
+    // character's corrected size. Between two CJK characters the pair's kern is
+    // exactly `a`'s trailing plus `b`'s leading one, which is what makes the
+    // pair form equivalent to upstream's per-character one here.
+    let kern = size_a * cjk_trailing_kern(a) + size_b * cjk_leading_kern(b);
+    let size_m = Length::max(size_a, size_b);
+    // `pure_space_between_classes`, in its own match order. The third component
+    // of each arm is the size that arm's space scales against.
+    let hwsoft = |s: Length| (s * 0.5, s * 0.25, s * 0.25);
+    let hwhard = |s: Length| (s * 0.5, Length::ZERO, s * 0.25);
     let cls = match (ca, cb) {
-        (Some(Close), Some(Open)) | (Some(Comma), Some(Open)) => Some(hwsoft),
-        (Some(FullStop), Some(Open)) => Some(hwhard),
-        (_, Some(Open)) => Some(hwsoft),
+        (Some(Close), Some(Open)) | (Some(Comma), Some(Open)) => Some(hwsoft(size_m)),
+        (Some(FullStop), Some(Open)) => Some(hwhard(size_m)),
+        (_, Some(Open)) => Some(hwsoft(size_b)),
         (Some(Close), Some(Comma)) | (Some(Close), Some(FullStop)) => None,
-        (Some(Close), _) | (Some(Comma), _) => Some(hwsoft),
-        (Some(FullStop), _) => Some(hwhard),
+        (Some(Close), _) | (Some(Comma), _) => Some(hwsoft(size_a)),
+        (Some(FullStop), _) => Some(hwhard(size_a)),
         _ => None,
     };
     match cls {
         Some((n, sh, st)) => (kern + n, sh, st),
         // No class space: `adjacent_space` (natural 0, shrink 0, stretch
-        // `adjacent_stretch`), plus whatever kern the pair carries.
-        None => (kern, 0.0, adjacent_stretch),
+        // `adjacent_stretch` × the RAW size), plus whatever kern the pair
+        // carries.
+        None => (kern, Length::ZERO, raw_size * adjacent_stretch),
     }
 }
 
@@ -1804,6 +1817,54 @@ fn box_trailing_char(b: &HorzBox) -> Option<char> {
 /// `\code(…)`/`${…}` box against surrounding CJK prose ("cellfmt 型", "𝑛 番目").
 /// A boundary already carrying a glue/discretionary reads as `None` on one edge
 /// and is skipped, so this is idempotent and never doubles the text-run glue.
+/// The Latin↔CJK inter-script space, `pure_space_between_scripts`
+/// (`convertText.ml:29-50`).
+///
+/// **RIGID — natural `0.24 * font_size`, no shrink, no stretch** — and that is
+/// upstream's behaviour, not a simplification. `default_script_space_map`
+/// (`primitives.cppo.ml:488`) really does carry the triple
+/// `(0.24, 0.08, 0.16)`, but `pure_space_between_scripts` spends it like this:
+///
+/// ```ocaml
+/// Some(LBAtom((natural (size *% r0), size *% r1, size *% r2), EvHorzEmpty))
+/// ```
+///
+/// `LBAtom`'s first field is `metrics = length_info * length * length`, i.e.
+/// *(width info, HEIGHT, DEPTH)* (`lineBreakBox.ml:7`), and `natural wid`
+/// builds `{natural = wid; shrinkable = zero; stretchable = zero}`
+/// (`lineBreakBox.ml:54-59`). So `r1` and `r2` land in the height and depth
+/// slots; only `r0` reaches the width. Contrast the sibling
+/// `pure_halfwidth_space_soft` (`convertText.ml:83-85`), which builds its
+/// elasticity with `make_width_info` and passes `Length.zero, Length.zero` for
+/// height and depth — the correct shape, right next door. The commented-out
+/// predecessor at `convertText.ml:58` has the same misplacement, so v0.0.6 has
+/// never had an elastic inter-script space.
+///
+/// The stray height (`0.08 * size`) and depth (`0.16 * size`) are swallowed by
+/// `get_total_metrics`'s `max hacc h` / `min dacc d` (`lineBreak.ml:55-59`) —
+/// a 0.96pt height never exceeds a real glyph's and a POSITIVE depth never
+/// wins a `min` against a descender — so rigidity is the only observable
+/// consequence, and it is the one that matters: this glue sits at every
+/// Japanese/Latin junction, and giving it 0.16em of stretch let the port soak
+/// up justification slack that upstream is forced to push into the
+/// inter-character `adjacent_space` inside the CJK runs themselves.
+///
+/// Still a break point: upstream wraps this box in `discretionary_if_breakable`
+/// (`convertText.ml:228`) exactly as it does the elastic glues, and an
+/// `OuterEmpty` with zero shrink and stretch is still `is_glue()` — which is
+/// also why a ratio of 0.0 emits a zero-width box rather than nothing.
+///
+/// The ratio comes from `ctx.script_space_map`, so
+/// `set-space-ratio-between-scripts` reaches it (slydifi's arctic theme zeroes
+/// all four Latin↔CJK directions).
+fn interscript_glue(ctx: &Context, left: Script, right: Script) -> PureHorzBox {
+    PureHorzBox::OuterEmpty {
+        natural: ctx.font_size * ctx.script_space_map[left as usize][right as usize],
+        shrinkable: Length::ZERO,
+        stretchable: Length::ZERO,
+    }
+}
+
 fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBox> {
     if boxes.len() < 2 {
         return boxes;
@@ -1812,14 +1873,9 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
     for b in boxes {
         if let (Some(pc), Some(cc)) = (out.last().and_then(box_trailing_char), box_leading_char(&b))
         {
-            if is_latin_cjk_boundary(char_script(pc), char_script(cc))
-                && !interscript_glue_suppressed(pc, cc)
-            {
-                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
-                    natural: ctx.font_size * 0.24,
-                    shrinkable: ctx.font_size * 0.08,
-                    stretchable: ctx.font_size * 0.16,
-                }));
+            let (ls, rs) = (char_script(pc), char_script(cc));
+            if is_latin_cjk_boundary(ls, rs) && !interscript_glue_suppressed(pc, cc) {
+                out.push(HorzBox::Pure(interscript_glue(ctx, ls, rs)));
             }
         }
         out.push(b);
@@ -2028,13 +2084,14 @@ fn text_to_boxes(
         let script = char_script(c);
         // Inter-script glue (`primitives.ml:517-524` `default_script_space_map`,
         // applied in `convertText.ml` `pure_space_between_scripts`): SATySFi's
-        // default context inserts `(natural 0.24, shrink 0.08, stretch 0.16) *
-        // size` glue between a Latin run and an adjacent CJK (Kana/Han) run —
-        // the space visible as "2 つ" / "+easytable は" that the port otherwise
-        // packs tight ("2つ"). Emitted at the boundary using `prev_script` (a
-        // CJK char resets `word_script` via its UAX#14 discretionary, so this
-        // can't rely on `word_script` alone). The glue is also an
-        // `is_break_point`, matching upstream (the boundary is a legal break).
+        // default context inserts a `0.24 * size` space between a Latin run and
+        // an adjacent CJK (Kana/Han) run — the space visible as "2 つ" /
+        // "+easytable は" that the port otherwise packs tight ("2つ"). Emitted
+        // at the boundary using `prev_script` (a CJK char resets `word_script`
+        // via its UAX#14 discretionary, so this can't rely on `word_script`
+        // alone). The glue is also an `is_break_point`, matching upstream (the
+        // boundary is a legal break). See [`interscript_glue`] for why it is
+        // RIGID even though `default_script_space_map` carries a triple.
         if let (Some(prev), Some(pc)) = (prev_script, prev_char) {
             if is_latin_cjk_boundary(prev, script) && !interscript_glue_suppressed(pc, c) {
                 if let Some(s) = word_script.take() {
@@ -2042,11 +2099,7 @@ fn text_to_boxes(
                         flush_word(&mut word, s, out)?;
                     }
                 }
-                out.push(HorzBox::Pure(PureHorzBox::OuterEmpty {
-                    natural: ctx.font_size * 0.24,
-                    shrinkable: ctx.font_size * 0.08,
-                    stretchable: ctx.font_size * 0.16,
-                }));
+                out.push(HorzBox::Pure(interscript_glue(ctx, prev, script)));
             }
         }
         if let Some(cur) = word_script {
@@ -2122,9 +2175,19 @@ fn text_to_boxes(
             let next_char = text[after..].chars().next();
             let next_is_cjk = next_char.is_some_and(|nc| is_cjk(char_script(nc)));
             let pair = if is_cjk(script) && next_is_cjk {
+                let nc = next_char.expect("checked");
+                // `get_corrected_font_size` per SIDE (`convertText.ml:76-79`):
+                // font size times the script's own `font_scheme` ratio. The
+                // kerns and the JLreq class spaces scale against these; only
+                // `adjacent_space` takes the raw size. See `cjk_pair_space`.
+                let size_a = ctx.font_size * script_font(ctx, script).ratio;
+                let size_b = ctx.font_size * script_font(ctx, char_script(nc)).ratio;
                 Some(cjk_pair_space(
                     c,
-                    next_char.expect("checked"),
+                    size_a,
+                    nc,
+                    size_b,
+                    ctx.font_size,
                     ctx.adjacent_stretch,
                 ))
             } else {
@@ -2154,15 +2217,13 @@ fn text_to_boxes(
                     if let Some((n, sh, st)) = pair {
                         // The kern part is RIGID and must never be a break point,
                         // so it rides as a `FixedEmpty` rather than as glue.
-                        if n != 0.0 {
-                            no_break.push(PureHorzBox::FixedEmpty {
-                                width: ctx.font_size * n,
-                            });
+                        if n != Length::ZERO {
+                            no_break.push(PureHorzBox::FixedEmpty { width: n });
                         }
                         no_break.push(PureHorzBox::OuterEmpty {
                             natural: Length::ZERO,
-                            shrinkable: ctx.font_size * sh,
-                            stretchable: ctx.font_size * st,
+                            shrinkable: sh,
+                            stretchable: st,
                         });
                     }
                     out.push(HorzBox::Pure(PureHorzBox::Discretionary {
@@ -2205,7 +2266,7 @@ fn text_to_boxes(
                 // wide, `末・雲` a quarter — stays exactly as open as before.
                 None => {
                     if let Some((_, sh, st)) = pair {
-                        if sh != 0.0 || st != 0.0 {
+                        if sh != Length::ZERO || st != Length::ZERO {
                             flush_word(&mut word, script, out)?;
                             word_script = None;
                             out.push(HorzBox::Pure(PureHorzBox::Discretionary {
@@ -2214,8 +2275,8 @@ fn text_to_boxes(
                                 post_break: Vec::new(),
                                 no_break: vec![PureHorzBox::OuterEmpty {
                                     natural: Length::ZERO,
-                                    shrinkable: ctx.font_size * sh,
-                                    stretchable: ctx.font_size * st,
+                                    shrinkable: sh,
+                                    stretchable: st,
                                 }],
                             }));
                         }
@@ -9168,25 +9229,39 @@ fn prim_set_space_ratio(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Va
 }
 
 /// `set-space-ratio-between-scripts : float -> float -> float -> script ->
-/// script -> context -> context` (slydifi's arctic theme). STAND-IN: this port
-/// has no script-aware line breaking and inserts no inter-script glue at all
-/// (see [`prim_get_leftmost_script`]), so there is no per-script-pair spacing
-/// to store — the primitive validates its arguments (three ratios and two
-/// scripts) and returns the context unchanged. slydifi only ever calls it with
-/// `0. 0. 0.` to SUPPRESS inter-script spacing, which the port already does, so
-/// the observable layout matches upstream. Tuning a non-zero ratio would need
-/// real script-boundary glue first (follow-on).
+/// script -> context -> context` (`vminstdef.yaml:1230-1250`) — writes one
+/// ordered script pair's entry of `ctx.script_space_map`
+/// (`convertText.ml:34-50` reads it back).
+///
+/// Only the NATURAL ratio is stored. The other two arguments are accepted and
+/// dropped, because upstream drops them too: `pure_space_between_scripts`
+/// misplaces them into `LBAtom`'s height and depth slots, so no
+/// `set-space-ratio-between-scripts` call in any document has ever been able
+/// to give this glue stretch or shrink. See [`interscript_glue`].
+///
+/// This was a STAND-IN that ignored all three, on the reasoning that slydifi
+/// only ever calls it with `0. 0. 0.` to SUPPRESS the spacing and the port
+/// inserted none anyway. The port has inserted Latin↔CJK glue for some time
+/// now, so ignoring the call left slydifi with a 0.24em space at every
+/// Japanese/Latin junction that upstream does not set.
 fn prim_set_space_ratio_between_scripts(
     _interp: &mut Interp,
     mut args: Vec<Value>,
 ) -> Result<Value, EvalError> {
     let ctx = as_context(args.pop().unwrap())?;
-    let _script2 = as_script(args.pop().unwrap())?;
-    let _script1 = as_script(args.pop().unwrap())?;
+    let script2 = as_script(args.pop().unwrap())?;
+    let script1 = as_script(args.pop().unwrap())?;
     let _stretch = as_float(args.pop().unwrap())?;
     let _shrink = as_float(args.pop().unwrap())?;
-    let _natural = as_float(args.pop().unwrap())?;
-    Ok(Value::Context(Box::new(ctx)))
+    // `max 0.`, as `vminstdef.yaml`'s own `set_space_ratio_between_scripts`
+    // clamps each ratio before storing it.
+    let natural = as_float(args.pop().unwrap())?.max(0.0);
+    let mut script_space_map = ctx.script_space_map;
+    script_space_map[script1 as usize][script2 as usize] = natural;
+    Ok(Value::Context(Box::new(Context {
+        script_space_map,
+        ..ctx
+    })))
 }
 
 /// `split-into-lines : string -> (int * string) list` (vminst.ml:2269) —

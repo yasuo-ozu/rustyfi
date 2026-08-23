@@ -858,11 +858,13 @@ fn prim_string_scan(_interp: &mut Interp, mut args: Vec<Value>) -> Result<Value,
         EvalError {
             span: None,
             msg: format!(
-            "string-scan: the pattern `{pattern}` needs more backtracking than \
-             the matcher allows against this input ({} characters). A quantifier \
-             inside a quantified group — `\\(a*\\)*` and the like — costs a factor \
-             per nesting level; rewriting it so the inner and outer repetitions \
-             cannot match the same text will make it fast.",
+            "string-scan: the pattern `{pattern}` needs more work, nesting or \
+             stack than the matcher allows against this input ({} characters). \
+             Usually that is catastrophic backtracking: a quantifier inside a \
+             quantified group — `\\(a*\\)*` and the like — costs a factor per \
+             nesting level, and rewriting it so the inner and outer repetitions \
+             cannot match the same text will make it fast. A pattern nesting \
+             `\\(` more than a thousand deep is refused outright.",
                 chars.len(),
             ),
         }

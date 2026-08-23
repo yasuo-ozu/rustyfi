@@ -86,12 +86,26 @@ enum Node {
 pub struct Regexp {
     root: Node,
     groups: usize,
+    /// The parser hit [`Budget::MAX_NESTING`] and read a `\(` as a literal
+    /// `(`. The tree below is therefore not this pattern, so matching it
+    /// reports [`GaveUp`] rather than answering from the degraded reading —
+    /// the parser's other degradations turn a malformed pattern into a
+    /// literal one, but this one would turn a WELL-FORMED pattern into a
+    /// different well-formed pattern, and answer confidently.
+    truncated: bool,
 }
 
 struct Parser<'p> {
     src: &'p [char],
     pos: usize,
     groups: usize,
+    /// `\(` nesting still available. The grammar below is recursive descent —
+    /// `parse_atom` → `parse_alt` → `parse_concat` → `parse_repeat` →
+    /// `parse_atom` — so a pattern is free to drive the PARSER off the stack
+    /// even though nothing has matched yet. See [`Budget::MAX_NESTING`].
+    nesting: usize,
+    /// Set once the cap above has fired; see [`Regexp::truncated`].
+    truncated: bool,
 }
 
 impl<'p> Parser<'p> {
@@ -212,10 +226,21 @@ impl<'p> Parser<'p> {
                     None => return Some(Node::Char('\\')),
                 };
                 match e {
+                    // Past the nesting cap a `\(` reads as the literal `(` it
+                    // would be without the backslash — recursing further is
+                    // how the PARSER goes off the stack, before anything has
+                    // matched. `truncated` then makes every match report
+                    // `GaveUp`, so the degraded tree is never answered from.
+                    '(' if self.nesting == 0 => {
+                        self.truncated = true;
+                        Some(Node::Char('('))
+                    }
                     '(' => {
                         self.groups += 1;
                         let idx = self.groups;
+                        self.nesting -= 1;
                         let inner = self.parse_alt();
+                        self.nesting += 1;
                         // Tolerate an unclosed `\(` rather than failing the
                         // whole pattern: `Str` would raise, but a raised
                         // exception here would abort a whole document over
@@ -287,11 +312,14 @@ impl Regexp {
             src: &chars,
             pos: 0,
             groups: 0,
+            nesting: Budget::MAX_NESTING,
+            truncated: false,
         };
         let root = p.parse_alt();
         Regexp {
             root,
             groups: p.groups,
+            truncated: p.truncated,
         }
     }
 
@@ -302,6 +330,9 @@ impl Regexp {
     /// than "no match": see [`Budget`]. Silently answering `None` would turn a
     /// hang into wrong output, which is worse.
     pub fn match_at(&self, input: &[char], start: usize) -> Result<Option<usize>, GaveUp> {
+        if self.truncated {
+            return Err(GaveUp);
+        }
         let m = Matcher::with_budget(input);
         let mut caps = self.fresh_caps();
         let out = self.attempt(&m, start, &mut caps);
@@ -320,9 +351,12 @@ impl Regexp {
     ) -> Result<Option<(usize, usize)>, GaveUp> {
         // ONE budget for the whole search, not one per start position. A fresh
         // `Matcher` per position — which is what calling `match_at` in the
-        // loop built — makes the total `input.len() × budget`, i.e. the budget
-        // stops bounding anything as soon as the input is long, which is
-        // precisely when it needs to.
+        // loop would build — makes the total `input.len() × budget`, i.e. the
+        // budget stops bounding anything as soon as the input is long, which
+        // is precisely when it needs to.
+        if self.truncated {
+            return Err(GaveUp);
+        }
         let m = Matcher::with_budget(input);
         let mut caps = self.fresh_caps();
         for i in start..=input.len() {
@@ -375,12 +409,15 @@ struct Matcher<'i> {
     /// it a step is O(input) and the wall clock is quadratic while the
     /// counter looks linear.
     fuel: Cell<u64>,
-    /// Remaining nesting depth for [`Matcher::repeat`]'s general branch, the
-    /// one that recurses once per repetition. Separate from `fuel` because
-    /// the failure it prevents is different: not slowness but a stack
-    /// overflow, which aborts the process natively and traps unrecoverably
-    /// in wasm, where the shadow stack is fixed at link time.
-    depth: Cell<u32>,
+    /// [`Matcher::node`] frames still available. Every recursion in the
+    /// matcher — `repeat`'s general branch, a nested `Group`, the `seq` chain
+    /// down a `Concat` — bottoms out in a `node` call whose frame stays live
+    /// while its continuation runs, so counting live `node` frames counts the
+    /// stack. Separate from `fuel` because the failure it prevents is
+    /// different: not slowness but a stack overflow, which aborts the process
+    /// natively and traps unrecoverably in wasm, where the shadow stack is
+    /// fixed at link time.
+    frames: Cell<u32>,
     gave_up: Cell<bool>,
 }
 
@@ -423,20 +460,40 @@ impl Budget {
         ((len as u64).saturating_mul(Self::PER_CHAR)).max(Self::FLOOR)
     }
 
-    /// Nesting cap for the recursive repeat branch. Each level costs roughly
-    /// 650 bytes of stack, so this is about 3 MB at the limit — comfortably
-    /// inside the wasm build's 32 MB shadow stack and the CLI's 256 MB
-    /// worker, while still allowing far more nesting than any real pattern.
-    const MAX_DEPTH: u32 = 5_000;
+    /// Live [`Matcher::node`] frames allowed.
+    ///
+    /// Also measured, by bisecting the thread stack a match actually needs.
+    /// At 4,096 the worst shape found needs 1.3 MB in a release build and
+    /// 5.9 MB in a debug one — inside the wasm shadow stack 24× over, and
+    /// inside a default 8 MB thread stack even unoptimised.
+    ///
+    /// This replaced a cap on `repeat`'s recursion depth alone, which did NOT
+    /// bound the stack: the bytes a repeat LEVEL costs are a function of the
+    /// pattern nested inside it, so while `\(a\)*` needed 2.75 MB at the old
+    /// 5,000-level cap, `\(` × 60 around the same body needed **59 MB**
+    /// (227 MB in a debug build) — past the wasm shadow stack, and heading
+    /// for the CLI worker's 256 MB. Nor did it cover the other two recursions:
+    /// a 200,000-atom `Concat` took 37.6 MB and 100,000 nested `\(` took the
+    /// same, both without touching `repeat` at all. The four shapes now come
+    /// in at 1.3 MB / 0.9 MB / 0.2 MB / 0.4 MB.
+    const MAX_FRAMES: u32 = 4_096;
+
+    /// `\(` nesting the PARSER will descend into; see [`Parser::nesting`].
+    /// Four frames a level (`parse_atom` → `parse_alt` → `parse_concat` →
+    /// `parse_repeat`) at about 850 bytes, so under a megabyte at the cap.
+    /// Unbounded, `\(` × 300,000 overflowed a 256 MB stack before a single
+    /// character had been matched. The deepest pattern in the corpus nests
+    /// twice.
+    const MAX_NESTING: usize = 1_024;
 }
 
-/// Returns a [`Matcher::depth`] unit on scope exit, so a backtracked branch
+/// Returns a [`Matcher::frames`] slot on scope exit, so a backtracked branch
 /// does not permanently consume nesting the way a bare decrement would.
-struct DepthGuard<'a, 'i>(&'a Matcher<'i>);
+struct Frame<'a, 'i>(&'a Matcher<'i>);
 
-impl Drop for DepthGuard<'_, '_> {
+impl Drop for Frame<'_, '_> {
     fn drop(&mut self) {
-        self.0.depth.set(self.0.depth.get() + 1);
+        self.0.frames.set(self.0.frames.get() + 1);
     }
 }
 
@@ -454,7 +511,7 @@ impl<'i> Matcher<'i> {
         Matcher {
             input,
             fuel: Cell::new(Budget::for_input(input.len())),
-            depth: Cell::new(Budget::MAX_DEPTH),
+            frames: Cell::new(Budget::MAX_FRAMES),
             gave_up: Cell::new(false),
         }
     }
@@ -476,6 +533,24 @@ impl<'i> Matcher<'i> {
                 self.fuel.set(0);
                 self.gave_up.set(true);
                 false
+            }
+        }
+    }
+
+    /// Take one step and one stack frame, returning the frame on scope exit.
+    /// `None` means one of the two budgets is gone.
+    fn enter(&self) -> Option<Frame<'_, 'i>> {
+        if !self.spend(1) {
+            return None;
+        }
+        match self.frames.get() {
+            0 => {
+                self.gave_up.set(true);
+                None
+            }
+            n => {
+                self.frames.set(n - 1);
+                Some(Frame(self))
             }
         }
     }
@@ -508,9 +583,7 @@ impl<'i> Matcher<'i> {
         caps: &mut Vec<Option<(usize, usize)>>,
         k: Cont<'_>,
     ) -> Option<usize> {
-        if !self.spend(1) {
-            return None;
-        }
+        let _frame = self.enter()?;
         match node {
             Node::Empty => k(pos, caps),
             Node::Char(_) | Node::Any | Node::Class { .. } => match self.single(node, pos) {
@@ -608,6 +681,25 @@ impl<'i> Matcher<'i> {
         caps: &mut Vec<Option<(usize, usize)>>,
         k: Cont<'_>,
     ) -> Option<usize> {
+        // A run of single-character nodes is DETERMINISTIC — each matches one
+        // character or fails, with nothing to backtrack into — so walk it
+        // iteratively. Going through `node` per item would cost one live
+        // frame per PATTERN character, and a literal run is the commonest
+        // long thing a pattern has: `strlst-to-syntax-rule` builds a keyword
+        // alternation whose every branch is one. The step accounting is
+        // unchanged, one unit per item either way.
+        let mut pos = pos;
+        let mut items = items;
+        while let Some((head, rest)) = items.split_first() {
+            if !matches!(head, Node::Char(_) | Node::Any | Node::Class { .. }) {
+                break;
+            }
+            if !self.spend(1) {
+                return None;
+            }
+            pos = self.single(head, pos)?;
+            items = rest;
+        }
         match items.split_first() {
             None => k(pos, caps),
             Some((head, rest)) => self.node(head, pos, caps, &|p, caps| self.seq(rest, p, caps, k)),
@@ -683,19 +775,12 @@ impl<'i> Matcher<'i> {
         }
 
         // General case: `node` can consume a variable amount, so recurse —
-        // one frame per repetition, which is what the depth cap bounds.
+        // one `node` frame per repetition, which is what `Budget::MAX_FRAMES`
+        // bounds, along with every other recursion in the matcher.
         let more = |m: &Matcher<'i>, p: usize, caps: &mut Vec<Option<(usize, usize)>>| {
             if max == Some(0) {
                 return None;
             }
-            match m.depth.get() {
-                0 => {
-                    m.gave_up.set(true);
-                    return None;
-                }
-                d => m.depth.set(d - 1),
-            }
-            let _restore = DepthGuard(m);
             let next_min = min.saturating_sub(1);
             let next_max = max.map(|m| m - 1);
             m.node(node, p, caps, &|q, caps| {
@@ -731,8 +816,9 @@ thread_local! {
     /// linear in the input rather than in input × pattern length.
     static CACHE: RefCell<HashMap<String, Rc<Regexp>>> = RefCell::new(HashMap::new());
 
-    /// Total pattern TEXT cached, in chars. The cap is on bytes rather than on
-    /// entry count because the entries are not uniform: a parsed pattern is
+    /// Total pattern TEXT cached, in chars. The cap is on text size rather
+    /// than on entry count because the entries are not uniform: a parsed
+    /// pattern is
     /// roughly thirty times its own text, so 4,096 twenty-thousand-character
     /// patterns — cheap to generate from a document, `arabic i ^ body` will do
     /// — reach 2.6 GB while never approaching an entry-count limit.
@@ -900,12 +986,12 @@ mod tests {
     /// `match_at` is `pub` and takes an arbitrary `start`; `^` and `\b` used
     /// to index `input[pos - 1]` unguarded and panic past the end.
     ///
-    /// The patterns below the fold are the ones that actually REACH the
+    /// The three patterns below the fold are the ones that actually REACH the
     /// anchor: `"a$"` does not, because the `a` fails on `input.get(pos)`
-    /// first and the `$` is never evaluated — so `$`, indexing `input[pos]`
-    /// forward, was still panicking after `^` and `\b` had been fixed. A
-    /// guard test has to be written against the node under test, not against
-    /// a pattern that merely contains it.
+    /// first and the `$` is never evaluated — so it was `$`, indexing
+    /// `input[pos]` forward, that was still panicking after `^` and `\b` were
+    /// fixed. A guard test has to be written against the node under test, not
+    /// against a pattern that merely contains it.
     #[test]
     fn match_at_past_the_end_does_not_panic() {
         let chars: Vec<char> = "abc".chars().collect();
@@ -974,5 +1060,31 @@ mod tests {
         );
         // The charge must not make an honest scan of the same input fail.
         assert_eq!(scan("[a-z]*", &input).map(|s| s.len()), Some(200_000));
+    }
+
+    /// A pattern nested deeper than [`Budget::MAX_NESTING`] drives the PARSER
+    /// off the stack, before a single character has been matched — `\(` ×
+    /// 300,000 overflowed a 256 MB stack. The parser stops descending, and
+    /// because the tree it then has is a DIFFERENT well-formed pattern rather
+    /// than a malformed one read literally, matching it reports the give-up
+    /// instead of answering.
+    #[test]
+    fn a_pattern_nested_past_the_parser_cap_is_refused_not_reinterpreted() {
+        let deep = format!("{}a{}", r"\(".repeat(100_000), r"\)".repeat(100_000));
+        let chars: Vec<char> = "a".chars().collect();
+        assert_eq!(Regexp::parse(&deep).match_at(&chars, 0), Err(GaveUp));
+        // Just inside the cap still works.
+        let ok = format!("{}a{}", r"\(".repeat(1_000), r"\)".repeat(1_000));
+        assert_eq!(Regexp::parse(&ok).match_at(&chars, 0), Ok(Some(1)));
+    }
+
+    /// A long run of single-character atoms is deterministic, so `seq` walks
+    /// it iteratively. Recursing per atom made the STACK proportional to the
+    /// pattern's length — 200,000 literal characters needed 37.6 MB — which
+    /// no cap on `repeat`'s depth could see.
+    #[test]
+    fn a_long_literal_run_does_not_recurse_per_character() {
+        let long: String = "a".repeat(200_000);
+        assert_eq!(scan(&long, &long).map(|s| s.len()), Some(200_000));
     }
 }

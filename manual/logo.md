@@ -59,9 +59,20 @@ established are worth keeping even though the result is gone:
   MATHEMATICAL SCRIPT SMALL A onwards, needing no math mode at all.
 * Those codepoints render from `dejavu-math` and come out EMPTY from `lmmath`:
   zero-width boxes, the word absent, the braces closed over the gap. Since
-  `lmmath` and `lmodern` are the same file, that is not a font-choice problem —
-  it is this OTF/CFF face's Mathematical Alphanumeric glyphs not surviving the
-  port's text path, where DejaVu's TrueType ones do.
+  `lmmath` and `lmodern` are the same file, that is not a font-choice problem.
+  Nor, as this note used to say, is it the port's text path: reading the two
+  `cmap`s settles it. `latinmodern-math.otf` covers every assigned codepoint of
+  U+1D400..U+1D7FF *except* the two script LOWERCASE runs (U+1D4B6..U+1D4CF and
+  U+1D4EA..U+1D503) and the two bold digammas — 51 in all — and a calligraphic
+  logotype is written in exactly the run it lacks. `DejaVuMathTeXGyre.ttf`
+  lacks only the digammas, which is why DejaVu drew it. A character with no
+  `cmap` entry becomes gid 0, and on a CFF face `.notdef` is normally empty, so
+  it takes its advance and paints nothing. That failure is no longer silent:
+  `cid::report_missing_glyphs` now warns per (font, character). It is still not
+  repaired on this path — the math path degrades such a codepoint to its plain
+  letter when one is drawable (`math_alphanumeric_base`), but a logotype set
+  through `draw-text` is text, and the text path is deliberately warning-only
+  (see `measure_run`).
 
 The type is **outlined, and given relief, the hard way**. Neither SATySFi nor
 this port exposes a PDF text render mode, so there is no stroked type to ask

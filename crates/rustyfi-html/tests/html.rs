@@ -559,9 +559,29 @@ fn ttf_render_emits_font_face_with_embedded_ttf_and_spans_reference_it() {
             .find('"')
             .expect("unterminated font-family value");
     let family = &html[start..end];
+    // SINGLE quotes: the run's declarations live in a `style="…"` attribute,
+    // so a double-quoted family value ends the attribute at its own opening
+    // quote. This used to assert the double-quoted spelling and passed for
+    // it — the string was there, but no browser ever saw the declaration:
+    // the computed family came out as the UA default and the embedded face
+    // was never used. Both halves are checked below, the naming and the
+    // attribute staying intact.
     assert!(
-        html.contains(&format!("font-family:\"{family}\"")),
+        html.contains(&format!("font-family:'{family}'")),
         "span did not reference the @font-face family {family:?}:\n{html}"
+    );
+    let run = html
+        .lines()
+        .find(|l| l.contains("<span class=\"run\""))
+        .expect("no run span emitted");
+    let attr = run
+        .split_once("style=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(v, _)| v)
+        .expect("run span has no style attribute");
+    assert!(
+        attr.contains("font-family:"),
+        "the style attribute ended before the font-family reached it:\n{run}"
     );
 }
 
@@ -592,7 +612,7 @@ fn base14_render_still_emits_no_font_face() {
         "base-14 mode must not emit @font-face:\n{html}"
     );
     assert!(
-        !html.contains("font-family:\"rustyfi-html-font"),
+        !html.contains("font-family:'rustyfi-html-font"),
         "base-14 mode must not override font-family per run:\n{html}"
     );
 }

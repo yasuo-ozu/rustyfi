@@ -543,8 +543,17 @@ fn emit_embedded_block(out: &mut String, block: &[VertBox], tx: f64, ty: f64, ct
 /// system serif default applies.
 fn emit_run(out: &mut String, info: &HorzStringInfo, text: &str, tx: f64, top: f64, ctx: &Ctx) {
     let size = info.size.0;
+    // SINGLE-quoted: this whole declaration list goes into a `style="…"`
+    // attribute, and a double quote inside one ENDS the attribute. It did:
+    // every run in a `--format html-fixed` document came out as
+    // `style="left:…pt; font-size:…pt; font-family:"` with the family — and
+    // everything after it — parsed as stray attributes, so the computed
+    // family was the UA default `serif` and the whole `@font-face` embed
+    // this function exists to reference was dead. `fonts::reflow_font_stack`
+    // learned the same lesson on the reflow side; `font_family_name` emits
+    // `rustyfi-html-font-N`, which contains neither quote nor backslash.
     let family_style = match ctx.font_family_for(info.font) {
-        Some(family) => format!(" font-family:\"{family}\";"),
+        Some(family) => format!(" font-family:'{family}';"),
         None => String::new(),
     };
     // Non-black only, mirroring both PDF writers' `q…Q`-scoped fill-color

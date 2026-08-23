@@ -1,6 +1,15 @@
-//! `--format html` end-to-end, driven through the *built* `rustyfi` binary
-//! ("Slice-1 e2e"), mirroring `tests/cache.rs`'s process-spawn harness
+//! `--format html-fixed` end-to-end, driven through the *built* `rustyfi`
+//! binary ("Slice-1 e2e"), mirroring `tests/cache.rs`'s process-spawn harness
 //! style.
+//!
+//! `html-fixed` is the layout-faithful serialization — one `.page` div per
+//! page, every run absolutely positioned. It used to answer to plain
+//! `--format html`; that name now means the reflowable backend
+//! (`tests/format_html_reflow.rs`), so the two assertions this file makes
+//! about the page grid moved with the format they describe. The one test
+//! here that still says `--format html` is
+//! [`format_html_is_the_reflowable_backend`], whose whole point is that it
+//! no longer produces a page grid.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -47,13 +56,12 @@ fn assert_ok(out: &Output, ctx: &str) {
     );
 }
 
-/// `--format html` writes an `.html` file (the default `-o` extension
-/// derived from the format, `main.rs`'s `cmd_compile`) whose page div and a
-/// known word span are present — the CLI-level twin of
-/// `crates/rustyfi-pdf/tests/html.rs`'s unit-level assertions.
-#[test]
-fn format_html_writes_a_page_div_and_a_word_span() {
-    let work = tmpdir("basic");
+/// Compile `minimal.saty` under `--format {fmt}`, returning the written
+/// HTML. Shared by every test below, since the only thing that varies
+/// between them is the format name and what the output is expected to
+/// contain.
+fn compile_html(tag: &str, fmt: &str) -> (PathBuf, String) {
+    let work = tmpdir(tag);
     let out = work.join("out.html");
 
     let result = Command::new(bin())
@@ -61,12 +69,22 @@ fn format_html_writes_a_page_div_and_a_word_span() {
         .args(["-o".as_ref(), out.as_os_str()])
         .args(["--lib-root".as_ref(), repo_lib_root().as_os_str()])
         .args(["--cache-dir".as_ref(), work.join("cache").as_os_str()])
-        .args(["--format", "html"])
+        .args(["--format", fmt])
         .output()
         .expect("spawn rustyfi");
-    assert_ok(&result, "compile --format html");
+    assert_ok(&result, &format!("compile --format {fmt}"));
 
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
+    let html = std::fs::read_to_string(&out).expect("--format html* must write the output file");
+    (work, html)
+}
+
+/// `--format html-fixed` writes an `.html` file (the default `-o` extension
+/// derived from the format, `main.rs`'s `cmd_compile`) whose page div and a
+/// known word span are present — the CLI-level twin of
+/// `crates/rustyfi-pdf/tests/html.rs`'s unit-level assertions.
+#[test]
+fn format_html_fixed_writes_a_page_div_and_a_word_span() {
+    let (work, html) = compile_html("basic", "html-fixed");
     assert!(
         html.starts_with("<!doctype html>"),
         "missing doctype:\n{html}"
@@ -84,21 +102,7 @@ fn format_html_writes_a_page_div_and_a_word_span() {
     // every initial context), so `Hello,` is carried as `Hel` + `lo,` either
     // side of a discretionary and reaches the faithful HTML as two `<span>`s —
     // adjacent and rendered identically, but two elements in the markup.
-    let text: String = {
-        let mut out = String::new();
-        let mut depth = 0usize;
-        for ch in html.chars() {
-            match ch {
-                '<' => depth += 1,
-                '>' => depth = depth.saturating_sub(1),
-                c if depth == 0 => out.push(c),
-                _ => {}
-            }
-        }
-        // Each `<span>` sits on its own source line, so drop whitespace too —
-        // the fragments are adjacent in the rendered text.
-        out.chars().filter(|c| !c.is_whitespace()).collect()
-    };
+    let text = rendered_text(&html);
     assert!(
         text.contains("Hello,"),
         "missing expected fixture word:\n{html}"
@@ -109,6 +113,73 @@ fn format_html_writes_a_page_div_and_a_word_span() {
     );
 
     std::fs::remove_dir_all(&work).ok();
+}
+
+/// The page's rendered TEXT: tags stripped and all whitespace dropped, since
+/// each `<span>` sits on its own source line and a word can span several of
+/// them.
+fn rendered_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for ch in html.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The rename's own regression floor: plain `--format html` is now the
+/// REFLOWABLE backend, so the very assertion the test above makes must FAIL
+/// here — no page grid, no absolutely-positioned run — while the document
+/// still says what it says. See `crates/rustyfi/src/format.rs`'s type doc
+/// comment for why this name went to the reflowable side.
+#[test]
+fn format_html_is_the_reflowable_backend() {
+    let (work, html) = compile_html("reflow-default", "html");
+    assert!(
+        html.starts_with("<!doctype html>"),
+        "missing doctype:\n{html}"
+    );
+    assert!(
+        !html.contains("<div class=\"page\""),
+        "--format html must no longer emit a page grid:\n{html}"
+    );
+    assert!(
+        !html.contains("position:absolute") && !html.contains("position: absolute"),
+        "--format html must not position anything absolutely:\n{html}"
+    );
+    assert!(
+        html.contains("<p class=\"para\""),
+        "--format html must emit real flowing paragraphs:\n{html}"
+    );
+    let text = rendered_text(&html);
+    assert!(
+        text.contains("Hello,") && text.contains("world!"),
+        "missing expected fixture words:\n{html}"
+    );
+
+    std::fs::remove_dir_all(&work).ok();
+}
+
+/// `--format html-reflow` — the name the reflowable backend answered to
+/// while `html` still meant the faithful one — keeps working as a pure
+/// alias, so no existing script breaks over the rename. Byte-identical
+/// output, not merely a similar shape.
+#[test]
+fn format_html_reflow_is_an_alias_of_html() {
+    let (work_a, via_alias) = compile_html("alias", "html-reflow");
+    let (work_b, via_html) = compile_html("alias-canonical", "html");
+    assert_eq!(
+        via_alias, via_html,
+        "--format html-reflow must be an exact alias of --format html"
+    );
+
+    std::fs::remove_dir_all(&work_a).ok();
+    std::fs::remove_dir_all(&work_b).ok();
 }
 
 /// Omitting `--format` keeps today's default (`pdf`) byte-identical

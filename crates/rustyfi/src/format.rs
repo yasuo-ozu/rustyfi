@@ -72,6 +72,13 @@ impl OutputFormat {
     /// hit's stored bytes are never written to the wrong-format output).
     /// The two HTML modes get DISTINCT tags so a cached render of one can
     /// never be served back for the other.
+    ///
+    /// The tags name the CONTENT, not the flag — which is why they read
+    /// swapped against the variant names after the rename. `"html"` has
+    /// always meant "the layout-faithful serialization", so leaving it on
+    /// `HtmlFixed` keeps every cache entry already on disk valid; had the
+    /// tags followed the flag names instead, the first `--format html` after
+    /// an upgrade would have been served a page-grid document.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",

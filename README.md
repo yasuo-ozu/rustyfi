@@ -131,6 +131,35 @@ $ rustyfi build
   rustyfi manual.saty
 ```
 
+### HTML output
+
+`--format html` writes the document as a **web page** rather than a PDF: one
+continuous flow of real `<p>` paragraphs the browser breaks and justifies
+itself, with headings, a table of contents, lists, tables, links and
+footnotes. Nothing is positioned at a coordinate and there are no pages —
+the reader's window decides the measure, the text reflows, and the whole
+document scales from a single `font-size` on `body`.
+
+```console
+$ rustyfi doc.saty --format html
+  output written on doc.html (1 page(s), 2 line(s)).
+```
+
+The file is self-contained: fonts, images and diagrams are embedded, and it
+loads no external CSS, no web fonts and no scripts.
+
+Math, diagrams and rules stay **ink** — each becomes one inline `<svg>` with
+its own intrinsic size, sitting on the text baseline like an image. The port
+flattens math to positioned glyphs while evaluating, long before any HTML
+exists, so there is no formula structure left to turn into MathML; drawing
+it is the honest option, and it reflows with the paragraph around it.
+
+`--format html-fixed` is the other HTML backend: a **layout-faithful**
+serialization of the very pages the PDF writer renders, one `div` per page
+with every run at its measured coordinate. It is a visual-diff aid for
+checking this port's typesetting in a browser, not something to read.
+(`--format html-reflow` is an accepted alias of `--format html`.)
+
 ## Package management
 
 `@require:` resolves against **lib roots** (`<root>/dist/packages/`). Name one
@@ -173,7 +202,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (default), `html`, `html-reflow` |
+| `--format <fmt>` | `pdf` (default), `html` (reflowable web page), `html-fixed` (page-faithful) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |

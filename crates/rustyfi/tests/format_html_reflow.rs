@@ -1,12 +1,19 @@
-//! `--format html-reflow` end-to-end, driven through the *built*
-//! `rustyfi` binary ("CLI"), mirroring `tests/format_html.rs`'s
-//! process-spawn harness style for the faithful `--format html`.
+//! The reflowable backend end-to-end, driven through the *built* `rustyfi`
+//! binary ("CLI"), mirroring `tests/format_html.rs`'s process-spawn harness
+//! style for the layout-faithful `--format html-fixed`.
+//!
+//! These tests spell the format `html-reflow` throughout. That is now an
+//! ALIAS of plain `--format html` (`format::OutputFormat::from_str`), and
+//! `tests/format_html.rs`'s `format_html_reflow_is_an_alias_of_html` pins
+//! the two to byte-identical output — so what is asserted here holds of
+//! `--format html` too, and the alias keeps being exercised rather than
+//! merely documented.
 //!
 //! Also the additivity guard (design doc §8): the SAME fixture compiled with
-//! `--format html` (faithful) and the default `--format pdf` must still
-//! behave exactly as `tests/format_html.rs`/`tests/e2e.rs` already expect —
-//! `html-reflow` is reached only through a brand-new match arm
-//! (`main.rs`'s `format::OutputFormat::HtmlReflow`), so it cannot have
+//! `--format html-fixed` (layout-faithful) and the default `--format pdf`
+//! must still behave exactly as `tests/format_html.rs`/`tests/e2e.rs`
+//! already expect — the reflowable backend is reached only through its own
+//! match arm (`main.rs`'s `format::OutputFormat::Html`), so it cannot have
 //! touched either of those paths' own code.
 
 use std::path::{Path, PathBuf};
@@ -118,10 +125,7 @@ fn compile_v01(fixture: &Path, work: &Path, fmt: &str, out_ext: &str) -> PathBuf
         .args(["--lang", "0.1"])
         .output()
         .expect("spawn rustyfi");
-    assert_ok(
-        &result,
-        &format!("compile --format {fmt} --lang 0.1"),
-    );
+    assert_ok(&result, &format!("compile --format {fmt} --lang 0.1"));
     out
 }
 
@@ -147,9 +151,39 @@ fn rendered_text(html: &str) -> String {
     out
 }
 
+/// The two CSS box-offset property families, and the flow-safe longhands
+/// that merely end in the same word. A bare `top`/`left`/`right`/`bottom`
+/// declaration is page positioning — the thing this backend exists not to
+/// do; `margin-top`/`border-left`/`padding-left`/… are ordinary flow
+/// properties the stylesheet legitimately uses (the `.clearpage` rule, the
+/// footnote `<aside>`'s left border).
+///
+/// `position:absolute` is likewise refused outright. That holds for these
+/// fixtures because neither contains math or a diagram; a document that
+/// does gets one `position:absolute` layer INSIDE each inline `<svg>`'s own
+/// `position:relative` wrapper (`reflow/inline.rs`'s `emit_graphics_box`),
+/// which is intrinsic sizing of a drawing, not positioning of text.
+fn assert_no_box_offsets(html: &str) {
+    assert!(
+        !html.contains("position:absolute") && !html.contains("position: absolute"),
+        "reflow output must never use position:absolute:\n{html}"
+    );
+    for prop in ["top:", "left:", "right:", "bottom:"] {
+        for (idx, _) in html.match_indices(prop) {
+            let before = &html[..idx];
+            assert!(
+                ["margin-", "border-", "padding-", "inset-", "scroll-margin-"]
+                    .iter()
+                    .any(|p| before.ends_with(p)),
+                "found a bare `{prop}` CSS declaration at byte {idx}:\n{html}"
+            );
+        }
+    }
+}
+
 /// `--format html-reflow` writes real flowing `<p>` paragraphs (one per
 /// `+p`), in reading order, with their text HTML-escaped-but-intact — and,
-/// the defining difference from the faithful `--format html` twin, NO
+/// the defining difference from the faithful `--format html-fixed` twin, NO
 /// absolute positioning anywhere in the document's own stylesheet/inline
 /// styles.
 #[test]
@@ -217,38 +251,24 @@ fn format_html_reflow_writes_flowing_paragraphs_in_reading_order() {
         "paragraphs are out of reading order:\n{html}"
     );
 
-    // The defining difference from the faithful twin: no absolute
-    // positioning. `left:` never appears at all; `top:` only ever appears
-    // as part of a flow-safe longhand (`margin-top:`/`border-top:`).
-    assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "html-reflow output must never use position:absolute:\n{html}"
-    );
-    assert!(
-        !html.contains("left:"),
-        "html-reflow output must never use `left:`:\n{html}"
-    );
-    for (idx, _) in html.match_indices("top:") {
-        assert!(
-            html[..idx].ends_with("margin-") || html[..idx].ends_with("border-"),
-            "found a bare `top:` CSS declaration at byte {idx}:\n{html}"
-        );
-    }
+    // The defining difference from the faithful twin: nothing is positioned.
+    assert_no_box_offsets(&html);
 
     std::fs::remove_dir_all(&work).ok();
 }
 
 /// Additivity guard (design doc §8): compiling the SAME fixture with the
-/// faithful `--format html` still produces its established shape (a
+/// faithful `--format html-fixed` still produces its established shape (a
 /// `<div class="page">` twin of the PDF, per `tests/format_html.rs`) — the
-/// new `html-reflow` format could not have touched this code path, since it
-/// is reached only through a brand-new, separate `match` arm.
+/// reflowable format could not have touched this code path, since it is
+/// reached only through a separate `match` arm.
 #[test]
 fn format_html_faithful_mode_is_unaffected_by_the_new_reflow_format() {
     let work = tmpdir("faithful");
-    let out = compile(&phase2_fixture(), &work, "html", "html");
+    let out = compile(&phase2_fixture(), &work, "html-fixed", "html");
 
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
+    let html =
+        std::fs::read_to_string(&out).expect("--format html-fixed must write the output file");
     assert!(
         html.starts_with("<!doctype html>"),
         "missing doctype:\n{html}"
@@ -382,16 +402,8 @@ fn format_html_reflow_renders_nested_lists_and_emphasis_for_itemize() {
     // level (a raw substring scan here would be unreliable: margin/style
     // attributes on `<ul>`/`<li>` legitimately contain digits too).
 
-    // Still no absolute positioning anywhere, same invariant as the basic
-    // reflow test.
-    assert!(
-        !html.contains("position:absolute") && !html.contains("position: absolute"),
-        "html-reflow output must never use position:absolute:\n{html}"
-    );
-    assert!(
-        !html.contains("left:"),
-        "html-reflow output must never use `left:`:\n{html}"
-    );
+    // Still nothing positioned, same invariant as the basic reflow test.
+    assert_no_box_offsets(&html);
 
     std::fs::remove_dir_all(&work).ok();
 }
@@ -424,16 +436,17 @@ fn itemize_fixture_still_produces_a_valid_pdf() {
     std::fs::remove_dir_all(&work).ok();
 }
 
-/// Same inert-marker proof for the FAITHFUL `--format html` twin: it must
+/// Same inert-marker proof for the FAITHFUL `--format html-fixed` twin: it must
 /// still be the established absolutely-positioned shape (`tests/
 /// format_html.rs`'s own invariant), completely unaffected by the fixture
 /// actually calling `Itemize.listing`/`Itemize.enumerate`/`\V01Mini.emph`.
 #[test]
 fn itemize_fixture_faithful_html_is_still_absolutely_positioned() {
     let work = tmpdir("itemize-faithful");
-    let out = compile_v01(&itemize_fixture(), &work, "html", "html");
+    let out = compile_v01(&itemize_fixture(), &work, "html-fixed", "html");
 
-    let html = std::fs::read_to_string(&out).expect("--format html must write the output file");
+    let html =
+        std::fs::read_to_string(&out).expect("--format html-fixed must write the output file");
     assert!(
         html.starts_with("<!doctype html>"),
         "missing doctype:\n{html}"

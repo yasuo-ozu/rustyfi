@@ -374,10 +374,13 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
             )?
             .into_bytes(),
-            None => {
-                rustyfi_html::render_html_fixed(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
-                    .into_bytes()
-            }
+            None => rustyfi_html::render_html_fixed(
+                &doc.geometry,
+                &doc.pages,
+                &doc.images,
+                &doc.extras,
+            )?
+            .into_bytes(),
         },
         // Reflowable/semantic HTML — what `--format html` now means. A
         // SEPARATE serialization of the SAME compiled `doc` above:

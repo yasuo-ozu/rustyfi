@@ -434,9 +434,27 @@ def assemble_satysfi_lib_root(dst: Path, docs: list[Doc]) -> Path:
     """A `-C` config root for the ORIGINAL SATySFi holding only the NON-stdlib
     corpus packages (base + each doc's sibling packages). SATySFi's own standard
     library (stdjabook, math, itemize, ...) comes from its default config path,
-    so — unlike the port's lib-root — we do NOT copy lib-rustyfi here."""
+    so — unlike the port's lib-root — we do NOT copy lib-rustyfi here.
+
+    It DOES stage `lib-rustyfi/dist/fonts/`, because "both engines render with
+    the same fonts" is a premise of every metric here and is not true by
+    default — the flake's SATySFi bundles a different Junicode release than the
+    port does, so `width_p95` would measure the font gap rather than the layout.
+    A `-C` root is searched BEFORE the runtime's own (`main.ml:1063`,
+    `extra_dirs @ default_dirs`), so each font file present here shadows the
+    installation's copy of it and each one absent falls through to it.
+
+    The hash file must NOT be staged: the port's `dist/hash/fonts.satysfi-hash`
+    is a plain object map where upstream wants variant-tagged (`<Single: {..}>`)
+    entries, so shadowing it would make upstream fail outright — and leaving it
+    to the installation is what keeps abbrevs the port does not bundle
+    (`lmroman`, ...) resolvable.
+    """
     pkg = dst / "dist" / "packages"
     pkg.mkdir(parents=True, exist_ok=True)
+    fonts = LIB_RUSTYFI / "dist" / "fonts"
+    if fonts.is_dir():
+        shutil.copytree(fonts, dst / "dist" / "fonts", dirs_exist_ok=True)
     base_src = CORPUS / "satysfi-base" / "src"
     if base_src.exists():
         shutil.copytree(base_src, pkg / "base", dirs_exist_ok=True)

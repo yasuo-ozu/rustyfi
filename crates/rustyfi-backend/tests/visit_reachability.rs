@@ -469,7 +469,12 @@ fn classify_vert(vb: &VertBox) -> bool {
 fn classify_graphics(g: &GraphicsElem) -> bool {
     match g {
         GraphicsElem::Text { .. } | GraphicsElem::Group(_) | GraphicsElem::Clip(..) => true,
-        GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => false,
+        // A deferred `register-destination` marker: a key and a point, no
+        // nested boxes, so nothing for the traversal to descend into.
+        GraphicsElem::Fill(..)
+        | GraphicsElem::Stroke(..)
+        | GraphicsElem::DashedStroke(..)
+        | GraphicsElem::Destination { .. } => false,
     }
 }
 

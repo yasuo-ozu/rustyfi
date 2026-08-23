@@ -893,6 +893,12 @@ pub(crate) fn place_graphics(
     content.save_state();
     content.transform([1.0, 0.0, 0.0, 1.0, tx, ty]);
     for elem in elems {
+        // Not ink: `fire_hooks` already consumed it into
+        // `DocExtras::destinations`, and `/Dests` is a catalog entry rather
+        // than a content-stream op. Skipped ahead of the per-element `q`/`Q`.
+        if matches!(elem, GraphicsElem::Destination { .. }) {
+            continue;
+        }
         content.save_state();
         match elem {
             // Upstream fills with the even-odd rule (`op_f'`,
@@ -964,6 +970,8 @@ pub(crate) fn place_graphics(
                 content.end_path();
                 place_graphics(content, inner, 0.0, 0.0, &mut *emit_nested)?;
             }
+            // Skipped above; this arm is only for exhaustiveness.
+            GraphicsElem::Destination { .. } => {}
         }
         content.restore_state();
     }

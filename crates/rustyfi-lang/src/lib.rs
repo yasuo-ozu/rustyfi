@@ -3097,10 +3097,11 @@ fn fire_inline_frame(
     fire_nested_in_contents(interp, doc, page, x, baseline_y, contents)
 }
 
-/// Fire every hook and decoration carried by a graphics box's elements —
-/// i.e. inside the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
-/// recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are the box's
-/// placed origin in this walk's (x, y-DOWN) page coordinates.
+/// Fire every hook, decoration and deferred destination carried by a graphics
+/// box's elements — the inline runs a `draw-text` (`GraphicsElem::Text`) holds,
+/// and the `GraphicsElem::Destination` markers an `inline-graphics` callback
+/// left behind — recursing through `Group`/`Clip`. `anchor_x`/`anchor_y` are
+/// the box's placed origin in this walk's (x, y-DOWN) page coordinates.
 ///
 /// A `Text` element's own `transform` (from `rotate-graphics`/
 /// `scale-graphics`) is deliberately NOT applied: a decoration's rect is an
@@ -3130,6 +3131,28 @@ fn fire_nested_in_graphics(
             }
             GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
                 fire_nested_in_graphics(interp, doc, page, anchor_x, anchor_y, inner)?;
+            }
+            // `pt` is y-UP from the anchor, as a `Text`'s is, and a
+            // `NamedDest`'s `y` is y-up too, so lifting the anchor out of this
+            // walk's y-DOWN frame is the only arithmetic needed. An
+            // `origin_independent` box arrives with `anchor_x = 0`/`anchor_y =
+            // paper_height` (see the caller), making that the identity — the
+            // same page-absolute reading its ink gets from the writers.
+            GraphicsElem::Destination { key, pt } => {
+                let name = interp.dest_name(key);
+                let x = anchor_x + pt.0;
+                let y = doc.geometry.paper_height - anchor_y + pt.1;
+                // As in a direct call: the reflow backend resolves a
+                // destination to its Frame through this id.
+                if let Some(deco_id) = interp.current_deco_id {
+                    interp.dest_decos.push((deco_id, name.clone()));
+                }
+                interp.destinations.push(rustyfi_backend::NamedDest {
+                    page,
+                    name,
+                    x,
+                    y,
+                });
             }
             GraphicsElem::Fill(..) | GraphicsElem::Stroke(..) | GraphicsElem::DashedStroke(..) => {}
         }

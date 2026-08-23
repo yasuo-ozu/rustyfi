@@ -1,0 +1,34 @@
+% Probe: can a PDF named destination be registered from an `inline-graphics`
+% callback? azmath's `equation.satyh` anchors every `\label`ed equation exactly
+% the way this document does, and it used to abort the port outright: upstream
+% runs the callback DURING page breaking, this port runs it eagerly at
+% construction time (`prim_inline_graphics`'s "eager-callback shortcut"), where
+% no page exists and `annotation.ml:15`'s gate rightly refuses the call. The fix
+% RE-TIMES the registration instead of relaxing the gate --- see
+% `prim_inline_graphics` and `crates/rustyfi-lang/tests/inline_graphics_dest.rs`.
+%
+% Both engines now render this and the anchor lands in both PDFs:
+%
+%   layout-tests/tools/probe.py layout-tests/probes/inline_graphics_dest.saty
+%
+%   SATySFi 0.0.11   /nameddest0 [<page 1> /XYZ 124.328    733.17776378 null]
+%   this port        /nameddest0 [<page 1> /XYZ 124.975624 733.1769     0]
+%
+% The y agrees to 0.001pt; the 0.65pt in x is this document's ordinary
+% text-advance delta for the word before the anchor, not an anchor error.
+@require: stdjabook
+
+let-inline ctx \anchor key =
+  inline-graphics 0pt 0pt 0pt (fun (x, y) -> (
+    let () = register-destination key (x, y) in []
+  ))
+in
+
+document (|
+  title = {inline-graphics destination probe};
+  author = {};
+  show-title = false;
+  show-toc = false;
+|) '<
+  +p{before \anchor(`probe-dest`); after}
+>

@@ -12,7 +12,7 @@ Three roles live here, and they are easy to confuse because all three involve
 
     fidelity.py          the comparison, and the pass/fail
     baseline.json        the recorded per-document numbers
-    corpus/              10 vendored third-party projects, and 6 PDFs built by
+    corpus/              11 vendored third-party projects, and 6 PDFs built by
                          the ORIGINAL OCaml SATySFi
 
 `fidelity.py` rebuilds each corpus document with the port and compares the
@@ -26,6 +26,12 @@ uses:
 
 The reference PDFs are the fixed point the whole comparison rests on. Do not
 regenerate them to make a number go green.
+
+One project is vendored WITHOUT being registered in `DOCS`: `corpus/azmath/`.
+Both engines build it, but no reference PDF is committed for it and its
+agreement is not yet inside the band the seven registered docs hold, so it is
+staged rather than gated. `corpus/azmath/PROVENANCE` has the details and the
+`DOCS` entry to paste in once that closes.
 
 ## The probes
 

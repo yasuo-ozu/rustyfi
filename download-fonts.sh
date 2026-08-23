@@ -181,7 +181,16 @@ show_message "installed ipaexm.ttf / ipaexg.ttf (IPA Font License v1.0)"
 # as the dot counts overshoot instead. The layout gate fails on enumitem.
 #
 # So the leader-dot residual is a corpus-asset difference, not a port defect,
-# and chasing it through font versions makes real metric agreement worse.
+# and the PIN STANDS — but NOT because 1.002 is the better font. That paragraph
+# measured against the COMMITTED reference PDFs, which the one above it already
+# says came from a third Junicode; regenerate both sides with `--gen-refs` and
+# 2.222 wins nearly everywhere, on `width_p95` and on `chars_missing` alike.
+#
+# What holds the pin is the cost of moving it: the six committed reference PDFs
+# are the corpus's fixed point and would all need regenerating,
+# `layout-tests/baseline.json` re-recording, and 2.222 is not on SourceForge but
+# in psb1558/Junicode-font's GitHub releases. That is a corpus decision, not a
+# font-script one.
 JUNICODE_ZIP="junicode-1.002.zip"
 download_file "$JUNICODE_ZIP" \
   "https://downloads.sourceforge.net/project/junicode/junicode/junicode-1.002/junicode-1.002.zip" \

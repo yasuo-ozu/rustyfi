@@ -140,7 +140,11 @@ fn an_inline_frame_that_strokes_below_the_baseline_draws_in_html() {
     let html = render_html();
 
     assert!(
-        html.contains("<span class=\"iframe ideco ideco-0\"> underlined phrase</span>"),
+        // `Before ` and not `Before` + a space INSIDE the wrapper: the word
+        // space in front of a decorated region belongs outside it, or the
+        // decoration's background box starts one space too far left (see
+        // `Ctx::resolve_glue_before_wrapper`).
+        html.contains("Before <span class=\"iframe ideco ideco-0\">underlined phrase</span>"),
         "the decorated region's own wrapper is missing or undecorated; body: {}",
         body_of(&html),
     );
@@ -222,7 +226,7 @@ fn every_drawing_inline_frame_is_replayed_including_the_non_breakable_one() {
     );
 
     assert!(
-        html.contains("<span class=\"iframe ideco ideco-2\"> boxed phrase</span>"),
+        html.contains("Before <span class=\"iframe ideco ideco-2\">boxed phrase</span>"),
         "the non-breakable `inline-frame-outer` lost its decoration; body: {}",
         body_of(&html),
     );

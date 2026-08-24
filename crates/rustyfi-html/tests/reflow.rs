@@ -2270,22 +2270,27 @@ fn a_nested_block_inside_an_open_inline_frame_stays_balanced() {
     )];
     let html = render_with_links(&vboxes, &links, &[]);
     let body = body_of(&html);
-    // The link is closed before the nested blocks and re-opened after them,
-    // so it appears twice — and, crucially, is not left dangling around
-    // them. Without the depth floor the nested blocks' own paragraph
-    // flushes emitted a third, spurious `</a>` inside themselves.
+    // ONE `<a>`, spanning the whole region — the embedded block is a word of
+    // this sentence (it sits between `linked ` and `tail`, inside a frame
+    // marker pair) and so is emitted inline, which leaves the link intact.
+    // It used to be block-level, and the link was therefore closed before it
+    // and re-opened after: two `<a>`s, correct but worse. What the depth
+    // floor still guards is the FOOTNOTE's body, which really is a nested
+    // `walk_vboxes` run while this link is on the wrapper stack — without it
+    // that body's own paragraph flush emitted a spurious `</a>` inside
+    // itself.
     assert_eq!(
         body.matches("<a class=\"link\"").count(),
-        2,
-        "the link should be closed around the nested blocks and re-opened:\n{body}"
+        1,
+        "an inline embedded block must not split the link around it:\n{body}"
     );
-    assert!(
-        !body
-            .split("<div class=\"embed\">")
-            .nth(1)
-            .unwrap()
-            .starts_with("</a>"),
-        "a nested block must not close its enclosing paragraph's wrapper:\n{body}"
+    let aside = body.split("<aside").nth(1).expect("the footnote body");
+    assert_eq!(
+        (aside.matches("<a ").count(), aside.matches("</a>").count()),
+        (1, 1),
+        "the footnote body should hold exactly its own back-link — an extra \
+         `</a>` there is the enclosing paragraph's wrapper being closed a \
+         second time:\n{body}"
     );
     assert_balanced_tags(&html);
 }
@@ -2920,7 +2925,7 @@ fn an_embedded_block_inside_a_draw_text_keeps_its_text() {
         "the text landed outside the drawing it belongs to:\n{wrapper}"
     );
     assert!(
-        wrapper.contains("class=\"embed-inline\" style=\"width:100pt;\""),
+        wrapper.contains("class=\"embed-inline\" style=\"width:100pt; white-space:nowrap;\""),
         "the block's own measure is not kept, so the paragraph reflows to \
          the full column instead of the 100pt it was built for:\n{wrapper}"
     );
@@ -3250,5 +3255,162 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
     assert!(
         !html.contains("frame-deco"),
         "a flat panel should need no SVG:\n{html}"
+    );
+}
+
+/// An embedded block used as a WORD stays in its sentence.
+///
+/// `block.rs` treated every `EmbeddedBlock` as block-level: it flushed the
+/// paragraph, opened a `<div class="embed">` and resumed afterwards. That is
+/// right for the lone-box line a centred figure arrives as
+/// (`embedded_block_becomes_a_nested_div_recursively`, above) and wrong for
+/// `latexcmds`' `\framebox`, which is a FIXED-WIDTH box in the middle of
+/// running text (`\fbox{\makebox(wid){…}}`) — there it took the rest of the
+/// sentence out of the line with it.
+///
+/// The two cases are one line apart in the box stream, so they are asserted
+/// against each other here: same box, once alone on its line and once between
+/// two words.
+#[test]
+fn an_embedded_block_between_words_is_inline_not_a_div() {
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        block: vec![text_line("in the box")],
+        anchor_last: false,
+    };
+    let vboxes = vec![VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, text_run("before")),
+            (Length::pt(40.0), embed),
+            (Length::pt(150.0), text_run("after")),
+        ],
+    }];
+    let out = render(&vboxes);
+    let html = body_of(&out);
+
+    assert!(
+        !html.contains("<div class=\"embed\""),
+        "an embedded block between two words must not become block-level:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<p class=\"para\"").count(),
+        1,
+        "the sentence was split into several paragraphs:\n{html}"
+    );
+    let para = html.lines().find(|l| l.contains("before")).unwrap();
+    assert!(
+        para.contains("after") && para.contains("class=\"embed-inline\""),
+        "`before`, the box and `after` belong to one paragraph:\n{para}"
+    );
+}
+
+/// A ONE-LINE embedded block is `white-space: nowrap`, and inside it a
+/// `Discretionary` writes no soft hyphen.
+///
+/// Both halves are the same fact: the port already fitted this text at this
+/// width, so the browser must not re-break it — and a break opportunity in a
+/// region that cannot break is not merely inert, it splits the word in the
+/// SOURCE. Measured on `figbox`, where a framed caption came out as
+/// `cap&shy;tion` and no search for `caption` found it, while the visible
+/// rendering put `cap-` inside the frame and `tion` below it.
+#[test]
+fn a_one_line_embedded_block_neither_wraps_nor_offers_a_hyphen() {
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(60.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        block: vec![VertBox::Line {
+            height: Length::pt(9.0),
+            depth: Length::pt(2.0),
+            leading: Length::pt(12.0),
+            contents: vec![
+                (Length::ZERO, text_run("left")),
+                (
+                    Length::pt(20.0),
+                    PureHorzBox::Discretionary {
+                        pre_break: vec![text_run("-")],
+                        post_break: vec![],
+                        no_break: vec![],
+                        penalty: 0,
+                    },
+                ),
+                (Length::pt(20.0), text_run("ward")),
+            ],
+        }],
+        anchor_last: false,
+    };
+    // Between two words, so it is the INLINE embedded block under test rather
+    // than the lone-box line that is legitimately a `<div>`.
+    let out = render(&[
+        line_of(vec![text_run("before"), embed, text_run("after")]),
+        text_line("body text, and more of it, so the box is not the whole flow"),
+    ]);
+    let html = body_of(&out);
+
+    assert!(
+        html.contains("white-space:nowrap;"),
+        "a one-line box must not be re-broken at the reader's metrics:\n{html}"
+    );
+    assert!(
+        html.contains("leftward") && !html.contains("left&shy;ward"),
+        "the word is split in the source by a hyphen nothing can use:\n{html}"
+    );
+}
+
+/// The control: a MULTI-line embedded block keeps both.
+///
+/// There the declared width is the document's own wrapping instruction
+/// (`textbox-with-width 100pt`), the browser re-breaking it is the point of
+/// this backend, and the dictionary's break opportunity is real information
+/// that only `&shy;` carries.
+#[test]
+fn a_multi_line_embedded_block_keeps_its_soft_hyphen() {
+    let hyphen_line = VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, text_run("left")),
+            (
+                Length::pt(20.0),
+                PureHorzBox::Discretionary {
+                    pre_break: vec![text_run("-")],
+                    post_break: vec![],
+                    no_break: vec![],
+                    penalty: 0,
+                },
+            ),
+            (Length::pt(20.0), text_run("ward")),
+        ],
+    };
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(60.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        block: vec![hyphen_line, text_line("second line")],
+        anchor_last: false,
+    };
+    let out = render(&[
+        line_of(vec![text_run("before"), embed, text_run("after")]),
+        text_line("body text, and more of it, so the box is not the whole flow"),
+    ]);
+    let html = body_of(&out);
+
+    assert!(
+        !html.contains("white-space:nowrap;"),
+        "a box the document asked to be wrapped must stay breakable:\n{html}"
+    );
+    assert!(
+        html.contains("left&shy;ward"),
+        "the dictionary's break opportunity is the only thing that tells the \
+         browser where it may hyphenate:\n{html}"
     );
 }

@@ -125,6 +125,10 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
                     out.push_str(close);
                 }
             } else {
+                // The word space in front of the region belongs OUTSIDE it —
+                // see `Ctx::resolve_glue_before_wrapper`, including why this
+                // is not simply `resolve_glue(out, None)`.
+                ctx.resolve_glue_before_wrapper(out);
                 let (open, reopen, close) = wrapper_tags(id, ctx);
                 if !suppressed {
                     out.push_str(&open);
@@ -190,7 +194,12 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // so it goes through the ordinary glue rule instead.
         PureHorzBox::Discretionary { pre_break, .. } => {
             if pre_break_carries_text(pre_break) {
-                out.push_str("&shy;");
+                // ...unless nothing here may break anyway, in which case the
+                // soft hyphen only cuts the word in the source — see
+                // `Ctx::nobreak`.
+                if ctx.nobreak.get() == 0 {
+                    out.push_str("&shy;");
+                }
             } else {
                 ctx.note_glue(glue_width(pre_break));
             }
@@ -212,6 +221,9 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
         // inline rather than as a block frame) for a plain `id=` anchor
         // when there's no link action, then to the Slice-1 inert `<span>`.
         PureHorzBox::Frame { deco, contents, .. } => {
+            // As in the `InlineFrameMarker` arm above: the space before the
+            // frame is not part of it.
+            ctx.resolve_glue_before_wrapper(out);
             let (open, _, close) = wrapper_tags(deco, ctx);
             close_run(out, ctx);
             out.push_str(&open);
@@ -434,9 +446,33 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 /// nothing this emitted before.
 fn emit_embedded_block(out: &mut String, width: f64, block: &[VertBox], ctx: &Ctx) {
     open_opaque(out, ctx);
+    let align = match embedded_align(block) {
+        Some(a) => format!(" text-align:{a};"),
+        None => String::new(),
+    };
+    // A ONE-LINE block does not re-break, and saying so is not a refinement —
+    // it is what keeps the box's content inside the box. The declared `width`
+    // is the port's measurement of ITS faces; the reader's are wider often
+    // enough, and the browser then wraps text the port fitted on one line,
+    // pushing the tail out from under whatever the document drew around it.
+    // Measured on `figbox`: `textbox {leftward} |> frame …` rendered `left-`
+    // inside the frame and `ward` on the line below it, and `\fig-inline`'s
+    // `boxed` broke as `boxe`/`d` (`.para` carries `overflow-wrap:
+    // break-word`, so even a single word is breakable). Overflowing a frame by
+    // a point is a far smaller lie than losing half the word out of it.
+    //
+    // A MULTI-line block is left alone: there the width IS a wrapping
+    // instruction the document gave (`textbox-with-width 100pt`), and the
+    // browser re-breaking it at its own metrics is the whole premise of this
+    // backend.
+    let lines = inked_lines(block);
+    let nobreak = if lines == 1 { " white-space:nowrap;" } else { "" };
+    if lines == 1 {
+        ctx.nobreak.set(ctx.nobreak.get() + 1);
+    }
     let _ = write!(
         out,
-        "<span class=\"embed-inline\" style=\"width:{width}pt;\">"
+        "<span class=\"embed-inline\" style=\"width:{width}pt;{align}{nobreak}\">"
     );
     let mut wrote_line = false;
     let mut want_break = false;
@@ -473,8 +509,111 @@ fn emit_embedded_block(out: &mut String, width: f64, block: &[VertBox], ctx: &Ct
         }
     }
     close_run(out, ctx);
-    ctx.reset_flow();
+    // The block's own trailing glue is dropped — it is the interior's, and a
+    // space after the last line of a fixed-width box is not a space in the
+    // sentence the box sits in. `last_char` is NOT dropped with it: it is the
+    // last character a reader actually sees before whatever follows the box,
+    // which is exactly what the glue rule wants next. Clearing it (a plain
+    // `reset_flow`, which this was) made `wants_space` see no previous
+    // character at all and swallow the word space after the box — visible the
+    // moment `\framebox` started coming through here, as `…box}B`.
+    ctx.pending_glue.set(None);
+    if lines == 1 {
+        ctx.nobreak.set(ctx.nobreak.get() - 1);
+    }
     out.push_str("</span>");
+}
+
+/// How many of an embedded block's lines carry INK.
+///
+/// Not `Line`s: the count that matters is "how many lines of content did the
+/// port's own line breaker need at this width", and a block routinely holds
+/// blank ones. `figbox` is the case that forced the distinction — `textbox
+/// {leftward} |> hvmargin 6pt |> frame …` arrives as THREE `Line`s, an empty
+/// strut above and below the one line of text, because `margin` builds its
+/// space out of zero-height lines rather than `Skip`s. Counting `Line`s said
+/// "three lines, the width is a measure, let it re-break" about a block whose
+/// content is one word.
+///
+/// Ink is anything that is not glue, an `inline-fil`, a kern, a break
+/// opportunity or a zero-width marker — the same set
+/// `block::lone_embedded_block` calls "not content", for the same reason.
+fn inked_lines(block: &[VertBox]) -> usize {
+    block
+        .iter()
+        .filter(|vb| match vb {
+            VertBox::Line { contents, .. } => contents.iter().any(|(_, bx)| match bx {
+                PureHorzBox::OuterEmpty { .. }
+                | PureHorzBox::OuterFil
+                | PureHorzBox::FixedEmpty { .. }
+                | PureHorzBox::Discretionary { .. }
+                | PureHorzBox::HookPageBreak { .. }
+                | PureHorzBox::FrameMarker { .. }
+                | PureHorzBox::InlineFrameMarker { .. }
+                | PureHorzBox::InlineMark(_) => false,
+                // A drawing that draws nothing is a SPACER, and this is the
+                // idiom every vertical margin in `figbox` is built from
+                // (`margin`: `inline-graphics 0pt top 0pt (fun _ -> [])`,
+                // one above the content and one below). Counting it as ink
+                // said "three lines" about a one-word caption.
+                PureHorzBox::Graphics { elems, .. } => !elems.is_empty(),
+                PureHorzBox::InnerString { text, .. } => !text.is_empty(),
+                _ => true,
+            }),
+            _ => false,
+        })
+        .count()
+}
+
+/// The `text-align` an embedded block's own `inline-fil` pattern asks for, or
+/// `None` for the stylesheet's default.
+///
+/// The same signal, and the same reading of it, as `block::Para::alignment` —
+/// a leading fil and a trailing fil is centred, a leading fil alone is flush
+/// right — but taken over the block's lines rather than a paragraph's, since
+/// what is being aligned here is the content of one fixed-width inline-block.
+/// It is not an extra: `\makebox(wid){…}` IS `line-break … (inline-fil ++ ib
+/// ++ inline-fil)` at `wid`, so without this every `\framebox` came out flush
+/// left in a box the document had centred.
+///
+/// A fil writes nothing, so "trailing" means "no INK has been emitted since" —
+/// glue, kerns and the zero-width markers do not clear it, exactly as they do
+/// not in `block.rs`'s own accumulation.
+fn embedded_align(block: &[VertBox]) -> Option<&'static str> {
+    let mut leading = false;
+    let mut trailing = false;
+    let mut seen_ink = false;
+    for vb in block {
+        let VertBox::Line { contents, .. } = vb else {
+            continue;
+        };
+        for (_, bx) in contents {
+            match bx {
+                PureHorzBox::OuterFil => {
+                    if !seen_ink {
+                        leading = true;
+                    }
+                    trailing = true;
+                }
+                PureHorzBox::OuterEmpty { .. }
+                | PureHorzBox::FixedEmpty { .. }
+                | PureHorzBox::Discretionary { .. }
+                | PureHorzBox::HookPageBreak { .. }
+                | PureHorzBox::FrameMarker { .. }
+                | PureHorzBox::InlineFrameMarker { .. }
+                | PureHorzBox::InlineMark(_) => {}
+                _ => {
+                    seen_ink = true;
+                    trailing = false;
+                }
+            }
+        }
+    }
+    match (leading, trailing) {
+        (true, true) => Some("center"),
+        (true, false) => Some("right"),
+        _ => None,
+    }
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) survives as a real
@@ -776,9 +915,9 @@ fn emit_graphics_box(
         depth,
         0.0,
         height,
-        &mut |_svg, cbx, x, y| {
+        &mut |_svg, cbx, x, y, mat| {
             if placed {
-                emit_placed_text(&mut nested, cbx, x, y, ctx)
+                emit_placed_text(&mut nested, cbx, x, y, mat, ctx)
             } else {
                 emit_nested_text(&mut nested, cbx, ctx)
             }
@@ -947,13 +1086,42 @@ fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 /// exact. The ascent is the box's own — `pure_natural_metrics`, the same
 /// per-variant table the line breaker measures with, not the enclosing run's
 /// (a `\overset`'s two rows have different heights and share no ascent).
-fn emit_placed_text(nested: &mut String, bx: &PureHorzBox, x: f64, y: f64, ctx: &Ctx) {
+///
+/// **`mat` is the run's own rotation/scale** (`svg::CssMatrix`, already
+/// converted out of the port's y-up convention), and it goes on as a CSS
+/// `transform` about `transform-origin: 0 {ascent}pt` — the box's own
+/// left-baseline point, which is the anchor the matrix was composed about
+/// (`GraphicsElem::Text::transform`: "applied to the run about its local
+/// origin BEFORE the `pt` translation"). The strut above is what makes that
+/// origin nameable at all: without it the baseline's offset from the box's
+/// top would be the browser's font ascent, unknown here, and
+/// `transform-origin` has no `baseline` keyword.
+///
+/// Until this was threaded through, the matrix was read by the PDF writer and
+/// dropped by this one, so `latexcmds`' `\rotatebox` — whose ENTIRE effect is
+/// the matrix — set its argument upright, and `figbox`'s `rotate` did nothing
+/// to a rotated figure's text. The `left`/`top` were already right, because
+/// `svg.rs` transforms the per-box offset before handing it over.
+fn emit_placed_text(
+    nested: &mut String,
+    bx: &PureHorzBox,
+    x: f64,
+    y: f64,
+    mat: Option<crate::svg::CssMatrix>,
+    ctx: &Ctx,
+) {
     let (_, height, _) = rustyfi_backend::pure_natural_metrics(std::iter::once(bx));
     let ascent = height.0;
     let top = y - ascent;
+    let transform = match mat {
+        Some((a, b, c, d)) => format!(
+            " transform:matrix({a},{b},{c},{d},0,0); transform-origin:0 {ascent}pt;"
+        ),
+        None => String::new(),
+    };
     let _ = write!(
         nested,
-        "<span class=\"dtx\" style=\"left:{x}pt; top:{top}pt;\">\
+        "<span class=\"dtx\" style=\"left:{x}pt; top:{top}pt;{transform}\">\
          <span class=\"dtx-strut\" style=\"height:{ascent}pt;\"></span>",
     );
     // No whitespace between the strut and the content: they are inline-level
@@ -993,6 +1161,15 @@ fn emit_placed_text(nested: &mut String, bx: &PureHorzBox, x: f64, y: f64, ctx: 
 /// the mark; the placement was equivalent, but it traded a reflowing bullet
 /// for a pinned one and gained nothing.
 ///
+/// A run carrying a `transform` is never "at the anchor", whatever its `pt`.
+/// The two questions this predicate conflates — is the run positioned, and is
+/// it reflowable — have the same answer for a rotated or scaled run as for an
+/// off-anchor one: only [`emit_placed_text`] writes the matrix, and flow has
+/// no more way to express "turned 14°" than it has to express "above".
+/// `scalebox`/`resizebox` are exactly this shape, an
+/// `inline-graphics (fun (x, y) -> [draw-text (x, y) ib |> scale-graphics …])`
+/// whose `draw-text` sits at the callback's own point.
+///
 /// `Group`/`Clip` recurse because `svg::emit_graphics`' own walker passes its
 /// `tx`/`ty` through them unchanged, so a run inside one is in the same
 /// frame as a run outside it.
@@ -1004,7 +1181,9 @@ fn all_nested_text_at_anchor(elems: &[GraphicsElem]) -> bool {
     /// "the author wrote the anchor" from turning on the last bit.
     const EPS: f64 = 1e-9;
     elems.iter().all(|elem| match elem {
-        GraphicsElem::Text { pt, .. } => pt.0 .0.abs() < EPS && pt.1 .0.abs() < EPS,
+        GraphicsElem::Text { pt, transform, .. } => {
+            transform.is_none() && pt.0 .0.abs() < EPS && pt.1 .0.abs() < EPS
+        }
         GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
             all_nested_text_at_anchor(inner)
         }
@@ -1129,9 +1308,9 @@ fn emit_math_svg(
             depth,
             0.0,
             height,
-            &mut |_svg, cbx, x, y| {
+            &mut |_svg, cbx, x, y, mat| {
                 if placed {
-                    emit_placed_text(&mut nested, cbx, x, y, ctx)
+                    emit_placed_text(&mut nested, cbx, x, y, mat, ctx)
                 } else {
                     emit_nested_text(&mut nested, cbx, ctx)
                 }

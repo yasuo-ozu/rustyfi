@@ -1,0 +1,85 @@
+% Fixture: TEXT INSIDE A DRAWING — the `figbox` shape, reduced to primitives.
+%
+% `textbox {leftward} |> hvmargin 6pt |> frame 1pt Color.black` builds an
+% `inline-graphics` holding a stroked rectangle and a `draw-text` of an
+% `embed-block-top`, and that composition is the whole of `\fig-inline` and
+% `+fig-center`. Both backends lost the words in it, in different ways:
+%
+%   markdown  `svg::graphics_block` drew the rectangle and DROPPED the
+%             `draw-text` entirely, on the (correct) grounds that an HTML
+%             child ejects the rest of an `<svg>` — but the conclusion should
+%             have been `<text>`, not nothing.
+%   html      the words survived, split in half: the line breaker's untaken
+%             hyphenation point became a `&shy;` inside a fixed-width
+%             inline-block narrower than the reader's own metrics, so
+%             `leftward` rendered as `left-` in the frame and `ward` below it,
+%             and no search of the file for the word could find it.
+%
+% `leftward` is chosen because the dictionary hyphenates it (`left|ward`), so
+% the box stream really does carry a `Discretionary` in the middle of the word;
+% `boxedword` does not, and is the control that would pass either way.
+%
+% No bundled face is needed: hyphenation is dictionary-driven and the
+% assertions are about which characters appear where, not about measurements.
+
+@require: stdja-mini
+
+let box-path x y w h d =
+  close-with-line
+    (line-to (x, y +' h)
+       (line-to (x +' w, y +' h)
+          (line-to (x +' w, y -' d)
+             (start-path (x, y -' d)))))
+
+% `figbox`'s `hvmargin`, verbatim in shape (`figbox.satyh:288`): a
+% `line-stack-bottom` of three rows — an empty `inline-graphics` strut, the
+% content, another strut — with `inline-skip`s either side.
+%
+% The three rows are not decoration: they are why the port line-breaks the
+% content at exactly the width the content came out at, which is what puts the
+% breaker under enough pressure to OFFER a hyphenation point inside the word
+% and then not take it. That untaken `Discretionary` is the thing under test,
+% and a generously-sized box does not produce one.
+let hvmargin-like len ib =
+  let strut = inline-graphics 0pt len 0pt (fun (_, _) -> []) in
+  let stacked = line-stack-bottom [
+    strut ++ inline-fil;
+    ib;
+    strut ++ inline-fil;
+  ] in
+  (inline-skip len) ++ stacked ++ (inline-skip len)
+
+% `figbox`'s `frame` (`figbox.satyh:431`): measure the figure, then draw it and
+% a rectangle round it into one `inline-graphics`.
+let framed-textbox-at len ctx it =
+  let inner = hvmargin-like len (read-inline ctx it) in
+  let (w, h, d) = get-natural-metrics inner in
+  inline-graphics w h d (fun (x, y) -> [
+    draw-text (x, y) inner;
+    stroke 1pt (RGB(0.1, 0.1, 0.1)) (box-path x y w h d);
+  ])
+
+let-inline ctx \framed-textbox it = framed-textbox-at 6pt ctx it
+
+% The control for the soft-hyphen suppression: the same word, laid out at a
+% width it does NOT fit on one line. There the declared width IS a wrapping
+% instruction, the browser is meant to re-break, and the break opportunity
+% must survive.
+let-inline ctx \narrow-textbox it =
+  let blockf ctx = line-break false false ctx (read-inline ctx it) in
+  let inner = embed-block-top ctx 30pt blockf in
+  let (w, h, d) = get-natural-metrics inner in
+  inline-graphics w h d (fun (x, y) -> [
+    draw-text (x, y) inner;
+    stroke 1pt (RGB(0.1, 0.1, 0.1)) (box-path x y w h d);
+  ])
+
+in
+document (|
+  title = {Text inside a drawing};
+  author = {yasuo};
+|) '<
+  +p { before \framed-textbox{leftward} after }
+  +p { before \framed-textbox{boxedword} after }
+  +p { before \narrow-textbox{leftward tail} after }
+>

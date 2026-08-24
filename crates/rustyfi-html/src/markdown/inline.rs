@@ -350,7 +350,7 @@ fn graphic_placeholder(para: &mut Para, elems: &[GraphicsElem], ctx: &Ctx) {
         return;
     }
     ctx.open_opaque(para);
-    match crate::svg::graphics_block(elems) {
+    match crate::svg::graphics_block(elems, ctx.fonts) {
         // `plain` stays a named hole: it feeds the plain-text side of the
         // paragraph, which is what content measurement and search read, and
         // where a wall of path data would be worse than useless.

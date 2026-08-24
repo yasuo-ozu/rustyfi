@@ -64,6 +64,7 @@
 //! `reflow::inline`'s `emit_placed_text` is where they are honoured.
 
 use rustyfi_backend::{Closing, Color, GraphicsElem, Path, PathSeg, PureHorzBox};
+use rustyfi_pdf::TtfFontStore;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -72,7 +73,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// this only for `GraphicsElem::Text`'s sub-boxes (see this module's doc
 /// comment on why they can't stay inside the SVG's local coordinate frame);
 /// every other variant is handled directly by this module.
-pub(super) type NestedEmitter<'a> = &'a mut dyn FnMut(&mut String, &PureHorzBox, f64, f64);
+pub(super) type NestedEmitter<'a> =
+    &'a mut dyn FnMut(&mut String, &PureHorzBox, f64, f64, Option<CssMatrix>);
+
+/// A `GraphicsElem::Text`'s 2×2 linear transform, restated for CSS: the
+/// `matrix(A, B, C, D, 0, 0)` a caller writes to reproduce it, about the run's
+/// own anchor. `None` everywhere the run is upright.
+///
+/// It is a CHANGE OF BASIS away from what `graphics.rs` stores, not a copy of
+/// it. The stored matrix is row-major `(a, b, c, d)` acting on the box-local,
+/// y-**UP** point `(x, y) |-> (ax + by, cx + dy)`
+/// (`graphicBase.ml`'s `linear_transform_point`); CSS acts on a y-**DOWN**
+/// point. Substituting `Y = -y` into the y-up map and solving for `Y'` gives
+///
+/// ```text
+/// X' =  a ·X + (-b)·Y
+/// Y' = (-c)·X +   d ·Y      i.e. matrix(a, -c, -b, d, 0, 0)
+/// ```
+///
+/// — a flip conjugation, `S M S` with `S = diag(1, -1)`, which for a rotation
+/// is just the sign of the angle (a counter-clockwise turn in the port's y-up
+/// frame is `rotate(-θ)` on a y-down screen, which is the SAME turn visually).
+/// Getting this wrong mirrors the run rather than failing, so it is spelled
+/// out here rather than inlined at the one call site that builds it.
+pub(super) type CssMatrix = (f64, f64, f64, f64);
 
 /// [`graphics_background`]'s answer: the `<svg>` document, then the ink
 /// bounding box it was cropped to as `(x0, y0)`/`(x1, y1)`, in the caller's
@@ -144,14 +168,31 @@ pub(super) fn emit_graphics(
 ///
 /// `None` when the drawing has no bounding box (nothing to draw).
 ///
-/// `GraphicsElem::Text` sub-boxes are DROPPED here — they are HTML, and an
-/// HTML child ejects the remainder of the drawing from the `<svg>` (see this
-/// module's own doc comment). The caller is responsible for their text; see
-/// `markdown::inline`'s `Graphics` arm.
-pub(super) fn graphics_block(elems: &[GraphicsElem]) -> Option<String> {
+/// **`GraphicsElem::Text` sub-boxes become SVG `<text>`**, drawn by
+/// [`emit_text_layer`] alongside the paths. This is what the comment here used
+/// to say, and it was wrong in its conclusion:
+///
+/// > sub-boxes are DROPPED here — they are HTML, and an HTML child ejects the
+/// > remainder of the drawing from the `<svg>`. The caller is responsible for
+/// > their text.
+///
+/// The premise is right and still holds — an HTML `<span>` inside `<svg>` ends
+/// the parser's foreign-content mode and throws the rest of the drawing out of
+/// the document (this module's own doc comment) — but the caller never took
+/// that responsibility, and could not sensibly have: `markdown::inline`'s
+/// `Graphics` arm has the drawing as one opaque `<svg>` string with nowhere to
+/// put text that belongs INSIDE it. So every `draw-text` in a Markdown figure
+/// vanished. Measured on `figbox`: `\fig-inline(textbox {boxed} |> hvmargin
+/// 3pt |> frame …)` emitted a rectangle and no `boxed`, and a `+fig-center` of
+/// two framed captions emitted two rectangles and neither caption.
+///
+/// `<text>` is the answer the premise actually points at: it is SVG, not HTML,
+/// so it composes with the drawing instead of ending it, and it is real
+/// selectable, searchable text.
+pub(super) fn graphics_block(elems: &[GraphicsElem], fonts: Option<&TtfFontStore>) -> Option<String> {
     // `pad_y = 0.0`, `stretch = false`: byte-for-byte what this always was.
     // The caller that wants the other settings is [`graphics_background`].
-    graphics_svg(elems, 0.0, false).map(|(svg, _, _)| svg)
+    graphics_svg(elems, 0.0, false, true, fonts).map(|(svg, _, _)| svg)
 }
 
 /// The same self-contained one-line `<svg>` as [`graphics_block`], but built
@@ -180,8 +221,14 @@ pub(super) fn graphics_block(elems: &[GraphicsElem]) -> Option<String> {
 /// 78pt. What it would buy is the outer half of a stroke's end CAP at the
 /// drawing's two extreme ends, which is a quarter of a point at the two places
 /// a reader is least likely to look.
+///
+/// No `<text>` layer, unlike [`graphics_block`]: this drawing is a
+/// DECORATION, replayed under text the reflow backend is writing as real HTML
+/// a few characters later, and a `draw-text` inside one would print the same
+/// words a second time. (Nothing in the corpus puts one there; the argument is
+/// why it stays that way rather than why it cannot happen.)
 pub(super) fn graphics_background(elems: &[GraphicsElem], pad_y: f64) -> Option<MeasuredSvg> {
-    graphics_svg(elems, pad_y, true)
+    graphics_svg(elems, pad_y, true, false, None)
 }
 
 /// The shared body of [`graphics_block`] and [`graphics_background`].
@@ -196,7 +243,17 @@ pub(super) fn graphics_background(elems: &[GraphicsElem], pad_y: f64) -> Option<
 /// for a block frame — inert where the target box happens to have the
 /// drawing's own aspect ratio (a tiled rule), load-bearing where it does not
 /// (a stretched panel).
-fn graphics_svg(elems: &[GraphicsElem], pad_y: f64, stretch: bool) -> Option<MeasuredSvg> {
+///
+/// `text` writes the `<text>` layer ([`emit_text_layer`]) after the paths;
+/// `fonts` only names families within it, so the two are separate — a
+/// base-14 render has no store and still has words to draw.
+fn graphics_svg(
+    elems: &[GraphicsElem],
+    pad_y: f64,
+    stretch: bool,
+    text: bool,
+    fonts: Option<&TtfFontStore>,
+) -> Option<MeasuredSvg> {
     let ((lo_x, lo_y), (hi_x, hi_y)) = elems
         .iter()
         .filter_map(rustyfi_backend::graphics_bbox)
@@ -233,13 +290,350 @@ fn graphics_svg(elems: &[GraphicsElem], pad_y: f64, stretch: bool) -> Option<Mea
     );
     // Both `after` and the nested emitter are discarded: see the note above.
     let mut after = String::new();
-    let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64| {};
+    let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64, _: Option<CssMatrix>| {};
     emit_elems(&mut out, &mut after, elems, 0.0, 0.0, &mut nested);
-    out.push_str("</g></svg>");
+    // OUTSIDE the flipped `<g>`, and that is not a style choice: SVG `<text>`
+    // is not orientation-independent the way a filled path is, so a glyph
+    // inside `scale(1,-1)` renders MIRRORED upside-down. `text_pen` therefore
+    // maps box-local y-up to SVG-native y-down by hand, exactly as
+    // `reflow::inline`'s math glyphs do.
+    out.push_str("</g>");
+    if text {
+        emit_text_layer(&mut out, elems, lo_x, hi_y, fonts);
+    }
+    out.push_str("</svg>");
     // `emit_elems` ends each element with a newline; a Markdown paragraph is
     // one line, so they are folded out rather than left to be reflowed by
     // whatever reads the file.
     Some((out.replace('\n', ""), (lo_x, lo_y), (hi_x, hi_y)))
+}
+
+/// Every `draw-text` run in `elems`, written as SVG `<text>` at the position
+/// the document placed it — the layer that keeps a Markdown figure's words.
+///
+/// `(lo_x, hi_y)` is the viewport crop [`graphics_svg`] computed, so a
+/// box-local y-**up** point `(px, py)` lands at SVG-native
+/// `(px - lo_x, hi_y - py)`. That mapping is [`text_pen`], the direct analogue
+/// of `reflow::inline`'s math `pen`, and it is done by hand for the same
+/// reason: `<text>` may not sit inside the `scale(1,-1)` group, which would
+/// mirror it.
+///
+/// **What it can place.** A run's `contents` are ordinary `PureHorzBox`es, so
+/// this is a small box walker: text runs, the two frame kinds, an embedded
+/// block (whose inner lines it places with `place_block_at`, the same call
+/// `rustyfi-pdf`'s `place_embedded_block` makes), a table's cells, a math
+/// run's glyphs, and a nested drawing's own `draw-text`s. Anything else
+/// contributes no text and is skipped.
+///
+/// **What it does not.** A nested `Graphics`' own PATHS are not drawn — a
+/// drawing inside a `draw-text` inside a drawing. That gap is older than this
+/// function and unchanged by it: `emit_elems` has never descended into a
+/// run's sub-boxes either, so those paths were already missing. Only the text
+/// is recovered here.
+pub(super) fn emit_text_layer(
+    out: &mut String,
+    elems: &[GraphicsElem],
+    lo_x: f64,
+    hi_y: f64,
+    fonts: Option<&TtfFontStore>,
+) {
+    let f = TextFrame {
+        lo_x,
+        hi_y,
+        fonts,
+        pending: None,
+    };
+    let mut f = f;
+    walk_text_elems(out, elems, &mut f);
+    f.flush(out);
+}
+
+/// The viewport mapping and font store [`emit_text_layer`]'s walk carries
+/// down, plus the one piece of state it keeps: the `<text>` currently open for
+/// APPENDING — see [`TextFrame::push`].
+struct TextFrame<'a> {
+    lo_x: f64,
+    hi_y: f64,
+    fonts: Option<&'a TtfFontStore>,
+    pending: Option<Pending>,
+}
+
+/// A `<text>` that has been started and may still grow. `end_x`/`y` are in the
+/// caller's box-local y-**up** frame, so the next box can be tested for being
+/// exactly where this one ends.
+struct Pending {
+    px: f64,
+    py: f64,
+    end_x: f64,
+    y: f64,
+    style: RunStyle,
+    text: String,
+}
+
+/// Everything about a run that is NOT its position: the CSS declarations and
+/// the enclosing `draw-text`'s transform. Together because they are together
+/// the JOIN KEY — two runs may share a `<text>` only if both match — and
+/// because keeping them as one value is what holds [`TextFrame::push`] inside
+/// clippy's argument limit.
+#[derive(PartialEq)]
+struct RunStyle {
+    css: String,
+    mat: Option<CssMatrix>,
+}
+
+impl TextFrame<'_> {
+    /// A box-local y-**up** point as SVG-native `(x, y)`. `y` is a BASELINE:
+    /// `<text>`'s default `dominant-baseline` is the alphabetic one, which is
+    /// exactly what a `PureHorzBox`'s own anchor means.
+    fn text_pen(&self, x: f64, y: f64) -> (f64, f64) {
+        (x - self.lo_x, self.hi_y - y)
+    }
+
+    fn family(&self, font: rustyfi_backend::FontKey) -> Option<String> {
+        let store = self.fonts?;
+        let family = store.file_family_name(store.file_index(font))?;
+        Some(crate::fonts::reflow_font_stack(&family))
+    }
+
+    /// Add one text run, EXTENDING the open `<text>` when this run begins
+    /// exactly where that one ended, on the same baseline, in the same style.
+    ///
+    /// Without the join a hyphenation point cuts a word in two. The line
+    /// breaker offers one inside almost every long word — `left|ward`,
+    /// `cap|tion` — and a `Discretionary` it did NOT take still stands in the
+    /// box stream between two `InnerString`s. Emitted as two `<text>`s the
+    /// word renders correctly (the halves abut) and is nonetheless broken for
+    /// every purpose that reads it: selection, find-in-page, a grep of the
+    /// file, a screen reader. The measured symptom was a `figbox` caption that
+    /// no search for `caption` could find, because the file said `cap` and
+    /// `tion`.
+    ///
+    /// The join is on POSITION, not on the discretionary: `x == end_x` to
+    /// within a rounding tolerance means there is no gap, whatever stood
+    /// between. A real word space fails the test and starts a new `<text>`,
+    /// which keeps the words at the x the document chose rather than at
+    /// wherever the reader's own space width would put them.
+    fn push(
+        &mut self,
+        out: &mut String,
+        text: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        style: RunStyle,
+    ) {
+        // A quarter of a point: below a device pixel at any sane zoom, and far
+        // above the accumulated error of summing box widths.
+        const JOIN_EPS: f64 = 0.25;
+        if let Some(p) = &mut self.pending {
+            if (x - p.end_x).abs() < JOIN_EPS && p.y == y && p.style == style {
+                p.text.push_str(text);
+                p.end_x = x + width;
+                return;
+            }
+        }
+        self.flush(out);
+        let (px, py) = self.text_pen(x, y);
+        self.pending = Some(Pending {
+            px,
+            py,
+            end_x: x + width,
+            y,
+            style,
+            text: text.to_string(),
+        });
+    }
+
+    /// Write the open `<text>`, if any.
+    ///
+    /// `font-size` is written in `px`, which SVG fixes at one user unit, and
+    /// this viewport's user unit is one point — so a 12pt run comes out 12pt.
+    /// Spelling it `12pt` would be 16 user units (see `reflow::inline`'s
+    /// `math_font_size_uu`, which measured all four spellings), and a bare
+    /// `12` is invalid CSS that Gecko drops.
+    ///
+    /// `xml:space="preserve"` is deliberate: a run may legitimately begin or
+    /// end in a space, and XML's default collapses it.
+    ///
+    /// A TRANSFORMED run is placed by the transform rather than by `x`/`y`:
+    /// SVG's `transform` is about the element's own user-space origin, so the
+    /// pen position becomes the translate and the matrix follows it. The
+    /// matrix is the same y-down conversion [`CssMatrix`] documents, SVG user
+    /// space being y-down as CSS is.
+    fn flush(&mut self, out: &mut String) {
+        let Some(p) = self.pending.take() else {
+            return;
+        };
+        let (px, py, style) = (p.px, p.py, &p.style.css);
+        let body = crate::escape_html(&p.text);
+        match p.style.mat {
+            Some((a, b, c, d)) => {
+                let _ = write!(
+                    out,
+                    "<text transform=\"translate({px},{py}) matrix({a},{},{},{d},0,0)\" \
+                     x=\"0\" y=\"0\" xml:space=\"preserve\" style=\"{style}\">{body}</text>",
+                    -c, -b,
+                );
+            }
+            None => {
+                let _ = write!(
+                    out,
+                    "<text x=\"{px}\" y=\"{py}\" xml:space=\"preserve\" \
+                     style=\"{style}\">{body}</text>",
+                );
+            }
+        }
+    }
+
+    /// The [`RunStyle`] one run wants.
+    fn run_style(
+        &self,
+        size: f64,
+        font: rustyfi_backend::FontKey,
+        color: Color,
+        mat: Option<CssMatrix>,
+    ) -> RunStyle {
+        let mut css = format!("font-size:{size}px;");
+        if let Some(stack) = self.family(font) {
+            let _ = write!(css, "font-family:{stack};");
+        }
+        if color != Color::Gray(0.0) {
+            let _ = write!(css, "fill:{};", css_color(color));
+        }
+        RunStyle { css, mat }
+    }
+}
+
+fn walk_text_elems(out: &mut String, elems: &[GraphicsElem], f: &mut TextFrame) {
+    for elem in elems {
+        match elem {
+            // The same per-box offset arithmetic the nested-HTML emitter does
+            // (`emit_elems`' own `Text` arm) — a transformed run's boxes are
+            // offset by the TRANSFORMED `(dx, 0)`.
+            GraphicsElem::Text {
+                pt,
+                contents,
+                transform,
+                ..
+            } => {
+                for (dx, bx) in contents {
+                    let (ox, oy) = match transform {
+                        Some((a, _, c, _)) => (a * dx.0, c * dx.0),
+                        None => (dx.0, 0.0),
+                    };
+                    place_text_box(out, bx, pt.0 .0 + ox, pt.1 .0 + oy, *transform, f);
+                }
+            }
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+                walk_text_elems(out, inner, f)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One placed sub-box's text, at box-local y-up `(x, y)` — `x` its left edge,
+/// `y` its baseline. `mat` is the enclosing run's transform, carried down so a
+/// rotated `\rotatebox`/`figbox` run turns its words rather than leaving them
+/// upright in the middle of a turned drawing.
+fn place_text_box(
+    out: &mut String,
+    bx: &PureHorzBox,
+    x: f64,
+    y: f64,
+    mat: Option<(f64, f64, f64, f64)>,
+    f: &mut TextFrame,
+) {
+    match bx {
+        PureHorzBox::InnerString {
+            info, text, width, ..
+        } => {
+            if text.is_empty() {
+                return;
+            }
+            let style = f.run_style(info.size.0, info.font, info.color, mat);
+            f.push(out, text, x, y + info.rising.0, width.0, style);
+        }
+        // Both frame kinds hold their contents on their own baseline, with
+        // x-offsets from the frame's left edge (`PureHorzBox::Frame`'s doc
+        // comment).
+        PureHorzBox::Frame { contents, .. } => {
+            for (dx, cbx) in contents {
+                place_text_box(out, cbx, x + dx.0, y, mat, f);
+            }
+        }
+        // `place_block_at` + the anchor line, exactly as `rustyfi-pdf`'s
+        // `place_embedded_block` resolves it: the FIRST inner line's baseline
+        // coincides with the box's own for `embed-block-top`, the LAST for
+        // `-bottom`, and every other line is offset by the difference of their
+        // placed baselines (a larger `baseline_y` is LOWER, hence the
+        // subtraction in this y-up frame).
+        PureHorzBox::EmbeddedBlock {
+            block, anchor_last, ..
+        } => {
+            let placed = rustyfi_backend::place_block_at(
+                (rustyfi_backend::Length::ZERO, rustyfi_backend::Length::ZERO),
+                block.clone(),
+            );
+            let anchor = if *anchor_last {
+                placed.last()
+            } else {
+                placed.first()
+            };
+            let Some(anchor) = anchor.map(|l| l.baseline_y) else {
+                return;
+            };
+            for line in &placed {
+                let ly = y - (line.baseline_y - anchor).0;
+                for (dx, cbx) in &line.contents {
+                    place_text_box(out, cbx, x + line.x.0 + dx.0, ly, mat, f);
+                }
+            }
+        }
+        // A cell's `baseline_y` is measured UPWARD from the tabular box's own
+        // baseline, the same convention `rustyfi-lang`'s `fire_inline_frame`
+        // reads it in.
+        PureHorzBox::Tabular(tab) => {
+            for cell in &tab.cells {
+                for (dx, cbx) in &cell.contents {
+                    place_text_box(out, cbx, x + cell.x.0 + dx.0, y + cell.baseline_y.0, mat, f);
+                }
+            }
+        }
+        // A math run inside a drawing — `figbox`'s `textbox {${…}}`. Its
+        // glyphs carry box-local y-up offsets from the run's baseline, the
+        // same convention everything else here uses; its `rules` (fraction
+        // bars, radicals) are paths and are NOT drawn, for the same reason a
+        // nested drawing's paths are not (see [`emit_text_layer`]).
+        PureHorzBox::Math { glyphs, .. } => {
+            for g in glyphs {
+                if g.text.is_empty() {
+                    continue;
+                }
+                let style = f.run_style(g.info.size.0, g.info.font, g.info.color, mat);
+                // A math glyph carries no advance of its own here — every one
+                // is positioned absolutely — so its run "ends" where it began
+                // and the next glyph never joins it. That is what the layout
+                // asked for: inter-atom spacing in an equation is not a font's
+                // advance width.
+                f.push(out, &g.text, x + g.dx.0, y + g.dy.0 + g.info.rising.0, 0.0, style);
+            }
+        }
+        // A drawing nested inside a run: its own `draw-text`s are in ITS
+        // box-local frame, anchored here — which is a shift of the viewport
+        // mapping, not a new one, so the join state travels with it.
+        PureHorzBox::Graphics { elems, .. } => {
+            let (lo_x, hi_y) = (f.lo_x, f.hi_y);
+            f.flush(out);
+            f.lo_x = lo_x - x;
+            f.hi_y = hi_y - y;
+            walk_text_elems(out, elems, f);
+            f.flush(out);
+            f.lo_x = lo_x;
+            f.hi_y = hi_y;
+        }
+        _ => {}
+    }
 }
 
 /// The widest stroke anywhere in `elems`, HALVED — a stroke is centred on its
@@ -347,11 +741,37 @@ fn emit_elems(
             // comment on why this is the one arm that steps OUTSIDE the
             // local `<g>` frame): re-enter the writer's own per-box emission
             // at PAGE-absolute coordinates `(tx + pt.x + dx, ty - pt.y)`.
-            GraphicsElem::Text { pt, contents, .. } => {
+            //
+            // `transform` is the run's own 2×2 about its anchor, applied
+            // BEFORE the `pt` translation (`GraphicsElem::Text`'s doc
+            // comment) — `latexcmds`' `\rotatebox`, `figbox`'s `rotate`/
+            // `scale`. The PDF writer pushes it as a `cm` and then emits each
+            // box at its plain local `(dx, 0)` inside that frame
+            // (`rustyfi-pdf/src/lib.rs:941`); there is no such enclosing frame
+            // here, because these boxes leave the `<svg>` entirely, so the
+            // same composition is done by hand instead:
+            //
+            //   translate(M·(dx, 0)) ∘ M  ==  M ∘ translate((dx, 0))
+            //
+            // i.e. each box is offset by the TRANSFORMED `(dx, 0)` and then
+            // carries the matrix itself, about its own left-baseline point.
+            // Equal by associativity, so it is the same placement the PDF
+            // gets, distributed over the boxes.
+            GraphicsElem::Text {
+                pt,
+                contents,
+                transform,
+                ..
+            } => {
                 for (dx, bx) in contents {
-                    let page_x = tx + (pt.0 + *dx).0;
-                    let page_y = ty - pt.1 .0;
-                    nested(after, bx, page_x, page_y);
+                    let (off_x, off_y) = match transform {
+                        Some((a, _, c, _)) => (a * dx.0, c * dx.0),
+                        None => (dx.0, 0.0),
+                    };
+                    let page_x = tx + pt.0 .0 + off_x;
+                    let page_y = ty - pt.1 .0 - off_y;
+                    let css = transform.map(|(a, b, c, d)| (a, -c, -b, d));
+                    nested(after, bx, page_x, page_y, css);
                 }
             }
             // L5b (prim-retype-sweep.md §3.3): 0.1's `graphics` collection

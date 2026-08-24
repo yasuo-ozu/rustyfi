@@ -378,7 +378,7 @@ pub(crate) fn frame_decoration(deco: &DecoId, ctx: &Ctx) -> FrameRender {
         0.0,
         0.0,
         frame.height.0,
-        &mut |_svg, _bx, _x, _y| {},
+        &mut |_svg, _bx, _x, _y, _mat| {},
     );
     FrameRender {
         extra_class: " framed",
@@ -420,6 +420,28 @@ pub(crate) fn frame_decoration(deco: &DecoId, ctx: &Ctx) -> FrameRender {
 ///
 /// For `\uwave` that lands the wave about half a point below where the PDF
 /// draws it at 12pt, which is within the error the anchor itself has.
+///
+/// **The STRADDLING case gets the frame's own vertical padding back**
+/// (`FrameDecoration::pads`, `padding-top`/`padding-bottom`), and that is what
+/// makes it a frame rather than a smear. The content area is the reader's
+/// text, but the padding around it is the DOCUMENT's, and it has nowhere else
+/// to go: `append_vert_padding` folds it into the fragment's height, which CSS
+/// never sees. Measured on `latexcmds` at 12pt, Chromium's default serif:
+/// `\fbox`'s 39.2 x 16.1pt frame was being drawn into a 43.8 x 12.75pt box and
+/// `\shadowbox`'s 59.0 x 22.7pt one into 64.6 x 12.75pt — the second squashing
+/// a 6.8pt drop shadow to 3.8pt and pulling it up through the descenders.
+/// With the padding they become 39.2 x 19.6 and 59.0 x 26.4: still not the
+/// PDF's, because the residual is exactly (the reader's ascent + descent)
+/// minus (the port's measured text height + depth), 3.4pt of Liberation Serif
+/// here — but the drawing is no longer compressed, and it grows with the
+/// reader's own font instead of fighting it.
+///
+/// The two ANCHORED cases deliberately get none. Their placement is a box
+/// EDGE, not the box's extent: an underline anchored to the bottom of a box
+/// padded by `\uwave`'s own 2.5pt bottom pad would be drawn 2.5pt further from
+/// the text than the PDF draws it, turning a half-point error into a
+/// three-point one. The pad's job there was to reserve room in the port's own
+/// line, and the browser's descender space already does that job.
 ///
 /// **Horizontally a rule TILES and a panel STRETCHES**, and the split falls
 /// out of the same three cases. A rule — a wave, a dash pattern, a plain line
@@ -465,10 +487,42 @@ pub(crate) fn inline_frame_decoration(frame: &FrameDecoration) -> Option<String>
              background-repeat:repeat-x;"
         )
     } else {
-        "background-size:100% 100%; background-position:left top; background-repeat:no-repeat;"
-            .to_string()
+        format!(
+            "background-size:100% 100%; background-position:left top; \
+             background-repeat:no-repeat;{}",
+            vertical_pad(frame),
+        )
     };
     Some(format!("background-image:url(\"{uri}\"); {placement}"))
+}
+
+/// An inline frame's `top`/`bottom` pads as CSS `padding`, for the STRADDLING
+/// case of [`inline_frame_decoration`] (which is where the whole argument
+/// is). The empty string when the frame pads by nothing — `\colorbox`'s
+/// default, and every `inline-frame-outer`/`-inner` frame, whose pads this
+/// side never learns (`rustyfi-lang`'s `record_inline_frame_deco`).
+///
+/// Horizontal padding is deliberately NOT written: `append_horz_padding` put
+/// the left and right pads into the box stream as real kerns, which
+/// `inline.rs`'s `FixedEmpty` arm already renders as `<span class="hskip">`
+/// struts inside this very wrapper. Adding them again here would double them.
+///
+/// Padding on an inline box extends its background area without changing the
+/// line's height, which is the behaviour wanted (the drawing must cover the
+/// frame's full extent) and also the one limitation: a framed phrase in a
+/// tightly-led paragraph paints a couple of points into the lines above and
+/// below, where the PDF opens the leading up instead. CSS has no way to make
+/// inline padding push the lines apart, and the alternative — an
+/// `inline-block` wrapper, which does size exactly — cannot break across
+/// lines, which is the one thing this whole path exists to support.
+fn vertical_pad(frame: &FrameDecoration) -> String {
+    let (t, b) = (frame.pads.2 .0, frame.pads.3 .0);
+    // Sub-half-point padding is below a device pixel at 96dpi and only makes
+    // the stylesheet longer.
+    if t <= 0.5 && b <= 0.5 {
+        return String::new();
+    }
+    format!(" padding-top:{t}pt; padding-bottom:{b}pt;")
 }
 
 /// The one padding the flow does not already carry — see

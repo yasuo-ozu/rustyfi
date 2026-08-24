@@ -252,7 +252,8 @@ impl OutputFormat {
             OutputFormat::Markdown(MathMode::SvgText) => "markdown-svgtext",
             OutputFormat::Markdown(MathMode::Unicode) => "markdown-unicode",
             OutputFormat::Markdown(MathMode::Katex) => "markdown-katex",
-            OutputFormat::Markdown(MathMode::MathMl) => "markdown-mathml",            OutputFormat::Latex => "latex",
+            OutputFormat::Markdown(MathMode::MathMl) => "markdown-mathml",
+            OutputFormat::Latex => "latex",
         }
     }
 }

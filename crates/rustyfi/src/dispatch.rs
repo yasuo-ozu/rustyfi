@@ -366,20 +366,22 @@ fn compile_command(name: &'static str) -> Command {
                      structure as GitHub-flavoured Markdown, dropping everything \
                      the format cannot say (frames, alignment, colour). Both \
                      draw equations and figures as inline SVG; see \
-                     --svg-math/--svg-outline-math/--katex/--unicode-math. \
+                     --svg-math/--svg-outline-math/--katex/--mathml/\
+                     --unicode-math. \
                      (html-reflow aliases html; md aliases markdown.)",
                 )
                 .value_parser(["pdf", "html", "html-reflow", "markdown", "md"])
                 .default_value("pdf"),
         )
-        // The three math-rendering flags. Each format already has a DEFAULT
-        // that suits its typical reader (markdown -> KaTeX, html -> outlined
+        // The math-rendering flags. Each format already has a DEFAULT that
+        // suits its typical reader (markdown -> SVG `<text>`, html -> outlined
         // SVG; see `OutputFormat::from_str`), so these only override it.
         //
         // Mutual exclusion is one `ArgGroup` rather than a web of pairwise
-        // `conflicts_with`: with three flags that would be six declarations to
-        // keep in step, and a fourth mode later would need three more. The
-        // group also gives clap's own "cannot be used with" message naming
+        // `conflicts_with`, and the reason has now been paid out twice: with
+        // three flags that would have been six declarations to keep in step,
+        // the fourth would have needed three more and the fifth another four.
+        // The group also gives clap's own "cannot be used with" message naming
         // both offenders. Which FORMATS each flag is valid with is checked in
         // `main.rs`, where the parsed `--format` is to hand.
         .arg(
@@ -422,6 +424,22 @@ fn compile_command(name: &'static str) -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("mathml")
+                .long("mathml")
+                .help(
+                    "html and markdown: write equations as MathML Core, which \
+                     the browser lays out itself -- real structure in the \
+                     document's tree, so a screen reader reads mathematics and \
+                     no script has to run. Needs Firefox, Safari, or Chromium \
+                     109+. Re-derived from the laid-out glyphs exactly as \
+                     --katex is, so it carries the same losses; an equation \
+                     whose drawing was not fully recovered is marked \
+                     class=\"rustyfi-approx\". See rustyfi man, section MATH \
+                     RENDERING.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("unicode_math")
                 .long("unicode-math")
                 .help(
@@ -438,6 +456,7 @@ fn compile_command(name: &'static str) -> Command {
             "svg_outline_math",
             "svg_math",
             "katex",
+            "mathml",
             "unicode_math",
         ]))
         .arg(

@@ -32,9 +32,9 @@
 /// Math is the one thing neither format can simply carry over — it is laid
 /// out during compilation, so what reaches a backend is positioned glyphs and
 /// no `\frac` node — and the right rendering depends on where the file will be
-/// READ rather than on what the document says. So it is three flags
-/// (`--svg-outline-math`, `--svg-math`, `--katex`, `--unicode-math`) rather
-/// than a heuristic.
+/// READ rather than on what the document says. So it is five flags
+/// (`--svg-outline-math`, `--svg-math`, `--katex`, `--mathml`,
+/// `--unicode-math`) rather than a heuristic.
 ///
 /// It lives INSIDE the format rather than beside it for two reasons, and both
 /// are load-bearing:
@@ -44,8 +44,8 @@
 ///   them in one value is what makes an unset flag mean the right thing;
 /// - **[`OutputFormat::cache_tag`] has to see it.** The compile cache stores
 ///   every format's payload as a bare `<key>.pdf`, so the tag is the only
-///   thing keeping two renders of one document apart, and four math modes
-///   are four different renders of it.
+///   thing keeping two renders of one document apart, and five math modes
+///   are five different renders of it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
@@ -174,8 +174,8 @@ impl OutputFormat {
     ///
     /// **2. Nothing may share a tag.** Markdown output is a SUBSET of HTML's,
     /// recovered from the same input by the same code, so every other field of
-    /// the key is identical between them; and the four math modes differ from
-    /// each other in NOTHING but this field. That is eight combinations, seven
+    /// the key is identical between them; and the five math modes differ from
+    /// each other in NOTHING but this field. That is ten combinations, nine
     /// of them reachable, and the stored payload is a bare `<key>.pdf`
     /// whatever the format — so there is no extension, no header and no magic
     /// number downstream to notice a wrong hit.
@@ -207,10 +207,12 @@ impl OutputFormat {
             OutputFormat::Html(MathMode::SvgText) => "html-reflow-svgtext",
             OutputFormat::Html(MathMode::Unicode) => "html-reflow-unicode",
             OutputFormat::Html(MathMode::Katex) => "html-reflow-katex",
+            OutputFormat::Html(MathMode::MathMl) => "html-reflow-mathml",
             OutputFormat::Markdown(MathMode::SvgOutline) => "markdown-svgoutline",
             OutputFormat::Markdown(MathMode::SvgText) => "markdown-svgtext",
             OutputFormat::Markdown(MathMode::Unicode) => "markdown-unicode",
             OutputFormat::Markdown(MathMode::Katex) => "markdown-katex",
+            OutputFormat::Markdown(MathMode::MathMl) => "markdown-mathml",
         }
     }
 }
@@ -218,6 +220,57 @@ impl OutputFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every [`MathMode`], for the tests that must cover ALL of them.
+    ///
+    /// A literal list repeated in each test is what this file had, and it is
+    /// the wrong shape for the property being asserted: the collision test's
+    /// whole job is to see a new mode, and a hand-written list silently does
+    /// not. [`all_math_modes_are_listed`] closes that with a `match` the
+    /// compiler checks, so adding a variant fails to BUILD here rather than
+    /// passing vacuously.
+    const ALL_MATH_MODES: [MathMode; 5] = [
+        MathMode::SvgOutline,
+        MathMode::SvgText,
+        MathMode::Unicode,
+        MathMode::Katex,
+        MathMode::MathMl,
+    ];
+
+    /// [`ALL_MATH_MODES`] really is all of them — enforced by the compiler,
+    /// not by the length.
+    ///
+    /// The `match` below has no wildcard arm, so a sixth variant is a hard
+    /// COMPILE error here; the `contains` then makes sure it was added to the
+    /// array too, which the `match` alone would not.
+    ///
+    /// It maps each mode to the flag that selects it rather than to itself,
+    /// which is what keeps the guard honest in two ways: an identity match is
+    /// a no-op clippy rightly objects to, and stating the flag makes a new
+    /// mode declare its own name in the one place that enumerates them all.
+    #[test]
+    fn all_math_modes_are_listed_with_the_flag_that_selects_each() {
+        let mut flags: Vec<&str> = Vec::new();
+        for mode in ALL_MATH_MODES {
+            flags.push(match mode {
+                MathMode::SvgOutline => "--svg-outline-math",
+                MathMode::SvgText => "--svg-math",
+                MathMode::Unicode => "--unicode-math",
+                MathMode::Katex => "--katex",
+                MathMode::MathMl => "--mathml",
+            });
+            assert!(
+                ALL_MATH_MODES.contains(&mode),
+                "{mode:?} is missing from ALL_MATH_MODES, so every test that \
+                 iterates it silently stops covering this mode",
+            );
+        }
+        // One flag per mode and no mode listed twice — otherwise the array's
+        // length stops meaning "how many modes there are" and a missing one
+        // hides behind a duplicate.
+        let unique: std::collections::HashSet<_> = flags.iter().collect();
+        assert_eq!(unique.len(), ALL_MATH_MODES.len(), "flags collide: {flags:?}");
+    }
 
     /// The cache tags are a compatibility surface, not an internal spelling:
     /// see [`OutputFormat::cache_tag`]. `html` in particular is RETIRED — it
@@ -259,12 +312,7 @@ mod tests {
     #[test]
     fn every_format_and_math_mode_has_its_own_cache_tag() {
         let mut tags = vec![OutputFormat::Pdf.cache_tag()];
-        for math in [
-            MathMode::SvgOutline,
-            MathMode::SvgText,
-            MathMode::Unicode,
-            MathMode::Katex,
-        ] {
+        for math in ALL_MATH_MODES {
             tags.push(OutputFormat::Html(math).cache_tag());
             tags.push(OutputFormat::Markdown(math).cache_tag());
         }
@@ -282,12 +330,7 @@ mod tests {
     /// is exactly the failure the tag exists to prevent.
     #[test]
     fn no_mode_claims_the_retired_markdown_tag() {
-        for math in [
-            MathMode::SvgOutline,
-            MathMode::SvgText,
-            MathMode::Unicode,
-            MathMode::Katex,
-        ] {
+        for math in ALL_MATH_MODES {
             assert_ne!(
                 OutputFormat::Markdown(math).cache_tag(),
                 "markdown",
@@ -343,6 +386,11 @@ mod tests {
             md.with_math(MathMode::Unicode).cache_tag(),
             "markdown-unicode"
         );
+        assert_eq!(md.with_math(MathMode::MathMl).cache_tag(), "markdown-mathml");
+        assert_eq!(
+            html.with_math(MathMode::MathMl).cache_tag(),
+            "html-reflow-mathml"
+        );
     }
 
     /// The flags are additive: the format decides the vocabulary, the math
@@ -382,7 +430,7 @@ mod tests {
         ];
         let unique: std::collections::HashSet<_> = exts.iter().collect();
         assert_eq!(unique.len(), exts.len(), "extensions collide: {exts:?}");
-        for math in [MathMode::SvgText, MathMode::Unicode, MathMode::Katex] {
+        for math in ALL_MATH_MODES {
             assert_eq!(OutputFormat::Markdown(math).extension(), "md");
             assert_eq!(OutputFormat::Html(math).extension(), "html");
         }

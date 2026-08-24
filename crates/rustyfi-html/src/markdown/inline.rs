@@ -207,6 +207,21 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
                         para.pieces.push(Piece::Math { latex, plain });
                     }
                 }
+                crate::MathMode::MathMl => {
+                    // The `<math>` element itself is written at flush time —
+                    // whether it says `display="block"` and whether it may be
+                    // broken across lines are properties of the paragraph, not
+                    // of the box. See `para.rs`'s `Piece::MathMl`.
+                    let (body, approx) = crate::mathml::math_mathml(glyphs, rules);
+                    if !body.is_empty() {
+                        math_flow(para, ctx, &plain);
+                        para.pieces.push(Piece::MathMl {
+                            body,
+                            plain,
+                            approx,
+                        });
+                    }
+                }
                 crate::MathMode::Unicode => {
                     if !plain.is_empty() {
                         math_flow(para, ctx, &plain);

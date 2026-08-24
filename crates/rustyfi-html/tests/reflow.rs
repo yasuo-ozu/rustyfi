@@ -3183,3 +3183,133 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
         "a flat panel should need no SVG:\n{html}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `--mathml`
+// ---------------------------------------------------------------------------
+
+/// One math glyph, with the metrics `mathrec`'s geometry is measured against.
+fn ml_glyph(text: &str, dx: f64, dy: f64, size: f64) -> MathGlyph {
+    MathGlyph {
+        text: text.to_string(),
+        gid: None,
+        dx: Length::pt(dx),
+        dy: Length::pt(dy),
+        info: HorzStringInfo {
+            font: FontKey(0),
+            size: Length::pt(size),
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        width: Length::pt(size * 0.5),
+        height: Length::pt(size * 0.7),
+        depth: Length::ZERO,
+    }
+}
+
+fn ml_math(glyphs: Vec<MathGlyph>) -> PureHorzBox {
+    PureHorzBox::Math {
+        width: Length::pt(30.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs,
+        rules: Vec::new(),
+    }
+}
+
+fn render_mathml(vboxes: &[VertBox]) -> String {
+    rustyfi_html::render_html_reflow_with_decos(
+        Some(vboxes),
+        &geometry(),
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        &[],
+        rustyfi_html::MathMode::MathMl,
+    )
+    .expect("reflow HTML rendering must succeed")
+}
+
+/// `--mathml` writes MathML Core into the page's own tree instead of drawing —
+/// no `<svg>`, no phantom layer, no LaTeX for someone else's typesetter.
+///
+/// The equation that is the whole of its paragraph is `display="block"` and the
+/// one with prose beside it is not. **Asserted as a contrast**, because each
+/// half alone is satisfied by a renderer that never emits the other — the
+/// mistake `sole_math_tex` shipped with and that `html_katex_uses_display_
+/// delimiters_for_a_displayed_equation` was rewritten to catch.
+#[test]
+fn mathml_writes_core_elements_and_tells_display_from_inline() {
+    let displayed = ml_math(vec![
+        ml_glyph("x", 0.0, 0.0, 10.0),
+        ml_glyph("2", 6.0, 5.0, 7.0),
+    ]);
+    let inline = ml_math(vec![ml_glyph("y", 0.0, 0.0, 10.0)]);
+    // A `Skip` between them, or consecutive lines coalesce into ONE paragraph
+    // and the displayed equation is no longer alone in its block.
+    let doc = render_mathml(&[
+        line(displayed),
+        VertBox::Skip(Length::pt(12.0)),
+        line_of(vec![text_run("see"), inline, text_run("then")]),
+    ]);
+    // Nesting is checked over the WHOLE document, which is what
+    // `assert_balanced_tags` counts `<html>`/`<body>` in.
+    assert_balanced_tags(&doc);
+    let html = body_of(&doc).to_string();
+
+    assert!(html.contains("<math "), "no MathML at all:\n{html}");
+    assert!(
+        html.contains("<msup><mi mathvariant=\"normal\">x</mi><mn>2</mn></msup>"),
+        "the script did not become an <msup>:\n{html}"
+    );
+    // Not a drawing and not LaTeX: this mode replaces both.
+    assert!(!html.contains("math-glyphs"), "{html}");
+    assert!(!html.contains("mphantom"), "{html}");
+    assert!(!html.contains("math-tex"), "{html}");
+
+    assert!(
+        html.contains("display=\"block\""),
+        "the display upgrade never fired:\n{html}"
+    );
+    assert!(
+        html.contains("display=\"inline\""),
+        "no inline equation: the contrast is not being measured:\n{html}"
+    );
+    assert!(html.contains("class=\"para math-display\""), "{html}");
+    assert_eq!(
+        html.matches("<math ").count(),
+        html.matches("</math>").count(),
+        "unbalanced <math> elements:\n{html}"
+    );
+}
+
+/// The `--mathml` stylesheet is emitted in that mode and in NO other, so
+/// `--format html` without the flag is byte-identical to what it was.
+///
+/// The two centring declarations are the load-bearing part and are checked by
+/// name: `math[display="block"]` computes to `display: block math`, a
+/// block-level box, so the enclosing paragraph's `text-align: center` — which
+/// is all `--katex`'s inline `\[…\]` needs — moves it not at all. Measured in
+/// headless Chromium: without them every displayed equation sits flush left.
+#[test]
+fn the_mathml_stylesheet_is_scoped_to_the_mode() {
+    let vboxes = vec![line(ml_math(vec![ml_glyph("x", 0.0, 0.0, 10.0)]))];
+    let with_flag = render_mathml(&vboxes);
+    assert!(with_flag.contains("margin-inline: auto"), "{with_flag}");
+    assert!(with_flag.contains("width: fit-content"), "{with_flag}");
+    assert!(with_flag.contains(".para.math-display"), "{with_flag}");
+
+    let without = render(&vboxes);
+    for rule in [
+        "margin-inline: auto",
+        "width: fit-content",
+        ".para.math-display",
+        "rustyfi-approx",
+    ] {
+        assert!(
+            !without.contains(rule),
+            "`{rule}` leaked into a render that did not ask for --mathml"
+        );
+    }
+}

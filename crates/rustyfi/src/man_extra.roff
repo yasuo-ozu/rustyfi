@@ -114,8 +114,8 @@ during compilation, so what reaches a non-PDF backend is positioned glyphs and
 a few filled paths \(em there is no
 .B \efrac
 node left to serialize. Every rendering below is therefore a recovery from
-geometry, and which one suits depends on where the file will be read. The four
-are mutually exclusive; all four are an error with
+geometry, and which one suits depends on where the file will be read. The five
+are mutually exclusive; all five are an error with
 .BR "\-\-format pdf" ,
 which typesets the equation itself.
 .TP
@@ -149,6 +149,24 @@ radicals, delimiters drawn as paths, matrices, nested fractions and nested
 scripts do not come back, and a symbol with no name in the table is written as
 its own character. Suitable where the equation's structure matters more than
 its exact appearance.
+.TP
+.B \-\-mathml
+MathML Core \(em
+.BR <mfrac> ,
+.BR <msubsup> ,
+.B <munderover>
+and the rest \(em laid out by the browser itself. Real structure in the
+document's own tree, so a screen reader reads the equation as mathematics, the
+browser's find works, and nothing has to be loaded or run. Needs Firefox,
+Safari, or Chromium 109 or later.
+.B Re-derived exactly as \-\-katex is,
+so it carries the same losses; an equation whose drawing was not fully
+recovered \(em a delimiter or a radical sign the layout drew as a path, an
+accent with no base \(em is marked
+.B class="rustyfi\-approx"
+so it can be found mechanically. Nothing is invented to cover a loss: no
+.BR <msqrt> ,
+no synthesized delimiter.
 .TP
 .B \-\-unicode\-math
 The characters in reading order, using Unicode's own super/subscripts where

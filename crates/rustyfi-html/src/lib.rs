@@ -37,6 +37,7 @@ mod fonts;
 mod image;
 mod latex;
 mod markdown;
+mod mathml;
 mod mathrec;
 mod mathsvg;
 mod recover;
@@ -55,7 +56,7 @@ pub use reflow::{
 /// carry over: `${\frac{a}{b}}` is laid out during compilation, so what
 /// reaches a backend is positioned glyphs and a couple of filled paths, with
 /// no `\frac` node left anywhere ([`crate::mathrec`]'s doc comment has the
-/// detail). There is therefore no single right answer, only three answers
+/// detail). There is therefore no single right answer, only several answers
 /// that are right for different readers — and which one a document wants is a
 /// property of where it is going to be READ, not of the document. So it is a
 /// flag rather than a heuristic.
@@ -69,13 +70,14 @@ pub use reflow::{
 /// entry point here takes the mode explicitly so that no caller can
 /// accidentally inherit someone else's answer.
 ///
-/// The four, and the axis each trades on:
+/// The five, and the axis each trades on:
 ///
 /// | mode | flag | ink | needs of the reader |
 /// |--|--|--|--|
 /// | [`MathMode::SvgOutline`] | `--svg-outline-math` | outline paths | nothing |
 /// | [`MathMode::SvgText`] | `--svg-math` | `<text>` + `<rect>` | the document's faces |
 /// | [`MathMode::Katex`] | `--katex` | LaTeX source | a math typesetter |
+/// | [`MathMode::MathMl`] | `--mathml` | MathML Core elements | a 2023-or-later browser |
 /// | [`MathMode::Unicode`] | `--unicode-math` | characters | nothing |
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MathMode {
@@ -128,6 +130,25 @@ pub enum MathMode {
     /// real mathematics and survives a sanitizer, but it is the only mode that
     /// can render something the PDF does not show.
     Katex,
+    /// Write the equation as **MathML Core** elements the browser lays out
+    /// itself ([`crate::mathml`]).
+    ///
+    /// The one mode whose output is neither a picture nor a foreign language:
+    /// `<mfrac>`, `<msubsup>` and `<munderover>` are real structure in the
+    /// document's own tree, so a screen reader reads the equation as
+    /// mathematics rather than as a row of characters, the browser's find
+    /// works, and no script runs — where [`MathMode::Katex`] needs the reader
+    /// to have loaded KaTeX or MathJax, and both SVG modes hand over a
+    /// drawing that assistive technology can only read out of a phantom layer.
+    ///
+    /// Opt-in in both formats, for two reasons that do not cancel out. The
+    /// support floor is a browser from 2023 — Firefox has always had it and
+    /// Safari since 2013, but Chromium only since 109 — and, more to the
+    /// point, it is the SAME re-derivation `--katex` is, from the same
+    /// [`crate::mathrec`] recovery, so it carries every one of that mode's
+    /// losses while rendering them as confidently as a hand-written equation.
+    /// [`crate::mathml`]'s doc comment says what is done about that.
+    MathMl,
 }
 
 /// Rendering is in practice infallible — every text run is valid

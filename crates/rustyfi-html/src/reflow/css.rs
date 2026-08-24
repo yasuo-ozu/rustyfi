@@ -242,6 +242,40 @@ pub(crate) fn math_tex_rules(ctx: &Ctx) -> String {
         .to_string()
 }
 
+/// The rules `--mathml` needs, and nothing at all in any other mode.
+///
+/// Separate from [`stylesheet`] for the reason [`math_tex_rules`] is: opt-in
+/// has to mean byte-for-byte opt-in, or "did anything else move?" stops being
+/// answerable with `sha256sum`.
+///
+/// **`margin-inline: auto` and `width: fit-content` are what centre a
+/// displayed equation, and `text-align` is not.** MathML Core's UA stylesheet
+/// gives `math[display="block"]` `display: block math`, so it is a
+/// block-level box: the enclosing `.para.math-display`'s `text-align: center`
+/// — which is all `--katex` needs, because its `\[…\]` is inline text — moves
+/// nothing. Measured in headless Chromium against the rasterised PDF; without
+/// the two declarations every displayed equation sits flush left.
+///
+/// `.rustyfi-approx` gets NO visual treatment on purpose. It marks an equation
+/// whose drawing this layer could not fully account for (`crate::mathml`'s
+/// `Approx`), which is a fact about the derivation, not about the mathematics
+/// — a reader has no use for a red box around a third of `latexcmds`, and a
+/// pipeline that does want to find them has the class. It is declared here
+/// with only a comment so that a page's own stylesheet can style it without
+/// having to guess the name.
+pub(crate) fn math_ml_rules(ctx: &Ctx) -> String {
+    if ctx.math != crate::MathMode::MathMl {
+        return String::new();
+    }
+    "/* --mathml: MathML Core, laid out by the browser itself. */\n\
+     .para.math-display { text-align: center; margin: 1em 0; }\n\
+     math[display=\"block\"] { margin-inline: auto; width: fit-content; }\n\
+     /* Marks an equation whose drawing was not fully recovered; unstyled by\n\
+        default, and here so a page can restyle it by name. */\n\
+     .rustyfi-approx {}\n"
+        .to_string()
+}
+
 /// One `background-image` rule per image the flow placed more than once
 /// (`Ctx::shared_images`, filled during the body walk — so this must be
 /// called AFTER it). Each image's bytes appear once here instead of once per

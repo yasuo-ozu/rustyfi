@@ -1053,6 +1053,34 @@ fn emit_math_svg(
         }
         return;
     }
+    // `--mathml`: the equation as MathML Core elements the browser lays out
+    // itself. Short-circuits the same geometry the `--katex` arm above does,
+    // and for the same reason — there is no viewport to size and nothing to
+    // flip — and it emits any `draw-text` in the rules FIRST for the same
+    // reason too: a `draw-text` operator sits at the box's own origin, so
+    // putting it after its limits reads as `ₐᵇ∑`.
+    if ctx.math == crate::MathMode::MathMl {
+        if !rules.is_empty() {
+            let mut nested = String::new();
+            emit_text_only(&mut nested, rules, ctx);
+            out.push_str(&nested);
+        }
+        let (body, approx) = crate::mathml::math_mathml(glyphs, rules);
+        if !body.is_empty() {
+            open_opaque(out, ctx);
+            // `display="inline"` unconditionally here; a paragraph that turns
+            // out to hold nothing but this equation is upgraded to
+            // `display="block"` by `block.rs`'s flush, which is the first
+            // place the whole paragraph exists. See `text::sole_math_ml`.
+            let _ = writeln!(
+                out,
+                "{}{body}{}",
+                crate::mathml::open_tag(false, approx),
+                crate::mathml::CLOSE_TAG,
+            );
+        }
+        return;
+    }
     // Whether this run's `draw-text` rules are POSITIONING their contents or
     // merely wrapping them — see [`all_nested_text_at_anchor`]. A big
     // operator's limits reach this function rather than

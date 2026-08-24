@@ -1,0 +1,26 @@
+[package]
+name = "rustyfi-latex"
+description = "LaTeX output backend for SATySFi: a complete, compilable .tex document"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+authors.workspace = true
+
+[dependencies]
+rustyfi-backend.workspace = true
+# For `TtfFontStore`, and for exactly one question asked of it: is this run's
+# face fixed-pitch? That is what tells a code block from a wrapped paragraph.
+# No face is embedded — a `.tex` names its fonts and lets the engine find
+# them.
+rustyfi-pdf.workspace = true
+# The SHARED structure recovery (`rustyfi_html::recover`) and the shared
+# math-run writer (`rustyfi_html::latex::math_latex`), which `--katex` also
+# uses. Nothing HTML crosses; see lib.rs's "Location" note for why the
+# dependency points this way round rather than through a fourth crate.
+rustyfi-html.workspace = true
+thiserror.workspace = true

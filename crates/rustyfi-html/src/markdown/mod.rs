@@ -68,6 +68,9 @@ use para::Para;
 /// buffers.
 pub(crate) struct Ctx<'a> {
     fonts: Option<&'a TtfFontStore>,
+    /// Which of the store's FILES are fixed-pitch, computed once — see
+    /// [`crate::recover::MonoFiles`].
+    mono_files: crate::recover::MonoFiles,
     /// How an equation is written — see [`crate::MathMode`]. All three modes
     /// are reachable here; this is the backend the choice was invented for.
     math: crate::MathMode,
@@ -298,6 +301,7 @@ fn render_markdown_impl(
 ) -> Result<String, HtmlError> {
     let ctx = Ctx {
         fonts: font_store,
+        mono_files: crate::recover::MonoFiles::new(font_store),
         math,
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests

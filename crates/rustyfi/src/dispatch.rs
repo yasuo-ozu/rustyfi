@@ -358,7 +358,7 @@ fn compile_command(name: &'static str) -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .help(
-                    "Output format: pdf (default), html or markdown. html is a \
+                    "Output format: pdf (default), html, markdown or latex. html is a \
                      semantic, reflowable web document — one continuous flow of real \
                      paragraphs the browser breaks and justifies, with headings, \
                      lists, links and in-flow footnotes; readable, not \
@@ -367,9 +367,14 @@ fn compile_command(name: &'static str) -> Command {
                      the format cannot say (frames, alignment, colour). Both \
                      draw equations and figures as inline SVG; see \
                      --svg-math/--svg-outline-math/--katex/--unicode-math. \
-                     (html-reflow aliases html; md aliases markdown.)",
+                     latex is the same structure again as a complete, \
+                     compilable .tex document, with real math, TikZ drawings \
+                     and hyperref cross-references; a document containing CJK \
+                     needs lualatex, and the generated preamble says so. \
+                     (html-reflow aliases html; md aliases markdown; tex \
+                     aliases latex.)",
                 )
-                .value_parser(["pdf", "html", "html-reflow", "markdown", "md"])
+                .value_parser(["pdf", "html", "html-reflow", "markdown", "md", "latex", "tex"])
                 .default_value("pdf"),
         )
         // The three math-rendering flags. Each format already has a DEFAULT

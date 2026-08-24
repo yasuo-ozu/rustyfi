@@ -37,7 +37,7 @@
 //! saying so.** Where the structure is genuinely unavailable the characters go
 //! out as themselves, which renders as the same characters — legible, and
 //! visibly not a fraction — rather than as a construct this module guessed at.
-//! The one place that judgement is exercised is [`Escape`]: a character with
+//! The one place that judgement is exercised is [`escape`]: a character with
 //! no LaTeX spelling is escaped so it renders literally, never dropped.
 //!
 //! ## Delimiters are the CALLER's, not this module's
@@ -58,7 +58,7 @@ use crate::mathrec::{self, Atom, DelimKind, Script};
 /// this module's doc comment. Empty when the run holds nothing this layer can
 /// name, in which case the caller should write nothing at all rather than an
 /// empty `$$`.
-pub(crate) fn math_latex(
+pub fn math_latex(
     glyphs: &[MathGlyph],
     rules: &[rustyfi_backend::GraphicsElem],
 ) -> String {

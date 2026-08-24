@@ -130,6 +130,9 @@ pub(crate) use text::BodyStyle;
 /// Render-time state shared by every `emit_*` function in this module.
 pub(crate) struct Ctx<'a> {
     pub(crate) fonts: Option<&'a TtfFontStore>,
+    /// Which of the store's FILES are fixed-pitch, computed once — see
+    /// [`crate::recover::MonoFiles`].
+    pub(crate) mono_files: crate::recover::MonoFiles,
     /// How an equation is written — see [`crate::MathMode`].
     ///
     /// Only two of the three are reachable here. [`crate::MathMode::Unicode`]
@@ -346,7 +349,7 @@ impl Ctx<'_> {
     /// (`fonts::is_monospace_family` — a name heuristic, and labelled as one
     /// there). `false` in base-14 mode, where there is no file to ask.
     pub(crate) fn is_monospace(&self, font: Option<FontKey>) -> bool {
-        crate::recover::is_monospace(self.fonts, font)
+        self.mono_files.is_monospace(self.fonts, font)
     }
 
     /// Record that a glue box of `natural_pt` natural width stands here.
@@ -602,6 +605,7 @@ fn render_html_reflow_impl(
     let image_canon = canonical_images(images, &body_style.image_uses);
     let ctx = Ctx {
         fonts: font_store,
+        mono_files: crate::recover::MonoFiles::new(font_store),
         math,
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests

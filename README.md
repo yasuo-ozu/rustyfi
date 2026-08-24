@@ -173,7 +173,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (default), `html` or `markdown` — see [HTML output](#html-output) and [Markdown output](#markdown-output) |
+| `--format <fmt>` | `pdf` (default), `html`, `markdown` or `latex` — see [HTML output](#html-output), [Markdown output](#markdown-output) and [LaTeX output](#latex-output) |
 | `--svg-math` | html and markdown: equations as SVG `<text>` + `<rect>` — markdown's default; see [How math is written](#how-math-is-written) |
 | `--svg-outline-math` | html and markdown: equations as outline paths with selectable text behind them — html's default |
 | `--katex` | html and markdown: equations as LaTeX in math delimiters, for a KaTeX/MathJax reader |
@@ -458,6 +458,131 @@ than a fence. Nothing is lost, and a fence would cost false positives on every
 short sentence that mentions a `\command`.
 
 `--format md` is accepted as an alias for `markdown`.
+
+## LaTeX output
+
+```console
+$ rustyfi --format latex doc.saty   # -> doc.tex
+$ lualatex doc.tex
+```
+
+`--format latex` writes a **complete, compilable `.tex` document** —
+`\documentclass`, a preamble, `\begin{document}` … `\end{document}` — not a
+fragment to paste into one.
+
+It is the same recovery as the other two backends, reading the same
+pre-page-break block stream through the same code. What differs is that the
+target is **another typesetter** rather than a reader or a browser, and LaTeX
+can say most of what SATySFi can. So where HTML and Markdown drop or
+approximate, this mostly does not:
+
+| | markdown | html | latex |
+|---|---|---|---|
+| math | characters, or drawn | drawn `<svg>` | real `$\frac{a+b}{c}$` |
+| drawings | an `<svg>` a sanitizer strips | an `<svg>` | a `tikzpicture` of the same paths |
+| a `\ref` | plain text | `<a href="#…">` | a working `\hyperlink` |
+| a label inside a drawing | flows after it | absolutely positioned | a `\node` at its own point |
+| table rules | none — GFM has one style | per-cell CSS | `|` and `\hline` where drawn |
+| a code block | a fence | a `<pre>` | `fancyvrb`'s `Verbatim` |
+| CMYK colour | — | converted, lossily | `xcolor`'s own `cmyk` |
+
+Layout fidelity is **not** the goal, and cannot be: LaTeX breaks the lines,
+hyphenates and paginates itself. What is carried over is the document's paper
+size — so a `slydifi` deck comes out as landscape slides rather than reflowed
+onto A4 — and its measure, taken from the widest line in the flow.
+
+### Which engine
+
+The generated preamble says, in a comment at the top of the file, and enforces
+it with `iftex` so a wrong engine fails immediately instead of dropping
+glyphs:
+
+- **Nothing above Latin-1** → it compiles under **pdflatex, xelatex and
+  lualatex alike**. The mathematics is written with `amsmath`/`amssymb`
+  command names rather than Unicode characters, and the only
+  engine-conditional line is an `\ifPDFTeX`-guarded `fontenc`.
+- **Any CJK** → **lualatex**, with `luatexja-fontspec` and the Harano Aji
+  faces. pdfLaTeX cannot set CJK at all; XeLaTeX could, through `xeCJK`, but
+  a generated file can only name one and `luatexja` is the one that also gets
+  the JLreq inter-script spacing right.
+- **Anything else above Latin-1** — Greek, Cyrillic, Hebrew, Arabic, an
+  emoji, a bare `≤` in prose — → **xelatex or lualatex**, and pdflatex is
+  refused with a named error rather than left to fail once per character.
+  Note the honest limit here, which the preamble also states: a Unicode
+  engine can ADDRESS those characters, but the default font may not contain
+  them, and TeX reports a missing glyph as one log line and then exits 0. If
+  a character is absent from the PDF, add a `fontspec` main font that covers
+  the script. The backend does not pick one, because picking wrong is worse
+  than saying so.
+
+The preamble declares **only the packages the body turned out to use** —
+`tikz`, `hyperref` and `fvextra` appear only if the document has a drawing, a
+link and a code block respectively — so you can tell from the top of the file
+what is in the rest of it.
+
+### What survives
+
+Headings (`\section*`…`\subparagraph*`, starred because the document typeset
+its own numbering and LaTeX would otherwise add a second), `itemize` and
+`enumerate` with real nesting, `tabular` with the rules the document actually
+drew, `\emph`/`\textbf`, `\texttt`, `\footnote`, `\href`, `\hyperlink`
+cross-references to `\hypertarget` anchors on the headings, `Verbatim` code
+blocks that keep their indentation, and `tikzpicture` figures drawn from the
+same vector paths the PDF writer strokes.
+
+Every character LaTeX reserves — `# $ % & _ { } ~ ^ \`, plus `< > |`, which
+are only correct under a stated font encoding — is escaped. That is not a
+nicety: a bare `%` comments out the rest of the line and the document *still
+compiles*, so `100% of them` would silently lose the other half of its
+sentence.
+
+### What does not
+
+- **Raster images are a sized, dashed placeholder**, labelled `[image n]`. A
+  compile produces one output path, so writing the pictures out as sidecar
+  files would be a contract the CLI does not have and would break the moment
+  the `.tex` is moved; LaTeX has no data-URI equivalent, because
+  `\includegraphics` reads a file and nothing else. The placeholder is the
+  size the image occupied, so the page around it stays honest.
+- **Frames, decorations and alignment** are dropped, as in the other
+  reflowed backends. LaTeX has boxes, but a frame's geometry was computed for
+  a measure this document is not being set at.
+- **Rule thickness and colour** in a table: `\hline` has one width for the
+  whole table and no colour without `colortbl`. Which boundaries are ruled is
+  kept; how heavily is not.
+- **Column alignment** is `l` throughout. A cell records where it was
+  *placed*, not how its column was declared to align, so anything else would
+  be a guess — the same reason the Markdown backend emits no alignment colons.
+- **A drawing bigger than the measure is scaled down** to fit. Not a
+  preference: a `tikzpicture` is one unbreakable box, and LaTeX responds to
+  one taller than `\textheight` by ending the page and trying again, forever.
+
+### Known wrong, as opposed to known absent
+
+Everything above is a deliberate simplification. These are cases where the
+output is silently *wrong* or does not compile, found by an adversarial sweep
+and listed so that a reader comparing the `.tex` to the PDF finds them here
+rather than discovering them:
+
+- a **footnote is numbered twice** under `stdjabook`/`stdjareport` — the note
+  body already opens with the numeral the document typeset, and `\footnote`
+  adds its own (the reference *marker* is already dropped);
+- a **footnote inside a table cell loses its text**, and a **table nested
+  inside a table cell is emitted before its parent** rather than inside it;
+- a **list nested five deep** is `Too deeply nested` — four is LaTeX's own
+  limit for `itemize`/`enumerate`, and it is not raised;
+- **coordinates or a paper size past `\maxdimen`** (about 5.76 m) fail; TikZ
+  evaluates a coordinate before applying the fit scale, so the scaling that
+  saves an oversized drawing does not save these.
+
+Math is `--katex`'s conversion — the same function, so
+[What `--katex` cannot recover](#what---katex-cannot-recover) applies here word
+for word. All four math flags are **refused** with `--format latex` rather than
+ignored: a `.tex` reaches a math typesetter by definition, so it always writes
+the LaTeX `--katex` asks for, and every other rendering would only lose
+structure it can keep.
+
+`--format tex` is accepted as an alias for `latex`.
 
 ## How math is written
 
@@ -832,6 +957,9 @@ crates/
   rustyfi-backend/        boxes and glue, line and page breaking, math
   rustyfi-loader/         @require/@import resolution and load order
   rustyfi-pdf/            PDF writer, font embedding
+  rustyfi-html/           HTML and Markdown output, and the structure
+                          recovery all three reflowed backends share
+  rustyfi-latex/          LaTeX output: a complete, compilable .tex document
   rustyfi-satyrographos/  package manager
   rustyfi/                the binary
 lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)

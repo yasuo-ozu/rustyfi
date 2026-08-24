@@ -1,0 +1,54 @@
+% A document with NO CJK in it, which is what makes it worth having: every
+% other fixture and every corpus document is Japanese, and the `--format
+% latex` preamble takes a different branch when it sees no CJK — no
+% `luatexja`, an `iftex`-guarded `fontenc` instead, and a claim in a comment
+% that the file compiles under pdflatex, xelatex AND lualatex alike.
+% `latex_output.rs` compiles it under all three, so the claim is checked
+% rather than asserted.
+%
+% The prose is chosen for what it forces through the escaper. Every character
+% LaTeX reserves is in it, written with SATySFi's own `\`-escape, and the
+% failure modes are not cosmetic: an unescaped `%` comments out the rest of
+% the line and the file STILL COMPILES, so a document that says "100% of
+% them" would silently lose the other half of its sentence and nothing would
+% report it.
+
+@require: stdja-mini
+@require: math
+@require: annot
+@require: itemize
+
+document (|
+  title = {Escaping, math and structure with no CJK in sight};
+  author = {rustyfi};
+|) '<
+  +p {
+    Reserved characters, all of them: 100\% of the budget, \#3 in the series,
+    a \& b, x_1, \{braces\}, ~tilde, ^caret, and a back\\slash. Also
+    \<angles\> and a \|pipe\|, which are only correct under a stated font
+    encoding.
+  }
+  +p {
+    Mathematics: ${\frac{a + b}{c}}, then ${\sum_{k=1}^{n} k^2}, then
+    ${\alpha + \beta \leq \gamma}.
+  }
+  +p {
+    % Every formula ABOVE is followed by punctuation, which is the one
+    % position where no word space is wanted — so for a long time nothing
+    % here would have noticed the backend dropping the space AFTER an opaque
+    % box. These two are between words on both sides, which is the case that
+    % breaks: `WORDA x WORDB` came out as `WORDA xWORDB`, in the PDF and not
+    % only in the .tex.
+    A formula between two words: WORDA ${x} WORDB, and with a fraction,
+    WORDC ${\frac{a}{b}} WORDD.
+  }
+  +p {
+    A link: \href?*(`https://example.invalid/a%20b#frag`){percent-encoded},
+    whose URL must keep its escaping or take the rest of the line with it.
+  }
+  +listing{
+    * first item
+    * second item
+  }
+  +p { After the list. }
+>

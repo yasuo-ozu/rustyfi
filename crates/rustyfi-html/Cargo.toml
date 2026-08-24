@@ -14,8 +14,14 @@ authors.workspace = true
 [dependencies]
 rustyfi-backend.workspace = true
 # One-way dependency for `TtfFontStore`, of which this crate reads exactly
-# two things: which physical file backs a `FontKey`, and the family name that
-# file declares. `rustyfi-pdf` does not depend back on this crate, so this is
-# not a cycle. See lib.rs's module doc "Location" note.
+# three things: which physical file backs a `FontKey`, the family name that
+# file declares, and the parsed `Face` behind it (`svg::glyph_outline_d`, for
+# the MATH-variant glyphs no character can address). `rustyfi-pdf` does not
+# depend back on this crate, so this is not a cycle. See lib.rs's module doc
+# "Location" note.
 rustyfi-pdf.workspace = true
+# Only to NAME the `Face`/`GlyphId`/`OutlineBuilder` types `TtfFontStore::face`
+# already hands out — no font file is opened by this crate. Already in the
+# build graph via `rustyfi-pdf`, so this costs no extra compilation.
+ttf-parser.workspace = true
 thiserror.workspace = true

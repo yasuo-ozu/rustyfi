@@ -238,12 +238,26 @@ deliberate: they are drawings, not text. Math in particular is flattened to
 positioned glyphs during evaluation, so no MathML structure survives to
 recover.
 
+**Every math glyph is drawn as an outline path**, taken from the face the
+document was typeset in, and math is the one thing in the page that does not
+depend on the reader's fonts at all. It is also the one place where it could
+not: each glyph carries an absolute offset computed against that face's
+metrics, so a reader without it gets a substitute whose advances are wrong and
+the equation runs into itself — `∀` is 7.992pt wide in Latin Modern Math and
+12.000 in a common substitute, which is enough to bury the next symbol. The
+characters are not lost in the process: each equation also carries invisible,
+selectable text at the real positions, so an equation can still be
+selected, copied, found with the browser's own in-page search and read by a
+screen reader. It is what makes the output larger than it would otherwise be —
+about 40% on the most math-heavy document in the corpus, a couple of percent
+on the rest.
+
 Nothing is fetched and nothing is executed — no external stylesheet, no
-script, no remote font. Fonts are **named**, not embedded: a reflowed
-document is not metric-faithful by construction, so pinning the exact face
-would buy nothing and cost megabytes (with the bundled Japanese faces, one
-manual came to 20 MB). The reader gets the real face if they have it and a
-sensible generic if they do not.
+script, no remote font. Fonts are otherwise **named**, not embedded: a
+reflowed document is not metric-faithful by construction, so pinning the exact
+face for ordinary prose would buy nothing and cost megabytes (with the bundled
+Japanese faces, one manual came to 20 MB). The reader gets the real face if
+they have it and a sensible generic if they do not.
 
 `--format html-reflow` is accepted as an alias for `html`.
 

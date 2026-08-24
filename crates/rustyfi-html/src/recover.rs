@@ -21,6 +21,8 @@
 //!   `Frame`) is what every bundled doc class actually emits.
 //! - [`table_rows`] — a `TabularBox` carries no grid, only cells; rows are
 //!   recovered from each cell's `x`.
+//! - [`Borders`] — and no grid LINES either; which boundaries a table
+//!   actually rules is recovered from the shapes in `TabularBox::rules`.
 //! - [`is_monospace`] — the one signal that says a `Line` boundary is the
 //!   AUTHOR's rather than the breaker's (a `+code` block and a wrapped
 //!   paragraph are structurally identical otherwise).
@@ -33,7 +35,8 @@
 use std::collections::HashMap;
 
 use rustyfi_backend::{
-    DecoId, FontKey, OutlineEntry, PureHorzBox, TabularBox, TabularCellBox,
+    graphics_bbox, Color, DecoId, FontKey, GraphicsElem, Length, OutlineEntry, PureHorzBox,
+    TabularBox, TabularCellBox,
 };
 use rustyfi_pdf::TtfFontStore;
 
@@ -251,6 +254,157 @@ pub(crate) fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
         last_x = Some(x);
     }
     rows
+}
+
+/// Which grid lines a table actually draws, recovered from
+/// `TabularBox::rules`.
+///
+/// A stylesheet cannot know this, and neither can a column specification.
+/// `rules` is whatever the document's own rule callback drew, and the
+/// conventions differ completely: `easytable`'s default draws three
+/// horizontal rules and no verticals (the booktabs look), while a
+/// `\easytable` with explicit column separators draws a full grid. Giving
+/// every cell the same border made the first render as the second, and no
+/// table in the corpus looked like its PDF.
+///
+/// The rules are ordinary graphics — thin filled rectangles or strokes — so
+/// each one's bounding box says where it lies, and its position against the
+/// cell origins says which boundary it is. Rules the geometry cannot place
+/// (a diagonal, a decorative flourish) are simply not reproduced; they draw
+/// nothing rather than something wrong.
+pub(crate) struct Borders {
+    /// `horizontal[r]` is the rule ABOVE row `r`; the extra last entry is the
+    /// rule below the final row.
+    pub(crate) horizontal: Vec<Option<Rule>>,
+    /// `vertical[c]` is the rule LEFT of column `c`; the extra last entry is
+    /// the rule right of the final column.
+    pub(crate) vertical: Vec<Option<Rule>>,
+}
+
+/// One recovered grid line: how thick, and in what colour.
+#[derive(Clone, Copy)]
+pub(crate) struct Rule {
+    pub(crate) width: f64,
+    pub(crate) color: Color,
+}
+
+/// A rule thinner than this (pt) is invisible in a browser anyway; a
+/// coordinate closer than this to a boundary counts as being on it.
+pub(crate) const RULE_EPS_PT: f64 = 0.05;
+
+impl Borders {
+    pub(crate) fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
+        let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let mut borders = Borders {
+            horizontal: vec![None; rows.len() + 1],
+            vertical: vec![None; ncols + 1],
+        };
+        // Row baselines DESCEND (`Solved::ys` runs from the table's height
+        // down to 0), so a rule sits above row `r` when its y is above that
+        // row's baseline and below the previous row's.
+        let baselines: Vec<f64> = rows
+            .iter()
+            .map(|row| row.first().map_or(0.0, |c| c.baseline_y.0))
+            .collect();
+        let lefts: Vec<f64> = (0..ncols)
+            .map(|c| {
+                rows.iter()
+                    .filter_map(|row| row.get(c).map(|cell| cell.x.0))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        for elem in rules {
+            collect_rule(elem, &baselines, &lefts, &mut borders);
+        }
+        borders
+    }
+}
+
+/// Every rules-bearing `TabularBox` reachable through a text-only graphics
+/// overlay, as `(width, height, rules)`.
+///
+/// **The phantom table.** `easytable` builds every table TWICE
+/// (`table-builder.satyh`'s `build`): once with the real cell text and no
+/// rules, and once as the same grid of EMPTY cells carrying only the rule
+/// callbacks, drawing both into one `inline-graphics`. In the PDF the second
+/// is invisible — it is nothing but the lines. The two halves are visible
+/// together only at the graphics box that holds them, so a backend that
+/// wants a real table's rules has to collect them HERE and pair them by
+/// size when it reaches the text-bearing twin. Both the HTML and the LaTeX
+/// writer do exactly that, which is why the traversal is shared.
+pub(crate) fn overlaid_table_rules(
+    elems: &[GraphicsElem],
+) -> Vec<(f64, f64, Vec<GraphicsElem>)> {
+    let mut out = Vec::new();
+    walk_tabulars(elems, &mut |tab| {
+        if !tab.rules.is_empty() {
+            out.push((tab.width.0, tab.height.0, tab.rules.clone()));
+        }
+    });
+    out
+}
+
+/// Visit every `Tabular` reachable through a text-only graphics group's
+/// nested boxes.
+fn walk_tabulars(elems: &[GraphicsElem], f: &mut impl FnMut(&TabularBox)) {
+    for elem in elems {
+        match elem {
+            GraphicsElem::Text { contents, .. } => {
+                for (_, bx) in contents {
+                    if let PureHorzBox::Tabular(tab) = bx {
+                        f(tab);
+                    }
+                }
+            }
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => walk_tabulars(inner, f),
+            _ => {}
+        }
+    }
+}
+
+/// Place one rule graphic on the grid, recursing through `Group`/`Clip` so a
+/// united rule set is read the same way a flat one is.
+fn collect_rule(elem: &GraphicsElem, baselines: &[f64], lefts: &[f64], borders: &mut Borders) {
+    let (color, stroke_w) = match elem {
+        GraphicsElem::Fill(c, _) => (*c, None),
+        GraphicsElem::Stroke(w, c, _) | GraphicsElem::DashedStroke(w, _, c, _) => (*c, Some(w.0)),
+        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+            for e in inner {
+                collect_rule(e, baselines, lefts, borders);
+            }
+            return;
+        }
+        _ => return,
+    };
+    let Some((lo, hi)) = graphics_bbox(elem) else {
+        return;
+    };
+    let (Length(x0), Length(y0)) = lo;
+    let (Length(x1), Length(y1)) = hi;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if w >= h {
+        // Horizontal: above row `r` = the number of rows whose baseline is
+        // above this rule's own centre line.
+        let y = (y0 + y1) / 2.0;
+        let above = baselines.iter().filter(|b| **b > y + RULE_EPS_PT).count();
+        let rule = Rule {
+            width: stroke_w.unwrap_or(h).max(RULE_EPS_PT),
+            color,
+        };
+        if let Some(slot) = borders.horizontal.get_mut(above) {
+            *slot = Some(rule);
+        }
+    } else {
+        let x = (x0 + x1) / 2.0;
+        let left_of = lefts.iter().filter(|l| **l < x - RULE_EPS_PT).count();
+        let rule = Rule {
+            width: stroke_w.unwrap_or(w).max(RULE_EPS_PT),
+            color,
+        };
+        if let Some(slot) = borders.vertical.get_mut(left_of) {
+            *slot = Some(rule);
+        }
+    }
 }
 
 #[cfg(test)]

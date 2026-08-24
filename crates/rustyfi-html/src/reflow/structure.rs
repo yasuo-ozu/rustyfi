@@ -65,10 +65,11 @@ use std::fmt::Write as _;
 
 use rustyfi_backend::{
     graphics_bbox, path_bbox, Color, DecoId, FrameDecoration, GraphicsElem, Length, OutlineEntry,
-    PathSeg, PureHorzBox, TabularBox, TabularCellBox,
+    PathSeg, PureHorzBox, TabularBox,
 };
 
 use super::Ctx;
+use crate::recover::{Borders, Rule, RULE_EPS_PT};
 
 /// `dest_name -> level` from `extras.outline` (`register-outline`'s already
 /// `Interp::dest_name`-resolved entries) — the lookup table
@@ -108,9 +109,9 @@ pub(crate) fn find_heading_level(bx: &PureHorzBox, ctx: &Ctx) -> Option<i64> {
 ///
 /// Row grouping is [`crate::recover::table_rows`] — recovered from
 /// `TabularCellBox::x` alone, shared with the Markdown backend, and
-/// documented there. What is NOT shared is everything below it: which grid
-/// lines the table draws ([`Borders`]) is a question only a bordered
-/// rendering asks.
+/// documented there; so is which grid lines the table draws ([`Borders`]),
+/// which the LaTeX backend needs for exactly the same reason a bordered
+/// rendering does.
 pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str, ctx: &Ctx) {
     if tab.cells.is_empty() {
         return;
@@ -165,68 +166,7 @@ pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str
     }
 }
 
-/// Which grid lines a table actually draws, recovered from
-/// `TabularBox::rules`.
-///
-/// A stylesheet cannot know this. `rules` is whatever the document's own rule
-/// callback drew, and the conventions differ completely: `easytable`'s
-/// default draws three horizontal rules and no verticals (the booktabs look),
-/// while a `\easytable` with explicit column separators draws a full grid.
-/// Giving every cell the same border made the first render as the second, and
-/// no table in the corpus looked like its PDF.
-///
-/// The rules are ordinary graphics — thin filled rectangles or strokes — so
-/// each one's bounding box says where it lies, and its position against the
-/// cell origins says which boundary it is. Rules the geometry cannot place
-/// (a diagonal, a decorative flourish) are simply not reproduced; they draw
-/// nothing rather than something wrong.
-struct Borders {
-    /// `horizontal[r]` is the rule ABOVE row `r`; the extra last entry is the
-    /// rule below the final row.
-    horizontal: Vec<Option<Rule>>,
-    /// `vertical[c]` is the rule LEFT of column `c`; the extra last entry is
-    /// the rule right of the final column.
-    vertical: Vec<Option<Rule>>,
-}
-
-/// One recovered grid line: how thick, and in what colour.
-#[derive(Clone, Copy)]
-struct Rule {
-    width: f64,
-    color: Color,
-}
-
-/// A rule thinner than this (pt) is invisible in a browser anyway; a
-/// coordinate closer than this to a boundary counts as being on it.
-const RULE_EPS_PT: f64 = 0.05;
-
-impl Borders {
-    fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
-        let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
-        let mut borders = Borders {
-            horizontal: vec![None; rows.len() + 1],
-            vertical: vec![None; ncols + 1],
-        };
-        // Row baselines DESCEND (`Solved::ys` runs from the table's height
-        // down to 0), so a rule sits above row `r` when its y is above that
-        // row's baseline and below the previous row's.
-        let baselines: Vec<f64> = rows
-            .iter()
-            .map(|row| row.first().map_or(0.0, |c| c.baseline_y.0))
-            .collect();
-        let lefts: Vec<f64> = (0..ncols)
-            .map(|c| {
-                rows.iter()
-                    .filter_map(|row| row.get(c).map(|cell| cell.x.0))
-                    .fold(f64::INFINITY, f64::min)
-            })
-            .collect();
-        for elem in rules {
-            collect_rule(elem, &baselines, &lefts, &mut borders);
-        }
-        borders
-    }
-
+impl crate::recover::Borders {
     /// The ` style="…"` fragment for the cell at `(r, c)`, or the empty
     /// string when no rule touches it. Each cell states only its own top and
     /// left edge, plus the bottom/right of the last row/column — with
@@ -255,56 +195,6 @@ impl Borders {
             String::new()
         } else {
             format!(" style=\"{decls}\"")
-        }
-    }
-}
-
-/// Place one rule graphic on the grid, recursing through `Group`/`Clip` so a
-/// united rule set is read the same way a flat one is.
-fn collect_rule(
-    elem: &GraphicsElem,
-    baselines: &[f64],
-    lefts: &[f64],
-    borders: &mut Borders,
-) {
-    let (color, stroke_w) = match elem {
-        GraphicsElem::Fill(c, _) => (*c, None),
-        GraphicsElem::Stroke(w, c, _) | GraphicsElem::DashedStroke(w, _, c, _) => (*c, Some(w.0)),
-        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
-            for e in inner {
-                collect_rule(e, baselines, lefts, borders);
-            }
-            return;
-        }
-        _ => return,
-    };
-    let Some((lo, hi)) = graphics_bbox(elem) else {
-        return;
-    };
-    let (Length(x0), Length(y0)) = lo;
-    let (Length(x1), Length(y1)) = hi;
-    let (w, h) = (x1 - x0, y1 - y0);
-    if w >= h {
-        // Horizontal: above row `r` = the number of rows whose baseline is
-        // above this rule's own centre line.
-        let y = (y0 + y1) / 2.0;
-        let above = baselines.iter().filter(|b| **b > y + RULE_EPS_PT).count();
-        let rule = Rule {
-            width: stroke_w.unwrap_or(h).max(RULE_EPS_PT),
-            color,
-        };
-        if let Some(slot) = borders.horizontal.get_mut(above) {
-            *slot = Some(rule);
-        }
-    } else {
-        let x = (x0 + x1) / 2.0;
-        let left_of = lefts.iter().filter(|l| **l < x - RULE_EPS_PT).count();
-        let rule = Rule {
-            width: stroke_w.unwrap_or(w).max(RULE_EPS_PT),
-            color,
-        };
-        if let Some(slot) = borders.vertical.get_mut(left_of) {
-            *slot = Some(rule);
         }
     }
 }

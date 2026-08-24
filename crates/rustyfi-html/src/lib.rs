@@ -1,19 +1,34 @@
-//! HTML and Markdown output: two serializations of one recovered document.
+//! HTML, Markdown and LaTeX output: three serializations of one recovered
+//! document.
 //!
 //! `--format html` ([`reflow`]) is one continuous, self-contained, semantic
 //! web document. `--format markdown` ([`markdown`]) is a SUBSET of it —
 //! the same document structure, written in a smaller vocabulary.
+//! `--format latex` ([`latexdoc`]) is the same structure again, handed to
+//! another typesetter: real `\frac`s, real `tikzpicture`s and real
+//! cross-references, because LaTeX can say most of what SATySFi can.
 //!
-//! **The recovery itself is shared** ([`recover`]): which paragraph is a
-//! heading, where the lists and their nesting are, how a table's rows are
-//! regrouped out of a flat cell list, when a glue box is a space and when it
-//! would ruin a Japanese sentence, and whose hyphen sits at the end of a
-//! line. Every one of those was got wrong at least once before it was got
-//! right, so there is one implementation and two callers. What each backend
-//! decides for itself is only what to WRITE.
+//! **The recovery itself is shared** ([`recover`], and [`mathrec`] for the
+//! inside of a formula): which paragraph is a heading, where the lists and
+//! their nesting are, how a table's rows are regrouped out of a flat cell
+//! list, which of its grid lines it actually draws, when a glue box is a
+//! space and when it would ruin a Japanese sentence, and whose hyphen sits at
+//! the end of a line. Every one of those was got wrong at least once before
+//! it was got right, so there is one implementation and three callers. What
+//! each backend decides for itself is only what to WRITE.
 //!
 //! This root module holds what all of them share: the crate's error type,
 //! HTML escaping, and the `base64`/`fonts`/`image`/`svg` helper modules.
+//!
+//! **The crate is misnamed and that is deliberate.** It was the HTML backend;
+//! it is now the structure-recovery backend, and the alternative — one crate
+//! per output format — would fork [`recover`] three ways, which is the one
+//! thing this arrangement exists to prevent.
+//!
+//! [`latex`] is the math-run writer the LaTeX BACKEND and `--katex` share;
+//! [`latexdoc`] is the whole-document backend. The two names are that way
+//! round because the first is reached from all three backends and the second
+//! is one leaf.
 //!
 //! The document is built from the flat block stream as it stood BEFORE page
 //! breaking (`DocumentValue::reflow_source` in `rustyfi-lang`), so there are
@@ -36,6 +51,7 @@ mod base64;
 mod fonts;
 mod image;
 mod latex;
+mod latexdoc;
 mod markdown;
 mod mathrec;
 mod mathsvg;
@@ -43,6 +59,7 @@ mod recover;
 mod reflow;
 mod svg;
 
+pub use latexdoc::{render_latex, render_latex_ttf_with};
 pub use markdown::{render_markdown, render_markdown_ttf_with};
 pub use reflow::{
     render_html_reflow, render_html_reflow_ttf_with, render_html_reflow_ttf_with_decos,

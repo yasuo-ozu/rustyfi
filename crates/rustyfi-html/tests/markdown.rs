@@ -659,6 +659,70 @@ fn katex_writes_latex_in_dollar_delimiters() {
     assert!(!md.contains("$$"), "inline math must not be displayed: {md}");
 }
 
+/// Two equations side by side must not run their delimiters together.
+///
+/// One construction routinely produces several math boxes in a row —
+/// `latexcmds`' Schrödinger equation is five — and written flush, the closing
+/// `$` of one and the opening `$` of the next form a literal `$$` that every
+/// renderer understanding display math reads as the start of one. Measured on
+/// that document: `$h$$\frac{1}{2m}…` swallowed the rest of the formula into a
+/// display block that never closed.
+#[test]
+fn two_adjacent_equations_do_not_run_their_delimiters_together() {
+    let one_math = |ch: &str, dx: f64| PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![math_glyph(ch, dx, 0.0, 10.0)],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        // Two math boxes with nothing between them, plus a text run so the
+        // paragraph is not display math.
+        &[line_of(vec![
+            text_run("x"),
+            one_math("a", 0.0),
+            one_math("b", 0.0),
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert!(md.contains("$a$"), "{md}");
+    assert!(md.contains("$b$"), "{md}");
+    assert!(
+        !md.contains("$$"),
+        "adjacent inline equations formed a display delimiter:\n{md}"
+    );
+}
+
+/// A formula is not one box. `latexcmds`' Schrödinger equation reaches this
+/// backend as FOUR, because each `\underset`-style construction splits the
+/// run — and they are pieces of one DISPLAYED equation, so they belong in one
+/// `$$…$$`. Four separate display blocks would be four centred lines where the
+/// document has one; four inline `$…$` would set a displayed equation in the
+/// middle of a paragraph.
+#[test]
+fn a_paragraph_of_nothing_but_equations_is_one_display_block() {
+    let one_math = |ch: &str| PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![math_glyph(ch, 0.0, 0.0, 10.0)],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        &[line_of(vec![
+            PureHorzBox::OuterFil,
+            one_math("a"),
+            one_math("b"),
+            one_math("c"),
+            PureHorzBox::OuterFil,
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert_eq!(md.trim(), "$$a b c$$", "{md}");
+    assert_eq!(md.matches("$$").count(), 2, "one block, not three:\n{md}");
+}
+
 // ---------------------------------------------------------------------------
 // Escaping
 // ---------------------------------------------------------------------------

@@ -85,7 +85,7 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
                 // is one this module recognised as such, even though the
                 // GEOMETRY says "centred" for any centred pair.
                 let forced = limits && is_big_operator(&base);
-                out.push_str(&base);
+                push_prose_merged(&mut out, &base);
                 if forced {
                     out.push_str("\\limits");
                 }
@@ -145,7 +145,7 @@ fn take_scripts(atoms: &[Atom<'_>], mut i: usize) -> (String, String, bool, usiz
                 seen = true;
                 limits |= *limit;
                 let side = if *up { &mut sups } else { &mut subs };
-                side.push_str(&glyph_latex(g));
+                push_tok(side, &glyph_latex(g));
                 i += 1;
             }
             // A space is absorbed whenever a further script follows it —
@@ -286,14 +286,169 @@ fn is_big_operator(base: &str) -> bool {
 /// One glyph record's characters as LaTeX.
 ///
 /// A record is not always one character — `math_boxes_of_inline_boxes` folds a
-/// whole `text-in-math` run into one — so this maps character by character and
-/// concatenates.
+/// whole `text-in-math` run into one — so a record is first classified as
+/// PROSE or as mathematics, and only the latter is mapped character by
+/// character.
+///
+/// See [`is_prose_run`] for the classification; it is what lets `\text{…}`
+/// come back at all, and what keeps a Japanese annotation inside an equation
+/// out of math mode, where KaTeX warns about every character of it and sets
+/// them all in italics with no inter-word spacing.
 fn glyph_latex(g: &MathGlyph) -> String {
+    if is_prose_run(&g.text) {
+        return format!("\\text{{{}}}", text_escape(&g.text));
+    }
     let mut out = String::new();
     for c in g.text.chars() {
-        out.push_str(&char_latex(c));
+        push_tok(&mut out, &char_latex(c));
     }
     out
+}
+
+/// Is this record ordinary PROSE that happened to be set inside an equation,
+/// rather than mathematics?
+///
+/// Two signals, both structural rather than statistical:
+///
+/// - **it holds a space.** `math_boxes_of_inline_boxes` folds a whole
+///   `text-in-math` `InnerString` into ONE glyph record, so `\text{if and only
+///   if}` arrives as a single sixteen-character record — and nothing in
+///   mathematics puts a space inside one atom. (The spaces BETWEEN records are
+///   a different thing entirely and are gone by then; see
+///   [`latex_spaces_itself`].)
+/// - **it holds a character with no reading as mathematics** — a CJK
+///   ideograph, kana, an accented Latin letter. Those reach an equation only
+///   through `text-in-math`, and they arrive one record per character, which
+///   is why the space test alone does not catch them.
+///
+/// A multi-character record that is neither — a run of digits, say — stays
+/// mathematics, so `x^{12}` is not quietly turned into `x^{\text{12}}`.
+fn is_prose_run(text: &str) -> bool {
+    text.contains(' ') || text.chars().any(needs_text_mode)
+}
+
+/// A character that has no reading in math mode at all.
+///
+/// Everything with a name in [`symbol_command`], everything Unicode encodes as
+/// a styled mathematical letter, the Greek block and plain ASCII are
+/// mathematics. What is left is prose: CJK, kana, Hangul, accented Latin,
+/// anything a document set with `text-in-math` — for which KaTeX emits a
+/// `unicodeTextInMathMode` warning and renders in an italic math face with the
+/// inter-atom spacing of a variable, which is not what the PDF shows.
+fn needs_text_mode(c: char) -> bool {
+    if c.is_ascii() {
+        return false;
+    }
+    let base = rustyfi_backend::math_alphanumeric_base(c);
+    if base.is_some() || symbol_command(c).is_some() {
+        return false;
+    }
+    // Greek and Coptic — the letters a formula names directly rather than
+    // through a `\alpha`-style command.
+    !matches!(c as u32, 0x370..=0x3FF)
+}
+
+/// The contents of a `\text{…}` group.
+///
+/// A different escape from [`escape`]: inside `\text` the characters are
+/// ordinary text, so `-` and `^` are themselves and only LaTeX's own ten
+/// reserved characters need spelling out. `\textbackslash` rather than
+/// `\backslash`, which is a math-mode command.
+fn text_escape(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\textbackslash{}"),
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '$' => out.push_str("\\$"),
+            '&' => out.push_str("\\&"),
+            '#' => out.push_str("\\#"),
+            '%' => out.push_str("\\%"),
+            '_' => out.push_str("\\_"),
+            '^' => out.push_str("\\textasciicircum{}"),
+            '~' => out.push_str("\\textasciitilde{}"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// [`push_tok`], plus: fold this `\text{…}` group into the one immediately
+/// before it, when both are.
+///
+/// A Japanese annotation inside an equation arrives one record per character
+/// (`text-in-math` folds a Latin run into one record, but the box stream
+/// splits CJK per character long before that), so `\underset{\text!{運動エネ
+/// ルギーを表す}}` would otherwise come out as ten separate `\text{}` groups —
+/// 60 bytes of markup around 30 of content, in a format whose whole claim is
+/// that the raw file is legible. It renders identically either way; this is
+/// about what the file looks like.
+///
+/// Structural rather than a `"}\\text{"` string replacement, which would also
+/// splice `\frac{a}{b}\text{x}` into `\frac{a}{bx}` — a different equation.
+/// The merge fires only when the token just written was itself a whole
+/// `\text{…}` group, which is a fact this function has and a regex does not.
+fn push_prose_merged(out: &mut String, tok: &str) {
+    const OPEN: &str = "\\text{";
+    let both_prose = tok.starts_with(OPEN)
+        && tok.ends_with('}')
+        && out.ends_with('}')
+        && last_group_is_text(out);
+    if both_prose {
+        out.pop();
+        out.push_str(&tok[OPEN.len()..]);
+        return;
+    }
+    push_tok(out, tok);
+}
+
+/// Does `out` end with a complete, unnested `\text{…}` group?
+///
+/// Unnested is the whole test: `\text` groups this module writes never contain
+/// a brace of their own ([`text_escape`] spells `{` as `\{`), so the group
+/// runs from the LAST `\text{` to the end and is a match exactly when no `{`
+/// or `}` occurs inside it.
+fn last_group_is_text(out: &str) -> bool {
+    let Some(at) = out.rfind("\\text{") else {
+        return false;
+    };
+    let inner = &out[at + "\\text{".len()..out.len() - 1];
+    !inner.contains('{') && !inner.contains('}')
+}
+
+/// Append `tok`, inserting the space that keeps a control word from swallowing
+/// what follows it.
+///
+/// **The bug this exists to prevent, measured on `latexcmds`' manual.** A
+/// LaTeX control word runs to the first non-letter, so
+/// `\partial` + `t` concatenates to `\partialt` — an undefined command, which
+/// KaTeX renders as a red error and LaTeX refuses outright. The Schrödinger
+/// equation in that manual produced `\frac{\partial}{\partialt}` and
+/// `\partialx_{2}`; both are one space away from correct and neither is
+/// visible in the source without knowing the rule.
+///
+/// Every concatenation in this module goes through here, rather than the
+/// obvious "put a space after each command", because a trailing space after
+/// every symbol would double the size of a dense formula and put a stray space
+/// before `_`, `^` and `}` — all of which are ordinary characters to the token
+/// scanner but not to a reader diffing the output.
+fn push_tok(out: &mut String, tok: &str) {
+    if ends_in_control_word(out) && tok.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        out.push(' ');
+    }
+    out.push_str(tok);
+}
+
+/// Does `s` end inside a `\command` name — i.e. would one more letter extend
+/// it rather than follow it?
+fn ends_in_control_word(s: &str) -> bool {
+    let letters = s
+        .bytes()
+        .rev()
+        .take_while(u8::is_ascii_alphabetic)
+        .count();
+    letters > 0 && s.len() > letters && s.as_bytes()[s.len() - letters - 1] == b'\\'
 }
 
 /// One character as LaTeX: its style wrapper (when Unicode encoded one), then
@@ -731,6 +886,93 @@ mod tests {
             glyph("and", 12.0, 0.0, 10.0),
         ]);
         assert_eq!(words, "if\\ and");
+    }
+
+    /// A control word runs to the first non-letter, so a command followed by a
+    /// variable name concatenates into an undefined command. Found in
+    /// `latexcmds`' Schrödinger equation, which produced `\partialt`.
+    #[test]
+    fn a_command_followed_by_a_letter_gets_the_space_it_needs() {
+        let out = latex(&[
+            glyph("\u{2202}", 0.0, 0.0, 10.0),
+            glyph("t", 5.0, 0.0, 10.0),
+        ]);
+        assert_eq!(out, "\\partial t");
+        // …and only where it is needed: a command before a non-letter, or two
+        // commands in a row, must not grow a space that changes nothing but
+        // the size of the output.
+        assert_eq!(
+            latex(&[
+                glyph("\u{3B1}", 0.0, 0.0, 10.0),
+                glyph("\u{3B2}", 5.0, 0.0, 10.0),
+            ]),
+            "\\alpha\\beta"
+        );
+        assert_eq!(
+            latex(&[glyph("x", 0.0, 0.0, 10.0), glyph("t", 5.0, 0.0, 10.0)]),
+            "xt"
+        );
+        // The space must reach inside a script group too, which is built
+        // separately from the base line.
+        let scripted = latex(&[
+            glyph("x", 0.0, 0.0, 10.0),
+            glyph("\u{2202}", 5.0, 4.0, 7.0),
+            glyph("t", 8.0, 4.0, 7.0),
+        ]);
+        assert_eq!(scripted, "x^{\\partial t}");
+    }
+
+    /// Prose that was set inside an equation comes back as `\text{…}`, not as
+    /// a row of italic math atoms. Two signals reach it, and both are
+    /// exercised: a folded `text-in-math` run holds a space, and a CJK
+    /// annotation arrives one character per record and holds none.
+    #[test]
+    fn prose_inside_an_equation_comes_back_as_text() {
+        // `math_boxes_of_inline_boxes` folds a whole run into one record.
+        assert_eq!(
+            latex(&[glyph("if and only if", 0.0, 0.0, 10.0)]),
+            "\\text{if and only if}"
+        );
+        // One CJK character per record — the shape `latexcmds`' own
+        // `\underset{\text!{運動エネルギーを表す}}` actually produces.
+        assert_eq!(
+            latex(&[glyph("\u{904B}", 0.0, 0.0, 10.0)]),
+            "\\text{\u{904B}}"
+        );
+        // A multi-character record that is NOT prose stays mathematics, or
+        // `x^{12}` would quietly become `x^{\text{12}}`.
+        assert_eq!(latex(&[glyph("12", 0.0, 0.0, 10.0)]), "12");
+        // A reserved character inside a text group takes the text-mode
+        // spelling, not the math-mode one.
+        assert_eq!(
+            latex(&[glyph("a & b", 0.0, 0.0, 10.0)]),
+            "\\text{a \\& b}"
+        );
+    }
+
+    /// Consecutive prose records fold into ONE `\text{}`. CJK reaches an
+    /// equation one character per record, so without this a ten-character
+    /// annotation is ten groups and 60 bytes of markup around 30 of content.
+    #[test]
+    fn adjacent_prose_records_merge_into_one_text_group() {
+        let out = latex(&[
+            glyph("\u{904B}", 0.0, 0.0, 10.0),
+            glyph("\u{52D5}", 5.0, 0.0, 10.0),
+            glyph("\u{91CF}", 10.0, 0.0, 10.0),
+        ]);
+        assert_eq!(out, "\\text{\u{904B}\u{52D5}\u{91CF}}");
+
+        // …but a `}` that closes something else must NOT be reopened: a
+        // string-level `"}\\text{"` replacement would splice this fraction's
+        // denominator into the annotation and silently change the equation.
+        let after_frac = latex(&[
+            glyph("x", 0.0, 0.0, 10.0),
+            glyph("\u{904B}", 5.0, 0.0, 10.0),
+        ]);
+        assert_eq!(after_frac, "x\\text{\u{904B}}");
+        assert!(last_group_is_text("a\\text{b}"));
+        assert!(!last_group_is_text("\\frac{a}{b}"));
+        assert!(!last_group_is_text("\\text{a}x"));
     }
 
     /// `layout_math_list` sets an integral's scripts at the DISPLAY variant's

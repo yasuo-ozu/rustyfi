@@ -294,22 +294,43 @@ impl Para {
     /// Everything without ink is ignored: the `inline-fil`s that centre the
     /// equation, the glue around it, the line boundary, and an emphasis or
     /// link wrapper that contributes no characters of its own.
-    fn sole_math(&self) -> bool {
-        let mut maths = 0usize;
+    ///
+    /// **Several math pieces still count as one displayed equation**, and that
+    /// is the case worth explaining. A formula is not one box: `latexcmds`'
+    /// Schrödinger equation reaches this backend as FOUR, because each
+    /// `\underset`-style construction splits the run. They are pieces of one
+    /// equation, so they are written into one `$$…$$` rather than four — four
+    /// separate display blocks would be four centred lines where the document
+    /// has one, and four inline `$…$` would leave a displayed equation set in
+    /// the middle of a paragraph.
+    ///
+    /// Returns the pieces' LaTeX in order, or `None` when the paragraph holds
+    /// anything else. A LINK anywhere declines: its brackets have to be
+    /// written around the content, and a display block cannot be a link's
+    /// text.
+    fn display_math(&self) -> Option<Vec<&str>> {
+        let mut maths = Vec::new();
         for piece in &self.pieces {
             match piece {
-                Piece::Math { .. } => maths += 1,
-                Piece::Text { s, .. } if !s.trim().is_empty() => return false,
-                Piece::Markup { md, .. } if !md.trim().is_empty() => return false,
+                Piece::Math { latex, .. } => maths.push(latex.as_str()),
+                Piece::Text { s, .. } if !s.trim().is_empty() => return None,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return None,
+                Piece::LinkOpen(_) => return None,
                 _ => {}
             }
         }
-        maths == 1
+        (!maths.is_empty()).then_some(maths)
     }
 
     /// The paragraph as one flowing line of prose.
     fn render_prose(&self) -> String {
-        let display_math = self.sole_math();
+        // A paragraph that is nothing but equations was a DISPLAYED one — see
+        // [`Para::display_math`]. Written whole and returned here, before the
+        // inline walk, because the pieces join into a single `$$…$$` rather
+        // than each getting delimiters of its own.
+        if let Some(maths) = self.display_math() {
+            return format!("$${}$$", maths.join(" "));
+        }
         let mut out = String::new();
         // An emphasis delimiter waiting for the first non-space character, so
         // it never ends up leaning against a space.
@@ -356,13 +377,22 @@ impl Para {
                 // `\(…\)`/`\[…\]` instead, because KaTeX's `auto-render` and
                 // MathJax enable those by default and `$…$` by configuration;
                 // `crate::latex`'s module comment has the argument.)
+                // Inline by construction: a paragraph whose only ink is
+                // equations returned above, so reaching here means there is
+                // prose beside this one.
                 Piece::Math { latex, .. } => {
-                    let delim = if display_math { "$$" } else { "$" };
-                    push_markup(
-                        &mut out,
-                        &mut pending_open,
-                        &format!("{delim}{latex}{delim}"),
-                    );
+                    // Two equations may sit side by side with nothing between
+                    // them — one construction routinely produces several math
+                    // boxes in a row, and `latexcmds`' Schrödinger equation is
+                    // five. Written flush, the closing `$` of one and the
+                    // opening `$` of the next form a literal `$$`, which every
+                    // renderer that understands display math reads as one.
+                    // Measured: `$h$$\frac{1}{2m}…` swallowed the whole
+                    // formula into a display block that never closed.
+                    if out.ends_with('$') {
+                        out.push(' ');
+                    }
+                    push_markup(&mut out, &mut pending_open, &format!("${latex}$"));
                 }
                 Piece::EmphOpen(delim) => {
                     // Two delimiters in a row would open and immediately

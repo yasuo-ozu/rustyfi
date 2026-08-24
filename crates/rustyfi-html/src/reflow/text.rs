@@ -102,7 +102,7 @@ pub(crate) const MATH_TEX_OPEN: &str = "<span class=\"math-tex\">\\(";
 /// The closing half of [`MATH_TEX_OPEN`].
 pub(crate) const MATH_TEX_CLOSE: &str = "\\)</span>";
 
-/// The LaTeX of a flushed paragraph that holds ONE `--katex` equation and
+/// The LaTeX of a flushed paragraph that holds `--katex` equations and
 /// nothing else — i.e. an equation that was DISPLAYED — or `None`.
 ///
 /// **Why this reads the buffer back instead of being decided where the box
@@ -127,15 +127,29 @@ pub(crate) const MATH_TEX_CLOSE: &str = "\\)</span>";
 /// the operator and shrinks the operator itself; in display style it sets
 /// them above and below at full size. Getting it wrong turns every displayed
 /// equation in a document into a cramped inline one.
-pub(crate) fn sole_math_tex(html: &str) -> Option<&str> {
-    let trimmed = html.trim();
-    let inner = trimmed
-        .strip_prefix(MATH_TEX_OPEN)?
-        .strip_suffix(MATH_TEX_CLOSE)?;
-    // A second span anywhere inside means the paragraph held more than this
-    // one equation — the `strip_prefix`/`strip_suffix` pair alone would also
-    // accept `<span class="math-tex">\(a\)</span> text <span …>\(b\)</span>`.
-    (!inner.contains('<')).then_some(inner)
+///
+/// **Several spans still make ONE displayed equation.** A formula is not one
+/// box: `latexcmds`' Schrödinger equation reaches this backend as four,
+/// because each `\underset`-style construction splits the run. They are pieces
+/// of one equation, so their bodies are joined into a single `\[…\]` — four
+/// separate display blocks would be four centred lines where the document has
+/// one.
+pub(crate) fn sole_math_tex(html: &str) -> Option<String> {
+    let mut rest = html.trim();
+    let mut parts: Vec<&str> = Vec::new();
+    while !rest.is_empty() {
+        let after_open = rest.strip_prefix(MATH_TEX_OPEN)?;
+        let end = after_open.find(MATH_TEX_CLOSE)?;
+        let inner = &after_open[..end];
+        // The body is `escape_html`'d LaTeX, so it can hold no element of its
+        // own; a `<` here means the shape is not what it looks like.
+        if inner.contains('<') {
+            return None;
+        }
+        parts.push(inner);
+        rest = after_open[end + MATH_TEX_CLOSE.len()..].trim_start();
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// The document's body text style: the `(font, size)` pair the most

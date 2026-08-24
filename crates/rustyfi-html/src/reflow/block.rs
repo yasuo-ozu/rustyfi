@@ -467,8 +467,8 @@ fn flush_para(
                 // it is where the two can be told apart; see
                 // `text::sole_math_tex`.
                 None if super::text::sole_math_tex(trimmed).is_some() => {
-                    let latex = super::text::sole_math_tex(trimmed)
-                        .expect("just matched");
+                    let latex =
+                        super::text::sole_math_tex(trimmed).expect("just matched");
                     let style = style_attr(&[&margin]);
                     let _ = write!(
                         out,

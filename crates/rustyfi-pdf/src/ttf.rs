@@ -183,8 +183,8 @@ impl TtfFontStore {
     /// same file are embedded (and their Type0 font object shared) once.
     ///
     /// `pub` rather than `pub(crate)` because `rustyfi-html` needs it too, to
-    /// key its `@font-face` set by physical file the same way — a one-way
-    /// dependency, since `rustyfi-pdf` does not depend back on it.
+    /// key a run's CSS `font-family` stack by physical file the same way — a
+    /// one-way dependency, since `rustyfi-pdf` does not depend back on it.
     pub fn file_index(&self, font: FontKey) -> usize {
         self.slots[self.key_slot(font)]
     }
@@ -218,7 +218,7 @@ impl TtfFontStore {
     /// than embedding them: a reflowed document is explicitly not
     /// metric-faithful, so paying several megabytes of base64 to pin the
     /// exact face would buy nothing it wants and cost the reader everything
-    /// (`fonts::reflow_font_stack`). The faithful backend still embeds.
+    /// (`fonts::reflow_font_stack`).
     pub fn file_family_name(&self, file_index: usize) -> Option<String> {
         let face = Face::parse(self.files.get(file_index)?, 0).ok()?;
         face.names()

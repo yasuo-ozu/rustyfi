@@ -1,6 +1,6 @@
 [package]
 name = "rustyfi-html"
-description = "HTML output backend for SATySFi: a reflowable web document, or a layout-faithful serialization of the PDF box/page model"
+description = "HTML output backend for SATySFi: a reflowable, semantic web document"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,8 +13,9 @@ authors.workspace = true
 
 [dependencies]
 rustyfi-backend.workspace = true
-# One-way dependency for `TtfFontStore` (font metrics + physical file bytes
-# for `@font-face` embedding) — `rustyfi-pdf` does not depend back on this
-# crate, so this is not a cycle. See lib.rs's module doc "Location" note.
+# One-way dependency for `TtfFontStore`, of which this crate reads exactly
+# two things: which physical file backs a `FontKey`, and the family name that
+# file declares. `rustyfi-pdf` does not depend back on this crate, so this is
+# not a cycle. See lib.rs's module doc "Location" note.
 rustyfi-pdf.workspace = true
 thiserror.workspace = true

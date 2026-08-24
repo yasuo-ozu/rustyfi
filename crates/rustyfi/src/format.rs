@@ -8,22 +8,12 @@
 /// `--format` keeps every existing invocation's behavior byte-identical to
 /// before this flag existed.
 ///
-/// ## Which HTML `--format html` means
+/// ## What `--format html` means
 ///
 /// `Html` is the REFLOWABLE backend (`rustyfi_html::render_html_reflow`): one
 /// continuous document, real `<p>`s the browser re-breaks and justifies,
 /// headings, lists, links, footnotes in the flow. That is what someone asking
-/// a typesetter for HTML wants, and it is the only one of the two whose
-/// output is worth reading in a browser.
-///
-/// `HtmlFixed` (`--format html-fixed`,
-/// `rustyfi_html::render_html_fixed`) is the layout-faithful serialization of
-/// exactly the placed boxes the PDF writer consumes — one `.page` div per
-/// page, every glyph run at its own `position:absolute`. It is kept, under a
-/// name that says what it is, for the one job it is genuinely good at:
-/// diffing this port's layout against the PDF in a browser, where you can
-/// inspect a run's coordinates instead of eyeballing two renderings. It is
-/// not a web page and was never meant to be read as one.
+/// a typesetter for HTML wants.
 ///
 /// `--format html-reflow` still parses, as an alias of `html`, so any
 /// existing script keeps working.
@@ -33,9 +23,6 @@ pub enum OutputFormat {
     Pdf,
     /// Reflowable, semantic HTML — see this type's doc comment.
     Html,
-    /// Layout-faithful, absolutely-positioned HTML — see this type's doc
-    /// comment.
-    HtmlFixed,
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -43,26 +30,21 @@ impl std::str::FromStr for OutputFormat {
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "pdf" => Ok(OutputFormat::Pdf),
-            // `html-reflow` was the name while the faithful backend held
-            // `html`; kept as an alias so the rename breaks nobody.
+            // `html-reflow` was the name while a second, layout-faithful
+            // backend held `html`; that backend is gone, but the alias is
+            // kept so the rename breaks nobody.
             "html" | "html-reflow" => Ok(OutputFormat::Html),
-            "html-fixed" => Ok(OutputFormat::HtmlFixed),
-            other => Err(format!(
-                "unknown --format {other:?} (expected pdf|html|html-fixed)"
-            )),
+            other => Err(format!("unknown --format {other:?} (expected pdf|html)")),
         }
     }
 }
 
 impl OutputFormat {
-    /// Derives `-o`'s default when omitted. `HtmlFixed` shares this same
-    /// `.html` extension; `cache_tag` below, not the extension, is what
-    /// keeps its cache entries from colliding with reflowed HTML's.
+    /// Derives `-o`'s default when omitted.
     pub fn extension(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html => "html",
-            OutputFormat::HtmlFixed => "html",
         }
     }
 
@@ -70,13 +52,59 @@ impl OutputFormat {
     /// (`cache.rs::hash_inputs`) so a PDF render and an HTML render of the
     /// identical input never collide under the same cache key (and so a
     /// hit's stored bytes are never written to the wrong-format output).
-    /// The two HTML modes get DISTINCT tags so a cached render of one can
-    /// never be served back for the other.
+    ///
+    /// `Html`'s tag stays the historical `html-reflow`, and tidying it up to
+    /// plain `html` would be a BUG, not a cosmetic change. `html` was the tag
+    /// of the layout-faithful `--format html-fixed` backend that used to sit
+    /// beside this one, and nothing else in the key tells the two apart: the
+    /// cache stores every format's payload as a bare `<key>.pdf`
+    /// (`cache.rs`'s `pdf_path`), and removing that backend did not bump
+    /// `CARGO_PKG_VERSION`, which is the only other version-ish field in the
+    /// key. So a binary spelling this `html` would HIT, and serve, entries an
+    /// equally-versioned older binary wrote for `html-fixed` — a page of
+    /// absolutely-positioned `<div class="page">`s handed back where a
+    /// reflowed document was asked for, under the same `.html` name, with
+    /// nothing downstream to notice. Keeping the historical spelling also
+    /// keeps existing reflow entries valid, but that is the smaller half of
+    /// the reason. Pinned by `the_html_cache_tag_is_not_the_removed_backends`
+    /// below.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html => "html-reflow",
-            OutputFormat::HtmlFixed => "html",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cache tags are a compatibility surface, not an internal spelling:
+    /// see [`OutputFormat::cache_tag`]. `html` in particular is RETIRED — it
+    /// belonged to the removed `--format html-fixed` backend, and an
+    /// equally-versioned older binary's entries under it are still on disk in
+    /// users' cache directories.
+    #[test]
+    fn the_html_cache_tag_is_not_the_removed_backends() {
+        assert_eq!(OutputFormat::Html.cache_tag(), "html-reflow");
+        assert_ne!(OutputFormat::Html.cache_tag(), "html");
+        assert_ne!(
+            OutputFormat::Pdf.cache_tag(),
+            OutputFormat::Html.cache_tag()
+        );
+    }
+
+    /// `html-fixed` is retired as a FLAG VALUE too, not merely reassigned:
+    /// it must no longer parse at all, so the removal cannot be papered over
+    /// by silently accepting the old spelling.
+    #[test]
+    fn html_fixed_no_longer_parses() {
+        assert!("html-fixed".parse::<OutputFormat>().is_err());
+        assert_eq!("html".parse::<OutputFormat>(), Ok(OutputFormat::Html));
+        assert_eq!(
+            "html-reflow".parse::<OutputFormat>(),
+            Ok(OutputFormat::Html)
+        );
     }
 }

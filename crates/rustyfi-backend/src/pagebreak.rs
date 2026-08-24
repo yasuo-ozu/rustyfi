@@ -288,13 +288,15 @@ pub fn chop_page(
                 });
                 idx += 1;
             }
-            // A PURE skip — unlike `FrameStart`/`FrameEnd` above, this marker
-            // has no downstream (PDF/faithful-HTML) consumer at all, so it
-            // doesn't even get a placeholder `PlacedLine`; it simply never
-            // reaches placement. It already rode into `reflow_source` (cloned
-            // by `page_break_core` BEFORE this function runs) — that clone is
-            // the only place `VertBox::ListMark` survives to be read, by the
-            // reflow HTML walker.
+            // A PURE skip — unlike `FrameStart`/`FrameEnd` above, whose
+            // markers the deco firing in `rustyfi-lang` reads back on their
+            // way to the PDF's page underlay, this one has no downstream
+            // consumer at all, so it doesn't even get a placeholder
+            // `PlacedLine`; it simply never reaches placement. It already
+            // rode into `reflow_source` (cloned by `page_break_core` BEFORE
+            // this function runs) — that clone is the only place
+            // `VertBox::ListMark` survives to be read, by the reflow HTML
+            // walker.
             VertBox::ListMark(_) => {
                 idx += 1;
             }

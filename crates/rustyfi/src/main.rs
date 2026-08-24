@@ -332,11 +332,8 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
 
     // Everything above (load, version resolution, font store, cache lookup,
     // compile) is shared; only this terminal render+write step differs,
-    // branching on `--format`. `Html` reuses the exact same
-    // `doc.geometry`/`doc.pages`/`doc.images`/`doc.extras` inputs the PDF
-    // arm does — `render_html_fixed` is argument-for-argument with
-    // `render_pdf_with`. The HTML backend lives in its own `rustyfi-html`
-    // crate, a peer of `rustyfi-pdf`.
+    // branching on `--format`. The HTML backend lives in its own
+    // `rustyfi-html` crate, a peer of `rustyfi-pdf`.
     if timing {
         eprintln!(
             "TIMING compile(elab+eval) {:>8.1}ms  ({} pages)",
@@ -358,28 +355,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 rustyfi_pdf::render_pdf_with(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
             }
         },
-        // The layout-faithful HTML twin of the PDF arm immediately above,
-        // reached by `--format html-fixed` — a configured `font_store`
-        // renders through `render_html_fixed_ttf_with` (real
-        // `@font-face`-embedded fonts, metric-faithful with the layout),
-        // `None` keeps the base-14 `render_html_fixed` path exactly. See
-        // `format::OutputFormat` on why this is no longer what plain
-        // `--format html` means.
-        format::OutputFormat::HtmlFixed => match &font_store {
-            Some(store) => rustyfi_html::render_html_fixed_ttf_with(
-                &doc.geometry,
-                &doc.pages,
-                store,
-                &doc.images,
-                &doc.extras,
-            )?
-            .into_bytes(),
-            None => {
-                rustyfi_html::render_html_fixed(&doc.geometry, &doc.pages, &doc.images, &doc.extras)?
-                    .into_bytes()
-            }
-        },
-        // Reflowable/semantic HTML — what `--format html` now means. A
+        // Reflowable/semantic HTML — what `--format html` means. A
         // SEPARATE serialization of the SAME compiled `doc` above:
         // `doc.reflow_source` (the pre-page-break flat `Vec<VertBox>`,
         // populated unconditionally by every `compile_document_*` path

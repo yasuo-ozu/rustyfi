@@ -210,7 +210,7 @@ fn footnotes_place_per_column_at_their_shifted_x_origin() {
 /// `PlacedLine` at all (not even a zero-height marker one), is drained
 /// from `vboxes` just like every other consumed box, and contributes
 /// nothing to where the surrounding real lines land. This is the
-/// mechanical half of the "PDF/faithful HTML never see these markers"
+/// mechanical half of the "the PDF path never sees these markers"
 /// proof — `page_break_core` (rustyfi-lang) clones `reflow_source` BEFORE
 /// this function runs, so the marker survives there while still vanishing
 /// here.

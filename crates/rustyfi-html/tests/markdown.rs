@@ -766,6 +766,92 @@ fn a_paragraph_of_nothing_but_equations_is_one_display_block() {
     assert_eq!(md.matches("$$").count(), 2, "one block, not three:\n{md}");
 }
 
+/// A DISPLAYED equation is centred in the drawing modes.
+///
+/// The document asked for it — a display equation is a `line-break` between
+/// two `inline-fil`s — and the HTML backend already honours it
+/// (`data-align="center"`). Markdown dropped it, on the general rule that
+/// Markdown has no alignment; but a drawn equation is ALREADY raw HTML, so a
+/// wrapper around it costs nothing a renderer that keeps the `<svg>` would
+/// notice. See `para.rs`'s `centred`, including why the attribute is `align`
+/// and not `style`.
+///
+/// Needs the bundled faces: with no font store both drawing modes degrade to
+/// characters, and characters are not wrapped.
+#[test]
+fn a_displayed_equation_is_centred_in_the_drawing_modes() {
+    let Some(store) = mono_font_store() else {
+        return;
+    };
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+    ] {
+        let md = rustyfi_html::render_markdown_ttf_with(
+            Some(&[
+                text_line("Before."),
+                VertBox::Skip(Length::pt(12.0)),
+                x_squared_plus_one(),
+                VertBox::Skip(Length::pt(12.0)),
+                line_of(vec![
+                    text_run("see"),
+                    glue(4.0),
+                    PureHorzBox::Math {
+                        width: Length::pt(10.0),
+                        height: Length::pt(10.0),
+                        depth: Length::pt(2.0),
+                        glyphs: vec![math_glyph("y", 0.0, 0.0, 10.0)],
+                        rules: Vec::new(),
+                    },
+                ]),
+            ]),
+            &store,
+            &[],
+            &DocExtras::default(),
+            &[],
+            &[],
+            mode,
+        )
+        .expect("markdown rendering must succeed");
+        // The wrapper opens its own line, so the whole thing is ONE CommonMark
+        // HTML block and the drawing inside it is passed through raw.
+        assert!(
+            md.contains("<div align=\"center\">\n<svg"),
+            "{mode:?} did not centre the display equation:\n{md}"
+        );
+        assert!(md.contains("\n</div>"), "{mode:?}: {md}");
+        // Exactly one: prose is NOT centred, and neither is the equation set
+        // inside a sentence.
+        assert_eq!(
+            md.matches("<div align=").count(),
+            1,
+            "{mode:?} centred something that was not a displayed equation:\n{md}"
+        );
+        assert!(md.contains("Before."), "{mode:?}: {md}");
+        assert!(md.contains("see <svg"), "{mode:?}: {md}");
+    }
+}
+
+/// The two non-drawing modes are left exactly as they were, and each for its
+/// own reason.
+///
+/// `--katex` writes `$$…$$`, which a KaTeX reader centres itself
+/// (`katex.css`'s `.katex-display { … text-align: center; }`) and which GitHub
+/// only reads as math while the `$$` block stands alone — a `<div>` around it
+/// would turn the equation into literal text. `--unicode-math` is the
+/// plain-text mode: putting HTML in it would defeat the one property it exists
+/// for.
+#[test]
+fn katex_and_unicode_display_equations_are_not_wrapped() {
+    for mode in [
+        rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::Unicode,
+    ] {
+        let md = render_math(&[x_squared_plus_one()], mode);
+        assert!(!md.contains("<div"), "{mode:?}: {md}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `+align`: a `TabularBox` that is an equation, not a table
 // ---------------------------------------------------------------------------
@@ -941,6 +1027,12 @@ fn a_drawn_aligned_equation_is_one_block_per_row() {
             2,
             "each row keeps both of its cells:\n{md}"
         );
+        // An aligned equation is display math too, so each row is centred on
+        // the same terms as any other displayed equation.
+        assert!(
+            block.starts_with("<div align=\"center\">\n") && block.ends_with("\n</div>"),
+            "each row is a centred block:\n{md}"
+        );
     }
 }
 
@@ -1099,6 +1191,8 @@ fn a_font_less_drawing_mode_still_diverts_the_alignment() {
     // drop or keep.
     assert!(blocks[0].contains('b'), "{md}");
     assert!(blocks[1].contains('d'), "{md}");
+    // Characters, so nothing to centre: the wrapper is for drawings.
+    assert!(!md.contains("<div"), "{md}");
 }
 
 // ---------------------------------------------------------------------------

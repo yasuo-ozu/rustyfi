@@ -381,10 +381,11 @@ What is written instead depends on what the mode can say:
   alignment survives exactly, including the second and later column pairs of a
   multi-column `+align`;
 - **`--svg-math` / `--svg-outline-math`** write one block per row, with the
-  row's cells joined — a row is one equation split at the alignment point. The
-  column alignment *between* rows is lost: keeping it would mean re-deriving
-  the solved grid geometry into a composed drawing, to buy an alignment that
-  only exists for a reader whose renderer keeps the `<svg>` at all;
+  row's cells joined — a row is one equation split at the alignment point —
+  each centred like any other display equation (below). The column alignment
+  *between* rows is lost: keeping it would mean re-deriving the solved grid
+  geometry into a composed drawing, to buy an alignment that only exists for a
+  reader whose renderer keeps the `<svg>` at all;
 - **`--unicode-math`** keeps the grid. It writes characters, and a two-column
   text table is a defensible way to show an alignment in plain text — but the
   grid now gets an **empty header row**, so no equation is promoted to a
@@ -395,13 +396,43 @@ The block structure does not depend on whether `download-fonts.sh` has been
 run: with no font store a drawing mode degrades to characters, but that is a
 degradation of one equation's rendering, not of the document's shape.
 
+### A displayed equation is centred
+
+In the drawing modes a display equation — one that is the whole of its
+paragraph, which is what "displayed" MEANS in the box stream — is wrapped in
+`<div align="center">`.
+
+This is the one exception to "alignment is dropped", and it is a consequence of
+that rule rather than a hole in it. A drawn equation is **already raw HTML**:
+the `<svg>` is in the file whatever this decides, so a wrapper around it costs
+nothing in portability — a renderer that strips the `<div>` has necessarily
+stripped the drawing too. Prose has no such standing, and centring a paragraph
+would mean putting HTML into a file that had none. The alignment is also one
+the document really asked for, and the HTML backend already honours it
+(`data-align="center"`); dropping it here made the two backends disagree about
+the same recovered fact.
+
+`align`, not `style`, deliberately: GitHub sanitizes rendered Markdown through
+`html-pipeline`'s `SanitizationFilter`, whose allowlist carries `align` for any
+element and carries `style` for none, so `<div style="text-align:center">`
+arrives as a bare `<div>`. The attribute is deprecated in HTML5 and every
+browser still implements it; the sanitizer is the binding constraint.
+
+The other two modes are untouched. `--katex` writes `$$…$$`, which a KaTeX
+reader centres itself (`.katex-display { … text-align: center; }`) and which
+GitHub reads as math only while the `$$` block stands alone — a wrapper would
+turn the equation into literal text there. `--unicode-math` is the plain-text
+mode and stays text.
+
 ### What does not survive
 
 Everything Markdown has no way to say is **dropped, not approximated**:
 
 - **frames, decorations and borders** — a blockquote is not a frame;
 - **alignment** — `\align-center` is a pair of `inline-fil`s and there is no
-  alignment syntax; nothing about the text depends on it;
+  alignment syntax; nothing about the text depends on it. The one exception is
+  a DRAWN display equation, which is already raw HTML and so can be centred for
+  free — see [A displayed equation is centred](#a-displayed-equation-is-centred);
 - **page breaks, running heads and folios** — already absent from the
   pre-page-break stream, and meaningless once reflowed;
 - **colour, font and size** — no styling syntax outside emphasis and code;

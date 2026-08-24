@@ -1,7 +1,7 @@
 //! `PureHorzBox::Tabular` -> a LaTeX `tabular`.
 //!
-//! Row grouping is [`crate::recover::table_rows`] and the grid lines are
-//! [`crate::recover::Borders`] — both shared with the HTML backend, both
+//! Row grouping is [`rustyfi_html::recover::table_rows`] and the grid lines are
+//! [`rustyfi_html::recover::Borders`] — both shared with the HTML backend, both
 //! documented there.
 //!
 //! ## The document's own rules, not a blanket grid
@@ -32,7 +32,7 @@
 //! ## The phantom table
 //!
 //! `easytable` builds every table TWICE — see
-//! [`crate::recover::overlaid_table_rules`]. The rules-only twin holds no
+//! [`rustyfi_html::recover::overlaid_table_rules`]. The rules-only twin holds no
 //! text at all, so [`render_table`] returns `None` for a table no cell of
 //! which has any, and the real twin picks the rules up by matching its own
 //! width and height against what the enclosing graphics box recorded.
@@ -43,11 +43,12 @@ use rustyfi_backend::{GraphicsElem, Length, PureHorzBox, TabularBox, VertBox};
 
 use super::para::Para;
 use super::Ctx;
+use rustyfi_html::recover;
 
 /// One table as a LaTeX `tabular`, or `None` when it holds no text at all —
 /// see this module's doc comment on the phantom table.
 pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
-    let rows = crate::recover::table_rows(tab);
+    let rows = recover::table_rows(tab);
     if rows.is_empty() {
         return None;
     }
@@ -63,15 +64,15 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
             .iter()
             .rev()
             .find(|(w, h, _)| {
-                (w - tab.width.0).abs() < crate::recover::RULE_EPS_PT
-                    && (h - tab.height.0).abs() < crate::recover::RULE_EPS_PT
+                (w - tab.width.0).abs() < recover::RULE_EPS_PT
+                    && (h - tab.height.0).abs() < recover::RULE_EPS_PT
             })
             .map(|(_, _, r)| r.clone());
         paired.as_deref().unwrap_or(&[])
     } else {
         &tab.rules
     };
-    let borders = crate::recover::Borders::solve(&rows, rules);
+    let borders = recover::Borders::solve(&rows, rules);
 
     let mut text: Vec<Vec<String>> = Vec::with_capacity(rows.len());
     let mut any_content = false;
@@ -217,7 +218,7 @@ fn is_inkless(bx: &PureHorzBox) -> bool {
 
 /// The column specification: `l` per column, with a `|` wherever a vertical
 /// rule was recovered — see this module's doc comment on why `l` and not `c`.
-fn colspec(borders: &crate::recover::Borders, width: usize) -> String {
+fn colspec(borders: &recover::Borders, width: usize) -> String {
     let mut spec = String::with_capacity(width * 2 + 1);
     for c in 0..width {
         if borders.vertical.get(c).copied().flatten().is_some() {
@@ -239,7 +240,7 @@ fn colspec(borders: &crate::recover::Borders, width: usize) -> String {
 /// `Paragraph ended before \\ was complete` — a hard error. Everything
 /// collapses to spaces.
 fn cell_body(s: &str) -> String {
-    crate::collapse_whitespace(s)
+    rustyfi_html::collapse_whitespace(s)
 }
 
 #[cfg(test)]

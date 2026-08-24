@@ -526,7 +526,7 @@ fn cmd_compile(m: &ArgMatches, format: format::OutputFormat) -> anyhow::Result<(
         // `article`'s A4 portrait would be unrecognisable. It takes no frame
         // decorations, because it draws no frames.
         format::OutputFormat::Latex => match &font_store {
-            Some(store) => rustyfi_html::render_latex_ttf_with(
+            Some(store) => rustyfi_latex::render_latex_ttf_with(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,
                 store,
@@ -536,7 +536,7 @@ fn cmd_compile(m: &ArgMatches, format: format::OutputFormat) -> anyhow::Result<(
                 &doc.reflow_dests,
             )?
             .into_bytes(),
-            None => rustyfi_html::render_latex(
+            None => rustyfi_latex::render_latex(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,
                 &doc.images,

@@ -5,7 +5,7 @@
 //!
 //! | box | Markdown | here |
 //! |--|--|--|
-//! | `Math` | characters in reading order | real `$…$`, via [`crate::latex`] |
+//! | `Math` | characters in reading order | real `$…$`, via [`rustyfi_html::latex`] |
 //! | `Graphics` | an `<svg>` a sanitizing renderer strips | a `tikzpicture` |
 //! | a `\ref` (`AnnotAction::GotoName`) | plain text, no anchor scheme exists | `\hyperlink` |
 //! | a `draw-text` label | flowed after its drawing | a `\node` at its own point |
@@ -20,6 +20,7 @@ use rustyfi_backend::{
 
 use super::para::{LinkTarget, Para, Piece};
 use super::Ctx;
+use rustyfi_html::recover;
 
 /// Append `bx`'s LaTeX rendering to the paragraph being built.
 pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
@@ -76,7 +77,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         } => emit_run(para, info, text, width.0, ctx),
 
         // Glue is RECORDED, not written: whether it is a space depends on the
-        // character that follows (`crate::recover::wants_space`), which is
+        // character that follows (`rustyfi_html::recover::wants_space`), which is
         // why Japanese does not come out as `研 究 計 画`. Inside fixed-pitch
         // text it is not a word space at all but a measured column gap, and
         // is kept as one — see `Piece::Gap`.
@@ -98,7 +99,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         PureHorzBox::FixedEmpty { width } => {
             if ctx.mono_run.get() {
                 para.pieces.push(Piece::Gap(width.0));
-            } else if width.0 >= crate::recover::HSKIP_MIN_PT {
+            } else if width.0 >= recover::HSKIP_MIN_PT {
                 ctx.resolve_glue(para, None);
                 para.push_text(" ", false);
                 ctx.last_char.set(Some(' '));
@@ -114,8 +115,8 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // break point in the word (a single `\-` makes TeX use only the
         // explicit ones).
         PureHorzBox::Discretionary { pre_break, .. } => {
-            if !crate::recover::pre_break_carries_text(pre_break) {
-                ctx.note_glue(crate::recover::glue_width(pre_break));
+            if !recover::pre_break_carries_text(pre_break) {
+                ctx.note_glue(recover::glue_width(pre_break));
             }
         }
 
@@ -132,12 +133,12 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             }
         }
 
-        // Math, as real math. See `crate::latex`.
+        // Math, as real math. See `rustyfi_html::latex`.
         PureHorzBox::Math { glyphs, rules, .. } => {
-            let body = crate::latex::math_latex(glyphs, rules);
+            let body = rustyfi_html::latex::math_latex(glyphs, rules);
             // A math box also carries the paths a font cannot draw, and those
             // paths carry any `draw-text` the construction built — which is
-            // how a BIG OPERATOR arrives. `crate::latex` reads the bars out of
+            // how a BIG OPERATOR arrives. `rustyfi_html::latex` reads the bars out of
             // them and ignores the rest, so the nested text is emitted here,
             // BEFORE the formula: a `draw-text` operator sits at the box's
             // own origin, and putting `\sum` after its limits reads as
@@ -163,7 +164,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             // wants from it is in the nested boxes. `easytable` wraps every
             // table in exactly this shape, so this arm is also where a
             // table's rules-only twin is paired with the real one.
-            if elems.iter().all(crate::recover::is_pure_text) {
+            if elems.iter().all(recover::is_pure_text) {
                 let depth = ctx.push_overlaid_rules(elems);
                 emit_nested_text(para, elems, ctx);
                 ctx.pop_overlaid_rules(depth);
@@ -276,12 +277,11 @@ fn emit_run(para: &mut Para, info: &HorzStringInfo, text: &str, width: f64, ctx:
     // Guarded on the flag, not just on the scan: this is a per-RUN question
     // whose answer never goes back to `false`, and the box stream emits one
     // run per CJK character.
-    if !ctx.uses_cjk.get() && text.chars().any(crate::recover::is_cjk) {
+    if !ctx.uses_cjk.get() && text.chars().any(recover::is_cjk) {
         ctx.mark_cjk();
     }
     if mono && ctx.mono_advance.get().is_none() {
-        ctx.mono_advance
-            .set(crate::recover::mono_advance(text, width));
+        ctx.mono_advance.set(recover::mono_advance(text, width));
     }
     para.push_text(text, mono);
 }
@@ -310,11 +310,11 @@ fn open_link(para: &mut Para, deco: &DecoId, ctx: &Ctx) -> bool {
 
 /// A drawing that actually draws something.
 fn emit_drawing(para: &mut Para, elems: &[GraphicsElem], width: f64, height: f64, ctx: &Ctx) {
-    let Some(((lo_x, lo_y), (hi_x, hi_y))) = crate::recover::ink_bbox(elems) else {
+    let Some(((lo_x, lo_y), (hi_x, hi_y))) = recover::ink_bbox(elems) else {
         return;
     };
     let (ink_w, ink_h) = (hi_x.0 - lo_x.0, hi_y.0 - lo_y.0);
-    if ink_w < crate::recover::GRAPHIC_MIN_PT || ink_h < crate::recover::GRAPHIC_MIN_PT {
+    if ink_w < recover::GRAPHIC_MIN_PT || ink_h < recover::GRAPHIC_MIN_PT {
         // Not a figure: a hairline rule, a leader dot, a piece of
         // underlining. Dropped rather than marked — see `GRAPHIC_MIN_PT`.
         // Its nested text, if any, still flows: an underlined WORD is a

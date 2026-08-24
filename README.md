@@ -837,6 +837,9 @@ crates/
   rustyfi-backend/        boxes and glue, line and page breaking, math
   rustyfi-loader/         @require/@import resolution and load order
   rustyfi-pdf/            PDF writer, font embedding
+  rustyfi-html/           HTML and Markdown output, and the structure
+                          recovery all three reflowed backends share
+  rustyfi-latex/          LaTeX output: a complete, compilable .tex document
   rustyfi-satyrographos/  package manager
   rustyfi/                the binary
 lib-rustyfi/              bundled packages: dist/ (0.0) and dist-v01/ (0.1)

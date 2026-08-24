@@ -1,4 +1,4 @@
-//! `GraphicsElem` → TikZ, the LaTeX counterpart of [`crate::svg`].
+//! `GraphicsElem` → TikZ, the LaTeX counterpart of `rustyfi-html`'s `svg`.
 //!
 //! **This is the one place LaTeX is a BETTER target than the other two
 //! backends have.** A drawing in the box stream is already a list of vector
@@ -13,7 +13,7 @@
 //!
 //! `GraphicsElem`'s `Path` coordinates are box-local and y-**up** from the
 //! box's baseline-left origin (`graphics.rs`'s `Point` doc comment), and
-//! TikZ's are box-local and y-up too. So unlike [`crate::svg`] — which needs
+//! TikZ's are box-local and y-up too. So unlike the SVG writer — which needs
 //! a `<g transform="translate(0,h) scale(1,-1)">` because SVG page space is
 //! y-down — this module writes the numbers out as they stand. The single
 //! declaration that makes that true is `[x=1bp, y=1bp]` on the
@@ -33,7 +33,7 @@
 //! ## Colour is EXACT here, and it is not in the SVG writer
 //!
 //! `xcolor` has a real `cmyk` model, so a `Cmyk` colour is declared as CMYK
-//! and left for the driver to separate. [`crate::svg::css_color`] has to
+//! and left for the driver to separate. `rustyfi-html`'s `svg::css_color` has to
 //! apply the naive `(1-c)(1-k)` conversion because CSS has no device-CMYK at
 //! all, and says so; there is nothing to apologise for on this path.
 
@@ -289,7 +289,7 @@ fn clamp(v: f64) -> f64 {
 /// `PathSeg::Line` → `--`, `PathSeg::Bezier` → `.. controls … and … ..`,
 /// `Closing::Line` → `-- cycle`, `Closing::Bezier` → one final curve back to
 /// the subpath's own start and then `cycle` — the direct analogue of the PDF
-/// writer's `m`/`l`/`c`/`h` and of [`crate::svg`]'s `M`/`L`/`C`/`Z`.
+/// writer's `m`/`l`/`c`/`h` and of the SVG writer's `M`/`L`/`C`/`Z`.
 ///
 /// Several subpaths ride in ONE path specification, which TikZ allows: a new
 /// coordinate with no operator before it starts a new component, and a single

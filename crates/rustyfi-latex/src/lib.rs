@@ -3,7 +3,7 @@
 //! The third serialization of the same recovered document. It reads what the
 //! other two read, `DocumentValue::reflow_source` — the flat `Vec<VertBox>`
 //! as it stood BEFORE page breaking — and recovers the same structure out of
-//! it through the same code ([`crate::recover`]): headings correlated to
+//! it through the same code ([`rustyfi_html::recover`]): headings correlated to
 //! `extras.outline` by `dest_name`, lists from the inert `VertBox::ListMark`
 //! markers, tables and their rules from a `TabularBox`, the CJK glue rule,
 //! the line breaker's own hyphen.
@@ -24,7 +24,7 @@
 //! | a code block | a fence | a `<pre>` | `fancyvrb`'s `Verbatim` |
 //! | CMYK colour | — | converted, lossily | `xcolor`'s own `cmyk` |
 //!
-//! and where it does, it says so ([`crate::latexdoc::tikz::placeholder`] for
+//! and where it does, it says so ([`crate::tikz::placeholder`] for
 //! raster images, which cannot travel inside a single output file).
 //!
 //! ## The engine
@@ -35,7 +35,7 @@
 //!
 //! - **A document with no CJK compiles under any of pdfLaTeX, XeLaTeX and
 //!   LuaLaTeX.** The math is written as `amsmath`/`amssymb` command names
-//!   rather than as Unicode ([`crate::latex`]), and the only
+//!   rather than as Unicode ([`rustyfi_html::latex`]), and the only
 //!   engine-conditional line is `fontenc`/`inputenc`, guarded by `iftex`.
 //! - **A document with any CJK requires LuaLaTeX**, and gets
 //!   `luatexja-fontspec` with the Harano Aji faces. pdfLaTeX cannot set CJK
@@ -52,6 +52,42 @@
 //! flags, set at the point of emission rather than predicted). That keeps a
 //! plain document's preamble to five lines, and it means a reader can tell
 //! from the top of the file what is in the rest of it.
+//!
+//! ## Location: its own crate, depending on `rustyfi-html`
+//!
+//! This backend is a crate of its own, a peer of `rustyfi-pdf` and
+//! `rustyfi-html`, and it **depends on `rustyfi-html`** for the structure
+//! recovery it shares with the HTML and Markdown backends
+//! ([`rustyfi_html::recover`]) and for the math-run writer `--katex` also
+//! uses ([`rustyfi_html::latex`]). Nothing shared is COPIED: there is one
+//! `wants_space`, one `line_join`, one `table_rows`, one `Borders` and one
+//! `math_latex` in the tree, and this crate calls them. A second copy of the
+//! CJK glue rule would be the one outcome worth refusing outright — the two
+//! would diverge, and the symptom (a space between every pair of Japanese
+//! characters, in one format only) is not one anybody would look for here.
+//!
+//! **The dependency points the wrong way if you read the crate names as a
+//! layering, and it is deliberate.** The alternative — lifting
+//! `recover`/`latex`/`mathrec` into a fourth crate that `rustyfi-html` and
+//! this one both depend on — is the better end state and a bigger, riskier
+//! change than this one: those three modules are named from roughly a hundred
+//! sites across `reflow/`, `markdown/` and `mathsvg`, so the lift is a rename
+//! sweep through every file the other two backends live in, for no
+//! behavioural gain and a guaranteed conflict with anything in flight there.
+//! `rustyfi-html`'s own module doc already records that its name outgrew it.
+//! Splitting the recovery out belongs in a commit that does only that.
+//!
+//! What this crate takes from `rustyfi-html` is exactly two things, and
+//! neither of them is HTML: [`rustyfi_html::recover`] and
+//! [`rustyfi_html::latex::math_latex`]. No escaper, no `<svg>` writer, no CSS
+//! and no colour conversion crosses — `tikz.rs` writes `xcolor`'s own `cmyk`,
+//! so it does not even want the SVG writer's lossy one.
+
+// The public surface here is two functions; everything that implements them —
+// `Ctx`, `tikz`, `escape`, `para` — is private, and the doc comments name
+// those constantly because they are written for the reader of the SOURCE.
+// They read the same either way; rustdoc's objection to them does not.
+#![allow(rustdoc::private_intra_doc_links)]
 
 mod block;
 mod escape;
@@ -67,10 +103,29 @@ use std::fmt::Write as _;
 use rustyfi_backend::{
     AnnotAction, DecoId, DocExtras, GraphicsElem, ImageResource, PageGeometry, VertBox,
 };
+use rustyfi_html::recover;
 use rustyfi_pdf::TtfFontStore;
 
-use crate::HtmlError;
 use para::Para;
+
+/// Rendering is in practice infallible — every run of the document's own
+/// text goes out through `escape::text`, and the image, link and outline
+/// handling reads tables the compile step already validated. The `Result`
+/// return shape is kept anyway so the entry points are argument-for-argument
+/// with `rustyfi_pdf::render_pdf_with` and `rustyfi_html::render_html_reflow`
+/// (module signature, not module fallibility), and so a step that has to
+/// touch the filesystem — the sidecar files an `\includegraphics` would need,
+/// see [`tikz::placeholder`] for why there are none yet — could surface a
+/// real error without a breaking signature change.
+///
+/// A twin of `rustyfi_html::HtmlError` rather than a reuse of it. The two
+/// crates are peers; a `rustyfi-latex` entry point handing back an
+/// `HtmlError` would be the crate split's one visible lie.
+#[derive(Debug, thiserror::Error)]
+pub enum LatexError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
 
 /// Render-time state shared by the whole walk.
 ///
@@ -81,15 +136,15 @@ use para::Para;
 pub(crate) struct Ctx<'a> {
     fonts: Option<&'a TtfFontStore>,
     /// Which of the store's FILES are fixed-pitch, computed once — see
-    /// [`crate::recover::MonoFiles`], where the 145ms this saves is measured.
-    mono_files: crate::recover::MonoFiles,
+    /// [`rustyfi_html::recover::MonoFiles`], where the 145ms this saves is measured.
+    mono_files: recover::MonoFiles,
     /// `DecoId -> action` for every `register-link-to-uri`/`-to-location`
     /// call the compile driver observed firing. The `DecoId` a `Frame` or an
     /// `InlineFrameMarker` carries is the SAME one, so this is an exact match
     /// rather than a geometry guess.
     links: HashMap<DecoId, &'a AnnotAction>,
     /// `DecoId -> destination name`, the other half of the heading
-    /// correlation (`crate::recover::find_heading_level`) and the source of
+    /// correlation (`rustyfi_html::recover::find_heading_level`) and the source of
     /// every `\hypertarget`.
     dests: HashMap<DecoId, &'a str>,
     /// `dest_name -> outline level`, from `extras.outline`.
@@ -101,11 +156,11 @@ pub(crate) struct Ctx<'a> {
     /// for an embedded picture where deduplicating the bytes would matter.
     image_numbers: RefCell<HashMap<usize, usize>>,
     /// Rules collected from a table's invisible rules-only twin, awaiting the
-    /// real one — see [`crate::recover::overlaid_table_rules`].
+    /// real one — see [`rustyfi_html::recover::overlaid_table_rules`].
     tabular_rules: RefCell<Vec<(f64, f64, Vec<GraphicsElem>)>>,
     /// The natural width (pt) of glue seen since the last thing written,
     /// awaiting the character that follows it before
-    /// `crate::recover::wants_space` can judge whether it is a space, a kern,
+    /// `rustyfi_html::recover::wants_space` can judge whether it is a space, a kern,
     /// or a bare break opportunity. Consecutive glues merge by taking the
     /// widest — two adjacent glues are still at most one space.
     pending_glue: Cell<Option<f64>>,
@@ -174,7 +229,7 @@ impl Ctx<'_> {
     /// fixed-pitch chunks would close the first and open a second.
     fn resolve_glue(&self, para: &mut Para, next: Option<char>) {
         if let Some(width) = self.pending_glue.take() {
-            if crate::recover::wants_space(self.last_char.get(), next, width) {
+            if recover::wants_space(self.last_char.get(), next, width) {
                 para.push_text(" ", self.mono_run.get());
             }
         }
@@ -231,7 +286,7 @@ impl Ctx<'_> {
         let base = self.tabular_rules.borrow().len();
         self.tabular_rules
             .borrow_mut()
-            .extend(crate::recover::overlaid_table_rules(elems));
+            .extend(recover::overlaid_table_rules(elems));
         base
     }
 
@@ -260,7 +315,7 @@ impl Ctx<'_> {
 /// [`render_latex_ttf_with`].
 ///
 /// Without a font store no face can be asked whether it is fixed-pitch
-/// (`crate::recover::is_monospace` has no file to read a family name from),
+/// (`rustyfi_html::recover::is_monospace` has no file to read a family name from),
 /// so a code block comes out as ordinary prose. That is the same degradation
 /// the other two backends take, for the same reason, and the CLI always has
 /// a store.
@@ -271,7 +326,7 @@ pub fn render_latex(
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
-) -> Result<String, HtmlError> {
+) -> Result<String, LatexError> {
     render_latex_impl(source, geometry, images, extras, links, dests, None)
 }
 
@@ -288,7 +343,7 @@ pub fn render_latex_ttf_with(
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
-) -> Result<String, HtmlError> {
+) -> Result<String, LatexError> {
     render_latex_impl(source, geometry, images, extras, links, dests, Some(store))
 }
 
@@ -301,7 +356,7 @@ fn render_latex_impl(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
     font_store: Option<&TtfFontStore>,
-) -> Result<String, HtmlError> {
+) -> Result<String, LatexError> {
     let (paper_w, paper_h) = (
         geometry.paper_width.0.max(1.0),
         geometry.paper_height.0.max(1.0),
@@ -309,13 +364,13 @@ fn render_latex_impl(
     let area = text_area(source, paper_w, paper_h);
     let ctx = Ctx {
         fonts: font_store,
-        mono_files: crate::recover::MonoFiles::new(font_store),
+        mono_files: recover::MonoFiles::new(font_store),
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests
             .iter()
             .map(|(id, name)| (*id, name.as_str()))
             .collect(),
-        outline_by_dest: crate::recover::outline_levels(&extras.outline),
+        outline_by_dest: recover::outline_levels(&extras.outline),
         images,
         image_numbers: RefCell::new(HashMap::new()),
         tabular_rules: RefCell::new(Vec::new()),
@@ -483,7 +538,7 @@ fn geometry_line(paper_w: f64, paper_h: f64, area: (f64, f64)) -> String {
 /// document actually uses live in its `page-break` callback, lang-side, and
 /// never reach a backend. Taking those fields at face value put every
 /// generated document's text edge to edge on the paper, which no reader would
-/// accept and which also made [`crate::latexdoc::tikz::fit_scale`] a no-op.
+/// accept and which also made [`crate::tikz::fit_scale`] a no-op.
 ///
 /// So the WIDTH is measured from the flow: the paragraph breaker set every
 /// justified line to the measure, so the widest line in the document IS the

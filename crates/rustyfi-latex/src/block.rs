@@ -17,11 +17,11 @@
 //! going to break the paragraph again, at whatever measure this document's
 //! `geometry` gives it, so reproducing them would be pointless — and worse
 //! than pointless, since a hard line break also fossilizes the port's
-//! hyphenation. They are rejoined (`crate::recover::line_join`), which is
+//! hyphenation. They are rejoined (`rustyfi_html::recover::line_join`), which is
 //! where authored hyphens have to be told apart from the breaker's.
 //!
 //! Inside a code block they are the AUTHOR's line breaks and are kept, which
-//! is the one thing `crate::recover::is_monospace` is really for.
+//! is the one thing `rustyfi_html::recover::is_monospace` is really for.
 //!
 //! ## Why `ClearPage` survives when the other page furniture does not
 //!
@@ -36,7 +36,7 @@ use rustyfi_backend::{ListMarkKind, PureHorzBox, VertBox};
 
 use super::para::{Para, Piece, Rendered};
 use super::Ctx;
-use crate::recover::{LineJoin, WORD_SPACE_PT};
+use rustyfi_html::recover::{self, LineJoin, WORD_SPACE_PT};
 
 /// A LaTeX sink that knows what environment it is inside.
 ///
@@ -108,7 +108,7 @@ impl<'a, 'b> Writer<'a, 'b> {
             // with a code sample in it is common enough (`easytable`'s own
             // manual documents its arguments that way) that dropping the
             // cell instead would be visible.
-            let flat = crate::collapse_whitespace(&content);
+            let flat = rustyfi_html::collapse_whitespace(&content);
             self.block(&format!("\\texttt{{{}}}", super::escape::text(&flat)));
             return;
         }
@@ -398,8 +398,7 @@ fn note_heading(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
     if para.heading_level.is_some() {
         return;
     }
-    let Some((level, dest)) = crate::recover::find_heading(bx, &ctx.dests, &ctx.outline_by_dest)
-    else {
+    let Some((level, dest)) = recover::find_heading(bx, &ctx.dests, &ctx.outline_by_dest) else {
         return;
     };
     para.heading_level = Some(level);
@@ -431,7 +430,7 @@ fn end_of_line(para: &mut Para, ctx: &Ctx, fil_terminated: bool) {
         ctx.break_hyphen.set(false);
         ctx.reset_flow();
     } else {
-        match crate::recover::line_join(ctx.break_hyphen.replace(false), para.ends_with_hyphen()) {
+        match recover::line_join(ctx.break_hyphen.replace(false), para.ends_with_hyphen()) {
             LineJoin::DropHyphen => para.drop_break_hyphen(),
             // An AUTHORED hyphen the breaker was merely allowed to break
             // after. It stays — deleting it is what once turned

@@ -1,11 +1,13 @@
-//! Structure recovery shared by the two output backends.
+//! Structure recovery shared by the three output backends.
 //!
 //! `--format markdown` is a SUBSET of `--format html`: it recovers the same
 //! headings, lists, tables, links and emphasis out of the same flat box
-//! stream, and then writes less. The recovery itself must therefore be ONE
-//! implementation, not two — every rule collected here was got wrong at least
-//! once before it was got right, and a forked copy would rot silently the
-//! next time one of them is corrected:
+//! stream, and then writes less. `--format latex` — the `rustyfi-latex`
+//! crate, which is why this module is `pub` — recovers the same structure
+//! again and writes it for another typesetter. The recovery itself must
+//! therefore be ONE implementation, not three — every rule collected here
+//! was got wrong at least once before it was got right, and a forked copy
+//! would rot silently the next time one of them is corrected:
 //!
 //! - [`wants_space`] — glue is not a space. The box stream puts glue between
 //!   every pair of CJK characters, so "glue means space" renders Japanese as
@@ -23,9 +25,9 @@
 //!   recovered from each cell's `x`.
 //! - [`Borders`] — and no grid LINES either; which boundaries a table
 //!   actually rules is recovered from the shapes in `TabularBox::rules`.
-//! - [`is_monospace`] — the one signal that says a `Line` boundary is the
-//!   AUTHOR's rather than the breaker's (a `+code` block and a wrapped
-//!   paragraph are structurally identical otherwise).
+//! - [`MonoFiles::is_monospace`] — the one signal that says a `Line`
+//!   boundary is the AUTHOR's rather than the breaker's (a `+code` block
+//!   and a wrapped paragraph are structurally identical otherwise).
 //!
 //! Nothing here emits markup. Each function answers a question about the box
 //! stream and lets its caller decide what to write, which is exactly the line
@@ -52,7 +54,7 @@ const GLUE_EPSILON_PT: f64 = 0.05;
 /// [`wants_space`]; a false negative costs one spurious space and a false
 /// positive one missing one, so the ranges are the broad blocks rather than
 /// a Unicode script database.
-pub(crate) fn is_cjk(c: char) -> bool {
+pub fn is_cjk(c: char) -> bool {
     matches!(c as u32,
         0x1100..=0x11FF     // Hangul Jamo
         | 0x2E80..=0x2EFF   // CJK radicals supplement
@@ -77,7 +79,7 @@ pub(crate) fn is_cjk(c: char) -> bool {
 /// and either side of an opaque box (a drawing, an image, a table), which
 /// count as non-CJK: a formula or figure set into Japanese prose takes the
 /// same space its inter-script glue was asking for.
-pub(crate) fn wants_space(prev: Option<char>, next: Option<char>, natural_pt: f64) -> bool {
+pub fn wants_space(prev: Option<char>, next: Option<char>, natural_pt: f64) -> bool {
     if natural_pt <= GLUE_EPSILON_PT {
         return false;
     }
@@ -92,11 +94,11 @@ pub(crate) fn wants_space(prev: Option<char>, next: Option<char>, natural_pt: f6
 /// decision both backends make, spelled once.
 ///
 /// A `Line` boundary is the PORT's own wrapping decision, never the author's
-/// (except inside a code block, which both callers detect with
-/// [`is_monospace`] and handle before asking). So the two lines are rejoined;
-/// the only question is what happens to the hyphen at the join.
+/// (except inside a code block, which every caller detects with
+/// [`MonoFiles::is_monospace`] and handles before asking). So the two lines
+/// are rejoined; the only question is what happens to the hyphen at the join.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LineJoin {
+pub enum LineJoin {
     /// An ordinary wrap: rejoin with a word space (which the CJK rule may
     /// still suppress — the two characters either side of the break must not
     /// gain one).
@@ -120,7 +122,7 @@ pub(crate) enum LineJoin {
 /// the marker existed the only available test was the SHAPE of the text —
 /// "ends letter+hyphen, next line opens lowercase" — which is also the shape
 /// of an authored compound at a line end, and deleted real hyphens.
-pub(crate) fn line_join(break_hyphen: bool, ends_with_hyphen: bool) -> LineJoin {
+pub fn line_join(break_hyphen: bool, ends_with_hyphen: bool) -> LineJoin {
     if break_hyphen {
         LineJoin::DropHyphen
     } else if ends_with_hyphen {
@@ -132,7 +134,7 @@ pub(crate) fn line_join(break_hyphen: bool, ends_with_hyphen: bool) -> LineJoin 
 
 /// Is this character the hyphen a line break can fall after? Both backends
 /// need the same answer, and it is not just ASCII `-`.
-pub(crate) fn is_hyphen(c: char) -> bool {
+pub fn is_hyphen(c: char) -> bool {
     matches!(c, '-' | '\u{2010}')
 }
 
@@ -141,7 +143,7 @@ pub(crate) fn is_hyphen(c: char) -> bool {
 /// immaterial — it only has to be above [`wants_space`]'s zero-width
 /// threshold, since the decision it feeds is "is this a CJK pair" rather than
 /// "how wide".
-pub(crate) const WORD_SPACE_PT: f64 = 3.0;
+pub const WORD_SPACE_PT: f64 = 3.0;
 
 /// Whether `font` is a fixed-pitch face, read off the family name the file
 /// declares (`fonts::is_monospace_family` — a name heuristic, and labelled as
@@ -160,10 +162,10 @@ pub(crate) const WORD_SPACE_PT: f64 = 3.0;
 /// same 7.8MB `ipaexm.ttf` about 5400 times and got the same answer. There
 /// are at most `num_files()` distinct answers, and they are all computed
 /// here, up front.
-pub(crate) struct MonoFiles(Vec<bool>);
+pub struct MonoFiles(Vec<bool>);
 
 impl MonoFiles {
-    pub(crate) fn new(store: Option<&TtfFontStore>) -> Self {
+    pub fn new(store: Option<&TtfFontStore>) -> Self {
         MonoFiles(match store {
             None => Vec::new(),
             Some(store) => (0..store.num_files())
@@ -178,7 +180,7 @@ impl MonoFiles {
 
     /// Whether `font` is a fixed-pitch face. `false` in base-14 mode, where
     /// there is no file to ask — see [`MonoFiles`].
-    pub(crate) fn is_monospace(&self, store: Option<&TtfFontStore>, font: Option<FontKey>) -> bool {
+    pub fn is_monospace(&self, store: Option<&TtfFontStore>, font: Option<FontKey>) -> bool {
         let (Some(store), Some(font)) = (store, font) else {
             return false;
         };
@@ -195,7 +197,7 @@ impl MonoFiles {
 /// The two populations it separates: a paragraph indent or a table cell's
 /// padding above, the `\LaTeX` logo's own four kerns and a table-of-contents
 /// leader's dot spacing below.
-pub(crate) const HSKIP_MIN_PT: f64 = 2.0;
+pub const HSKIP_MIN_PT: f64 = 2.0;
 
 /// Smaller than this in either dimension (pt) and a drawing's INK is a rule,
 /// a leader dot or a piece of underlining, not a figure.
@@ -205,7 +207,7 @@ pub(crate) const HSKIP_MIN_PT: f64 = 2.0;
 /// 440pt x 1pt line inside a 440pt x 4pt box. Judged by the box it is a
 /// figure, and `easytable`'s manual grew a placeholder above and below every
 /// heading in it.
-pub(crate) const GRAPHIC_MIN_PT: f64 = 4.0;
+pub const GRAPHIC_MIN_PT: f64 = 4.0;
 
 /// How many spaces a gap of `pt` points is, in a document whose fixed-pitch
 /// character advances `advance` points.
@@ -216,7 +218,7 @@ pub(crate) const GRAPHIC_MIN_PT: f64 = 4.0;
 /// count. With no advance measured (a base-14 render, where no font file says
 /// whether a face is fixed-pitch at all) it degrades to one space, which
 /// keeps the words apart and loses only the indentation.
-pub(crate) fn gap_spaces(pt: f64, advance: Option<f64>) -> usize {
+pub fn gap_spaces(pt: f64, advance: Option<f64>) -> usize {
     match advance {
         Some(a) if a > 0.0 => (pt / a).round().max(0.0) as usize,
         // No measurement: any positive gap is one space.
@@ -232,7 +234,7 @@ pub(crate) fn gap_spaces(pt: f64, advance: Option<f64>) -> usize {
 /// indentation is counted in. Only a run of plain ASCII is measured — a
 /// fixed-pitch Latin face still sets a stray CJK character full-width, which
 /// would halve the estimate.
-pub(crate) fn mono_advance(text: &str, width: f64) -> Option<f64> {
+pub fn mono_advance(text: &str, width: f64) -> Option<f64> {
     let n = text.chars().count();
     (n > 0 && width > 0.0 && text.chars().all(|c| c.is_ascii_graphic()))
         .then(|| width / n as f64)
@@ -241,7 +243,7 @@ pub(crate) fn mono_advance(text: &str, width: f64) -> Option<f64> {
 /// Whether `elem` contributes no ink of its own — a `draw-text`, or a group
 /// containing only those. `Group`/`Clip` recurse so a `unite-graphics` of
 /// text runs is recognised too.
-pub(crate) fn is_pure_text(elem: &GraphicsElem) -> bool {
+pub fn is_pure_text(elem: &GraphicsElem) -> bool {
     match elem {
         GraphicsElem::Text { .. } => true,
         GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inner.iter().all(is_pure_text),
@@ -251,7 +253,7 @@ pub(crate) fn is_pure_text(elem: &GraphicsElem) -> bool {
 
 /// The union of every element's ink bounding box, or `None` when nothing in
 /// `elems` draws.
-pub(crate) fn ink_bbox(elems: &[GraphicsElem]) -> Option<((Length, Length), (Length, Length))> {
+pub fn ink_bbox(elems: &[GraphicsElem]) -> Option<((Length, Length), (Length, Length))> {
     elems
         .iter()
         .filter_map(graphics_bbox)
@@ -271,7 +273,7 @@ pub(crate) fn ink_bbox(elems: &[GraphicsElem]) -> Option<((Length, Length), (Len
 
 /// Does a `Discretionary`'s `pre_break` carry a visible character (the
 /// hyphenation dictionary's hyphen), as opposed to bare glue?
-pub(crate) fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
+pub fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
     pre_break.iter().any(|b| match b {
         PureHorzBox::InnerString { text, .. } => !text.is_empty(),
         _ => false,
@@ -280,7 +282,7 @@ pub(crate) fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
 
 /// The total natural width of a `Discretionary`'s `pre_break` glue, fed to
 /// the ordinary glue rule when there is no hyphen to show.
-pub(crate) fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
+pub fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
     pre_break
         .iter()
         .map(|b| match b {
@@ -315,19 +317,14 @@ pub(crate) fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
 /// measure is broken by the paragraph breaker like any other and ends at a
 /// hyphenation point rather than at its fil. One overflowing line in `xpath`'s
 /// API listing was enough to make the whole block prose under an "all" test.
-pub(crate) fn is_code_paragraph(
-    all_mono: bool,
-    has_mono: bool,
-    lines: usize,
-    fil_lines: usize,
-) -> bool {
+pub fn is_code_paragraph(all_mono: bool, has_mono: bool, lines: usize, fil_lines: usize) -> bool {
     all_mono || (lines >= 2 && has_mono && fil_lines * 2 > lines)
 }
 
 /// `dest_name -> level` from `extras.outline` (`register-outline`'s already
 /// `Interp::dest_name`-resolved entries) — the lookup table
 /// [`find_heading_level`] consults.
-pub(crate) fn outline_levels(outline: &[OutlineEntry]) -> HashMap<String, i64> {
+pub fn outline_levels(outline: &[OutlineEntry]) -> HashMap<String, i64> {
     outline
         .iter()
         .map(|entry| (entry.dest_name.clone(), entry.level))
@@ -340,12 +337,12 @@ pub(crate) fn outline_levels(outline: &[OutlineEntry]) -> HashMap<String, i64> {
 /// deepest `######` ATX heading Markdown defines. A deeper-than-6 outline
 /// (unusual, but upstream never validates outline depth) collapses onto 6
 /// rather than producing something invalid in either format.
-pub(crate) fn heading_depth(level: i64) -> u8 {
+pub fn heading_depth(level: i64) -> u8 {
     (level.max(0) as u64 + 1).min(6) as u8
 }
 
 /// [`find_heading`], for a caller that wants only the level.
-pub(crate) fn find_heading_level(
+pub fn find_heading_level(
     bx: &PureHorzBox,
     dests: &HashMap<DecoId, &str>,
     outline_by_dest: &HashMap<String, i64>,
@@ -378,7 +375,7 @@ pub(crate) fn find_heading_level(
 /// Matching only `Frame` meant no heading in any `stdjabook` document was
 /// ever promoted. Only the START marker is consulted — the `end: true` twin
 /// carries the same `DecoId` and would match a second time for nothing.
-pub(crate) fn find_heading<'a>(
+pub fn find_heading<'a>(
     bx: &PureHorzBox,
     dests: &HashMap<DecoId, &'a str>,
     outline_by_dest: &HashMap<String, i64>,
@@ -421,7 +418,7 @@ fn level_of_deco<'a>(
 /// to increase. This is exact for the common case; a pathological grid whose
 /// first visible cell in a row happens to sit further right than the previous
 /// row's last visible cell would mis-group.
-pub(crate) fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
+pub fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
     let mut rows: Vec<Vec<&TabularCellBox>> = Vec::new();
     let mut last_x: Option<f64> = None;
     for cell in &tab.cells {
@@ -455,28 +452,28 @@ pub(crate) fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
 /// cell origins says which boundary it is. Rules the geometry cannot place
 /// (a diagonal, a decorative flourish) are simply not reproduced; they draw
 /// nothing rather than something wrong.
-pub(crate) struct Borders {
+pub struct Borders {
     /// `horizontal[r]` is the rule ABOVE row `r`; the extra last entry is the
     /// rule below the final row.
-    pub(crate) horizontal: Vec<Option<Rule>>,
+    pub horizontal: Vec<Option<Rule>>,
     /// `vertical[c]` is the rule LEFT of column `c`; the extra last entry is
     /// the rule right of the final column.
-    pub(crate) vertical: Vec<Option<Rule>>,
+    pub vertical: Vec<Option<Rule>>,
 }
 
 /// One recovered grid line: how thick, and in what colour.
 #[derive(Clone, Copy)]
-pub(crate) struct Rule {
-    pub(crate) width: f64,
-    pub(crate) color: Color,
+pub struct Rule {
+    pub width: f64,
+    pub color: Color,
 }
 
 /// A rule thinner than this (pt) is invisible in a browser anyway; a
 /// coordinate closer than this to a boundary counts as being on it.
-pub(crate) const RULE_EPS_PT: f64 = 0.05;
+pub const RULE_EPS_PT: f64 = 0.05;
 
 impl Borders {
-    pub(crate) fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
+    pub fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
         let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
         let mut borders = Borders {
             horizontal: vec![None; rows.len() + 1],
@@ -515,9 +512,7 @@ impl Borders {
 /// wants a real table's rules has to collect them HERE and pair them by
 /// size when it reaches the text-bearing twin. Both the HTML and the LaTeX
 /// writer do exactly that, which is why the traversal is shared.
-pub(crate) fn overlaid_table_rules(
-    elems: &[GraphicsElem],
-) -> Vec<(f64, f64, Vec<GraphicsElem>)> {
+pub fn overlaid_table_rules(elems: &[GraphicsElem]) -> Vec<(f64, f64, Vec<GraphicsElem>)> {
     let mut out = Vec::new();
     walk_tabulars(elems, &mut |tab| {
         if !tab.rules.is_empty() {

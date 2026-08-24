@@ -20,7 +20,7 @@
 //! bundled faces, which the same job does not fetch either. A skip prints why
 //! and returns; it does not pass vacuously, and it does not fail a checkout
 //! that is perfectly valid. The structural half of the same behaviour lives
-//! in `rustyfi-html/tests/latex.rs` and runs unconditionally.
+//! in `rustyfi-latex/tests/latex.rs` and runs unconditionally.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

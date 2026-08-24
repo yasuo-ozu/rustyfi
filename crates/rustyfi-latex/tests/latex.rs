@@ -78,7 +78,7 @@ fn render_full(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> String {
-    rustyfi_html::render_latex(
+    rustyfi_latex::render_latex(
         Some(vboxes),
         &PageGeometry::default(),
         &[],
@@ -154,7 +154,7 @@ fn the_output_is_a_complete_document_not_a_fragment() {
 /// nothing at all.
 #[test]
 fn a_document_with_no_flow_is_still_a_valid_document() {
-    let tex = rustyfi_html::render_latex(
+    let tex = rustyfi_latex::render_latex(
         None,
         &PageGeometry::default(),
         &[],

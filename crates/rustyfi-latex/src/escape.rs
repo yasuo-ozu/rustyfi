@@ -19,7 +19,7 @@
 //!
 //! `<`, `>` and `|` are ordinary letters in the source but are typeset as
 //! `¡`, `¿` and `—` by the OT1 encoding LaTeX still defaults to for
-//! pdfTeX. The preamble this backend writes asks for T1 (`mod.rs`'s
+//! pdfTeX. The preamble this backend writes asks for T1 (`lib.rs`'s
 //! `preamble`), under which all three are correct — but the escapes are
 //! emitted anyway, because a reader who lifts a paragraph out of the
 //! generated file into their own document should not have that paragraph's

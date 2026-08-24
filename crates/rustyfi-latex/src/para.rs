@@ -28,6 +28,7 @@
 use std::fmt::Write as _;
 
 use super::escape;
+use rustyfi_html::recover;
 
 /// Where a link points.
 pub(super) enum LinkTarget {
@@ -96,7 +97,7 @@ pub(super) struct Para {
     /// only spacing".
     pub(super) open: bool,
     /// The outline level of the destination frame found on this paragraph's
-    /// lines, if any — see `crate::recover::find_heading_level`.
+    /// lines, if any — see `rustyfi_html::recover::find_heading_level`.
     pub(super) heading_level: Option<i64>,
     /// The destination name that heading was registered under, so the
     /// heading can carry a `\hypertarget` a `\ref` elsewhere can reach.
@@ -155,11 +156,11 @@ impl Para {
     }
 
     /// Is this paragraph a code block? The rule is
-    /// [`crate::recover::is_code_paragraph`], shared with the Markdown
+    /// [`rustyfi_html::recover::is_code_paragraph`], shared with the Markdown
     /// backend because it is a question about the box stream rather than
     /// about either output vocabulary.
     pub(super) fn is_code(&self) -> bool {
-        crate::recover::is_code_paragraph(self.mono, self.has_mono, self.lines, self.fil_lines)
+        recover::is_code_paragraph(self.mono, self.has_mono, self.lines, self.fil_lines)
     }
 
     pub(super) fn note_line(&mut self, ended_with_fil: bool) {
@@ -170,12 +171,12 @@ impl Para {
     }
 
     /// Does the last text written end in a hyphen? Asked at a line boundary,
-    /// where `crate::recover::line_join` needs to know whether there is a
+    /// where `rustyfi_html::recover::line_join` needs to know whether there is a
     /// hyphen at all before deciding whose it is.
     pub(super) fn ends_with_hyphen(&self) -> bool {
         match self.pieces.last() {
             Some(Piece::Text { s, .. }) => {
-                s.chars().next_back().is_some_and(crate::recover::is_hyphen)
+                s.chars().next_back().is_some_and(recover::is_hyphen)
             }
             _ => false,
         }
@@ -185,7 +186,7 @@ impl Para {
     /// just closed, so the word it split comes back together.
     pub(super) fn drop_break_hyphen(&mut self) {
         if let Some(Piece::Text { s, .. }) = self.pieces.last_mut() {
-            if s.chars().next_back().is_some_and(crate::recover::is_hyphen) {
+            if s.chars().next_back().is_some_and(recover::is_hyphen) {
                 s.pop();
             }
         }
@@ -223,7 +224,11 @@ impl Para {
         }
         let one_line = collapse_spaces(trimmed);
         let text = match self.heading_level {
-            Some(level) => heading(crate::recover::heading_depth(level), &one_line, self.heading_dest.as_deref()),
+            Some(level) => heading(
+                recover::heading_depth(level),
+                &one_line,
+                self.heading_dest.as_deref(),
+            ),
             None => one_line,
         };
         Some(Rendered { text, code: false })
@@ -324,7 +329,7 @@ impl Para {
             match piece {
                 Piece::Text { s, .. } => out.push_str(s),
                 Piece::Gap(pt) => {
-                    for _ in 0..crate::recover::gap_spaces(*pt, advance) {
+                    for _ in 0..recover::gap_spaces(*pt, advance) {
                         out.push(' ');
                     }
                 }
@@ -489,13 +494,13 @@ fn mono_run_text(run: &[Piece]) -> (bool, String, bool) {
 /// single spaces, and drop them at the edges.
 ///
 /// This is not only tidiness, which is why it is
-/// [`crate::collapse_whitespace`] rather than a local trim. A BLANK line
+/// [`rustyfi_html::collapse_whitespace`] rather than a local trim. A BLANK line
 /// inside what this backend is about to write as one paragraph starts a new
 /// one in LaTeX, and a line beginning with spaces after a `\\` is a different
 /// thing again; folding the whole paragraph onto one line makes both
 /// unreachable.
 fn collapse_spaces(s: &str) -> String {
-    crate::collapse_whitespace(s)
+    rustyfi_html::collapse_whitespace(s)
 }
 
 #[cfg(test)]
@@ -644,9 +649,9 @@ mod tests {
 
     #[test]
     fn gap_spaces_recovers_the_source_column_count() {
-        assert_eq!(crate::recover::gap_spaces(15.0, Some(5.0)), 3);
-        assert_eq!(crate::recover::gap_spaces(0.0, Some(5.0)), 0);
-        assert_eq!(crate::recover::gap_spaces(15.0, None), 1);
-        assert_eq!(crate::recover::gap_spaces(0.0, None), 0);
+        assert_eq!(recover::gap_spaces(15.0, Some(5.0)), 3);
+        assert_eq!(recover::gap_spaces(0.0, Some(5.0)), 0);
+        assert_eq!(recover::gap_spaces(15.0, None), 1);
+        assert_eq!(recover::gap_spaces(0.0, None), 0);
     }
 }

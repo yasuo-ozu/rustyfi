@@ -231,7 +231,11 @@ fn latex_spaces_itself(atoms: &[Atom<'_>], i: usize) -> bool {
 ///   error.
 /// - **Arrows** (U+2190–U+21FF) and the long forms (U+27F0–U+27FF) are Rel.
 /// - The ASCII and Latin-1 operators, which have no block of their own.
-fn auto_spaced(c: char) -> bool {
+///
+/// `pub(crate)` for [`crate::mathml`], which asks the identical question of
+/// MathML Core's operator dictionary — Core's dictionary IS these classes, so
+/// a second table would be a second chance to disagree with this one.
+pub(crate) fn auto_spaced(c: char) -> bool {
     matches!(c,
         '+' | '-' | '=' | '<' | '>' | ':' | ',' | ';' | '*' | '/'
         | '\u{00AC}' | '\u{00B1}' | '\u{00D7}' | '\u{00F7}' | '\u{2212}'
@@ -524,7 +528,11 @@ fn accent_command(c: char) -> Option<&'static str> {
 /// The Unicode "Combining Diacritical Marks" block plus the two combining
 /// ranges a math font actually reaches. Used to keep a mark out of `\text{…}`,
 /// where KaTeX cannot lex it; see [`accent_command`].
-fn is_combining(c: char) -> bool {
+///
+/// `pub(crate)` for [`crate::mathml`], which needs the same set for the
+/// opposite purpose — a lone combining mark is exactly what it turns into an
+/// `<mover accent="true">`, which is the shape this module cannot write.
+pub(crate) fn is_combining(c: char) -> bool {
     matches!(c as u32,
         0x0300..=0x036F      // Combining Diacritical Marks
         | 0x20D0..=0x20F0    // Combining Diacritical Marks for Symbols

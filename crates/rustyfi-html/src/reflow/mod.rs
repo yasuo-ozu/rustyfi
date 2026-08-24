@@ -666,8 +666,10 @@ fn render_html_reflow_impl(
     out.push_str("<style>\n");
     out.push_str(&css::stylesheet(geometry, &ctx));
     // Empty unless `--katex` — see `css::math_tex_rules` on why it is not
-    // folded into the sheet above.
+    // folded into the sheet above. Likewise `--mathml`; the two modes are
+    // mutually exclusive, so at most one of them ever writes anything.
     out.push_str(&css::math_tex_rules(&ctx));
+    out.push_str(&css::math_ml_rules(&ctx));
     // Reads state the body walk filled in, so it must come after it: which
     // images were placed often enough to be worth sharing. (No
     // `@font-face` counterpart — this backend names fonts rather than

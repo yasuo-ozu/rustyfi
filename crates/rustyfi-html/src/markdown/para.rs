@@ -104,6 +104,31 @@ pub(super) enum Piece {
         block: String,
         plain: String,
     },
+    /// An equation as MathML Core (`--mathml`), as the CHILDREN of a `<math>`
+    /// element that has not been written yet.
+    ///
+    /// The same deferral [`Piece::Math`] makes, for the same reason and one
+    /// more. Whether the element says `display="block"` or `display="inline"`
+    /// is a property of the PARAGRAPH — and it is not decoration: in block
+    /// display a browser sets `math-style: normal`, which puts a big
+    /// operator's limits above and below at full size. And whether the element
+    /// may be broken across lines is the [`Piece::MathSvg`] question, with the
+    /// same CommonMark answer.
+    ///
+    /// The body is ONE LINE in both shapes — `crate::mathml`'s doc comment has
+    /// the measurement behind that, and the short version is that
+    /// [`Para::render`]'s `collapse_spaces` folds a pretty-printed element back
+    /// onto one line anyway, so emitting newlines only converts them into
+    /// whitespace text nodes inside the MathML tree.
+    ///
+    /// `approx` is `crate::mathml::Approx::Approx` when this box drew ink the
+    /// recovery could not account for; it decides the class on the `<math>`
+    /// and combines with the other boxes' verdicts when they merge.
+    MathMl {
+        body: String,
+        plain: String,
+        approx: crate::mathml::Approx,
+    },
     /// An emphasis delimiter. Kept distinct from [`Piece::Markup`] because a
     /// Markdown delimiter may not sit against the whitespace inside its own
     /// span (`* text *` is not emphasis) — see [`Para::render`], which moves
@@ -357,11 +382,53 @@ impl Para {
                 Piece::Math { latex, .. } => maths.push(latex.as_str()),
                 Piece::Text { s, .. } if !s.trim().is_empty() => return None,
                 Piece::Markup { md, .. } if !md.trim().is_empty() => return None,
-                Piece::MathSvg { .. } | Piece::LinkOpen(_) => return None,
+                Piece::MathSvg { .. } | Piece::MathMl { .. } | Piece::LinkOpen(_) => {
+                    return None
+                }
                 _ => {}
             }
         }
         (!maths.is_empty()).then_some(maths)
+    }
+
+    /// [`Para::display_math`]'s question for `--mathml`: is this paragraph
+    /// nothing but MathML equations, and if so what are all their children and
+    /// the combined verdict on their ink?
+    ///
+    /// Several boxes still make ONE displayed equation, exactly as they do for
+    /// `--katex` — `latexcmds`' Schrödinger equation reaches this backend as
+    /// four boxes — so the children are concatenated into a single `<math
+    /// display="block">` rather than each getting an element. Four block
+    /// elements would be four centred lines where the document has one.
+    ///
+    /// A cell declines for [`Para::display_math`]'s reason. It is not about
+    /// line breaks here — the element is one line either way — but about what
+    /// `display="block"` MEANS: a browser makes it a block-level box, which
+    /// inside a `|` row is a full-width band that breaks the table, exactly as
+    /// a `$$…$$` does.
+    fn display_math_ml(&self, in_cell: bool) -> Option<(String, crate::mathml::Approx)> {
+        if in_cell {
+            return None;
+        }
+        let mut body = String::new();
+        let mut any = false;
+        let mut approx = crate::mathml::Approx::Exact;
+        for piece in &self.pieces {
+            match piece {
+                Piece::MathMl {
+                    body: b, approx: a, ..
+                } => {
+                    body.push_str(b);
+                    approx = approx.or(*a);
+                    any = true;
+                }
+                Piece::Text { s, .. } if !s.trim().is_empty() => return None,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return None,
+                Piece::MathSvg { .. } | Piece::Math { .. } | Piece::LinkOpen(_) => return None,
+                _ => {}
+            }
+        }
+        any.then_some((body, approx))
     }
 
     /// Is this paragraph nothing but DRAWN equations — i.e. was the equation
@@ -397,7 +464,7 @@ impl Para {
                 Piece::MathSvg { .. } => svgs += 1,
                 Piece::Text { s, .. } if !s.trim().is_empty() => return false,
                 Piece::Markup { md, .. } if !md.trim().is_empty() => return false,
-                Piece::Math { .. } | Piece::LinkOpen(_) => return false,
+                Piece::Math { .. } | Piece::MathMl { .. } | Piece::LinkOpen(_) => return false,
                 _ => {}
             }
         }
@@ -412,6 +479,17 @@ impl Para {
         // than each getting delimiters of its own.
         if let Some(maths) = self.display_math(in_cell) {
             return format!("$${}$$", maths.join(" "));
+        }
+        // The same question for `--mathml`. `display="block"` is not
+        // decoration: a browser sets `math-style: normal` for it, which puts a
+        // big operator's limits above and below at full size and sets a
+        // fraction at display proportions. See [`Para::display_math_ml`].
+        if let Some((body, approx)) = self.display_math_ml(in_cell) {
+            return format!(
+                "{}{body}{}",
+                crate::mathml::open_tag(true, approx),
+                crate::mathml::CLOSE_TAG,
+            );
         }
         // The same question for a drawn equation: alone in its own block, the
         // `<svg>` may be broken across lines and indented.
@@ -473,6 +551,20 @@ impl Para {
                     &mut pending_open,
                     if pretty_svg { block } else { inline },
                 ),
+                // MathML set inside a sentence. Inline by construction: a
+                // paragraph whose only ink is equations returned above. One
+                // line, like every other shape this mode writes — a Markdown
+                // paragraph is one line, and a renderer with `breaks: true`
+                // puts a `<br>` at every newline, including the ones inside a
+                // `<math>`.
+                Piece::MathMl { body, approx, .. } => {
+                    let markup = format!(
+                        "{}{body}{}",
+                        crate::mathml::open_tag(false, *approx),
+                        crate::mathml::CLOSE_TAG,
+                    );
+                    push_markup(&mut out, &mut pending_open, &markup);
+                }
                 Piece::Math { latex, .. } => {
                     // Two equations may sit side by side with nothing between
                     // them — one construction routinely produces several math
@@ -570,7 +662,8 @@ impl Para {
                 // equation its characters rather than its LaTeX.
                 Piece::Markup { plain, .. }
                 | Piece::Math { plain, .. }
-                | Piece::MathSvg { plain, .. } => out.push_str(plain),
+                | Piece::MathSvg { plain, .. }
+                | Piece::MathMl { plain, .. } => out.push_str(plain),
                 Piece::EmphOpen(_)
                 | Piece::EmphClose(_)
                 | Piece::LinkOpen(_)

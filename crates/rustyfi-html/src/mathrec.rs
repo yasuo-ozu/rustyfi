@@ -187,6 +187,53 @@ pub(crate) enum DelimKind {
     Unknown,
 }
 
+impl DelimKind {
+    /// The Unicode character this delimiter's OPENING half is written as, for
+    /// the two backends that write characters rather than LaTeX command names
+    /// (`crate::markdown::math`'s `--unicode-math`, and `crate::mathml`'s
+    /// `<mo>`).
+    ///
+    /// It lives on the enum rather than in either caller because it is the
+    /// same table for both — the module doc of `crate::recover` states the
+    /// rule this follows, and a third copy is exactly what it warns about.
+    /// `crate::latex` keeps its own, and that is not a fork: LaTeX wants
+    /// COMMAND NAMES (`\lfloor`), which are not characters at all.
+    ///
+    /// [`DelimKind::Unknown`] has no character by definition — a path was
+    /// drawn and matched no signature — so it yields `None` and the caller
+    /// writes the group without a fence.
+    pub(crate) fn open_char(self) -> Option<char> {
+        Some(match self {
+            DelimKind::Paren => '(',
+            DelimKind::Bracket => '[',
+            DelimKind::Brace => '{',
+            DelimKind::Floor => '\u{230A}',
+            DelimKind::Ceil => '\u{2308}',
+            DelimKind::Abs => '|',
+            DelimKind::Norm => '\u{2016}',
+            DelimKind::Angle => '\u{27E8}',
+            DelimKind::Unknown => return None,
+        })
+    }
+
+    /// [`DelimKind::open_char`]'s mirror. Separate rather than one function
+    /// returning a pair, because the two halves of an [`Atom::Delim`] are
+    /// independently `Option`al and a caller asks about one at a time.
+    pub(crate) fn close_char(self) -> Option<char> {
+        Some(match self {
+            DelimKind::Paren => ')',
+            DelimKind::Bracket => ']',
+            DelimKind::Brace => '}',
+            DelimKind::Floor => '\u{230B}',
+            DelimKind::Ceil => '\u{2309}',
+            DelimKind::Abs => '|',
+            DelimKind::Norm => '\u{2016}',
+            DelimKind::Angle => '\u{27E9}',
+            DelimKind::Unknown => return None,
+        })
+    }
+}
+
 /// One recovered piece of a math run, in reading order.
 ///
 /// A tree, not a list: [`Atom::Frac`]'s halves, [`Atom::Delim`]'s body and
@@ -443,6 +490,61 @@ fn collect_paths(rules: &[GraphicsElem], out: &mut Vec<PathShape>) {
             _ => {}
         }
     }
+}
+
+/// How many things a math box's `rules` actually DRAW, counting through
+/// groups and clips.
+///
+/// The complement of what [`fraction_bars`] finds a use for, and the only
+/// evidence available at this layer that something was drawn which the
+/// recovery cannot name. A `math-paren` delimiter, a radical sign, an
+/// `\overline` and a fraction bar are all `Fill`s with no tag distinguishing
+/// them, so "was it recovered" is the only question that can be asked — and
+/// the answer is a COUNT rather than a predicate because a run may hold a
+/// fraction and a radical at once.
+///
+/// `Text` and `Destination` draw nothing themselves: the first is a
+/// positioning wrapper whose contents the caller emits as HTML (see
+/// `crate::mathsvg::rules_have_ink`, which asks the boolean form of this
+/// question for a different purpose) and the second is a link target.
+///
+/// Used by [`crate::mathml`] to decide whether a run is `rustyfi-approx`.
+/// `crate::latex` does not consult it: `--katex` states its losses once, in
+/// prose, and has no per-equation channel to report them through.
+pub(crate) fn inked_paths(rules: &[GraphicsElem]) -> usize {
+    rules
+        .iter()
+        .map(|elem| match elem {
+            GraphicsElem::Text { .. } | GraphicsElem::Destination { .. } => 0,
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inked_paths(inner),
+            _ => usize::from(paints(elem)),
+        })
+        .sum()
+}
+
+/// Does this element put ink on the page, as opposed to existing only to
+/// report an EXTENT?
+///
+/// A `Math::Radical` emits three `Fill`s, not two: the checkmark sign, the
+/// overbar, and a single-point subpath with no segments carrying the extra
+/// ascender above the bar (`primitives.rs`'s `Math::Radical` arm, which says
+/// so — "a subpath with a `move_to` and no further segments paints nothing",
+/// and it is there only so the headroom reaches the outer box through the
+/// same `graphics_bbox` fold every rule goes through).
+///
+/// Counting that third one is what [`inked_paths`]'s own name denies, and it
+/// is not academic: it made every `\sqrt` equation `rustyfi-approx` — one
+/// unaccountable path — the moment the recovery learned to read radicals.
+/// A zero-length path is degenerate under `closing` too, so the test is on
+/// the segments rather than on the subpath count.
+fn paints(elem: &GraphicsElem) -> bool {
+    let path = match elem {
+        GraphicsElem::Fill(_, p) => p,
+        GraphicsElem::Stroke(_, _, p) | GraphicsElem::DashedStroke(_, _, _, p) => p,
+        // An image or anything else that is not a path draws by existing.
+        _ => return true,
+    };
+    path.subpaths.iter().any(|s| !s.segs.is_empty())
 }
 
 fn outline_of(p: &Path) -> Vec<Vec<(f64, f64)>> {

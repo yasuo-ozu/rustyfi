@@ -213,8 +213,18 @@ fn push_delimiter(out: &mut String, width: usize) {
 pub(super) fn render_aligned_equation(tab: &TabularBox, ctx: &Ctx) -> Vec<String> {
     let rows = crate::recover::table_rows(tab);
     match ctx.math {
-        // Both drawing modes: one block per row, the row's cells joined.
-        crate::MathMode::SvgOutline | crate::MathMode::SvgText => rows
+        // Both drawing modes, and `--mathml`: one block per row, the row's
+        // cells joined.
+        //
+        // MathML takes this arm rather than `--katex`'s even though it could
+        // in principle say more — `<mtable columnalign="right left">` is its
+        // spelling for an alignment point, so the same argument that makes
+        // `\begin{aligned}` a translation would apply. It is not done here
+        // because that is a NEW rendering with no counterpart above it, and
+        // one block per row is the trade the section below already justifies:
+        // each row is a whole equation, and only the alignment BETWEEN rows
+        // is lost. Worth revisiting on its own, not inside a merge.
+        crate::MathMode::SvgOutline | crate::MathMode::SvgText | crate::MathMode::MathMl => rows
             .iter()
             .filter_map(|row| render_row(row, ctx))
             .collect(),

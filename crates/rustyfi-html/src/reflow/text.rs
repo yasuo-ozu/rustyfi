@@ -156,6 +156,50 @@ pub(crate) fn sole_math_tex(html: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
+/// [`sole_math_tex`]'s question for `--mathml`: a flushed paragraph that holds
+/// MathML equations and nothing else, as the CHILDREN of the one
+/// `display="block"` element they should become, plus the combined verdict on
+/// their ink.
+///
+/// **Why the shape can be decided by scanning, when the body is full of
+/// markup.** [`sole_math_tex`] can rely on its body containing no `<` at all;
+/// this one cannot, so it matches the two ENDS instead. That is sound for a
+/// narrower reason, and the reason is structural rather than lucky: this
+/// backend never nests a `<math>` inside another one — `crate::mathml` writes
+/// no `<annotation-xml>` and no `<semantics>`, the only Core elements that
+/// could contain one — so the first `</math>` after an opening `<math ` is
+/// unambiguously that element's end. Everything between them is by
+/// construction one element's children and is copied through untouched.
+///
+/// The `approx` verdict is read back OFF THE OPEN TAG rather than being
+/// threaded through the buffer, because by this point the paragraph is a
+/// string and the boxes are gone. `crate::mathml::APPROX_CLASS` is the one
+/// name both sides use.
+pub(crate) fn sole_math_ml(html: &str) -> Option<(String, crate::mathml::Approx)> {
+    const OPEN: &str = "<math ";
+    let mut rest = html.trim();
+    let mut parts: Vec<&str> = Vec::new();
+    let mut approx = crate::mathml::Approx::Exact;
+    while !rest.is_empty() {
+        rest = strip_hskip(rest);
+        if rest.is_empty() {
+            break;
+        }
+        let after_open = rest.strip_prefix(OPEN)?;
+        // An attribute value here is written by `crate::mathml::open_tag` and
+        // holds no `>`, so the first one ends the open tag.
+        let tag_end = after_open.find('>')?;
+        if after_open[..tag_end].contains(crate::mathml::APPROX_CLASS) {
+            approx = crate::mathml::Approx::Approx;
+        }
+        let body = &after_open[tag_end + 1..];
+        let end = body.find(crate::mathml::CLOSE_TAG)?;
+        parts.push(&body[..end]);
+        rest = body[end + crate::mathml::CLOSE_TAG.len()..].trim_start();
+    }
+    (!parts.is_empty()).then(|| (parts.concat(), approx))
+}
+
 /// Drop any leading spacing struts, and the whitespace after them.
 ///
 /// **Without this the display upgrade essentially never fires**, which is how

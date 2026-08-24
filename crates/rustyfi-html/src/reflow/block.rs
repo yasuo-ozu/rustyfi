@@ -523,6 +523,23 @@ fn flush_para(
                 // the first point at which the whole paragraph is visible, so
                 // it is where the two can be told apart; see
                 // `text::sole_math_tex`.
+                // `--mathml`: the same distinction, and it is not cosmetic
+                // there either — a browser sets `math-style: normal` for
+                // `display="block"`, which puts a big operator's limits above
+                // and below at full size and sets a fraction at display
+                // proportions. Several boxes' children merge into ONE element;
+                // see `text::sole_math_ml`.
+                None if super::text::sole_math_ml(trimmed).is_some() => {
+                    let (body, approx) =
+                        super::text::sole_math_ml(trimmed).expect("just matched");
+                    let style = style_attr(&[&margin]);
+                    let _ = writeln!(
+                        out,
+                        "<p class=\"para math-display\"{style}>{}{body}{}</p>",
+                        crate::mathml::open_tag(true, approx),
+                        crate::mathml::CLOSE_TAG,
+                    );
+                }
                 None if super::text::sole_math_tex(trimmed).is_some() => {
                     let latex =
                         super::text::sole_math_tex(trimmed).expect("just matched");

@@ -207,6 +207,21 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
                         para.pieces.push(Piece::Math { latex, plain });
                     }
                 }
+                crate::MathMode::MathMl => {
+                    // The `<math>` element itself is written at flush time —
+                    // whether it says `display="block"` and whether it may be
+                    // broken across lines are properties of the paragraph, not
+                    // of the box. See `para.rs`'s `Piece::MathMl`.
+                    let (body, approx) = crate::mathml::math_mathml(glyphs, rules);
+                    if !body.is_empty() {
+                        math_flow(para, ctx, &plain);
+                        para.pieces.push(Piece::MathMl {
+                            body,
+                            plain,
+                            approx,
+                        });
+                    }
+                }
                 crate::MathMode::Unicode => {
                     if !plain.is_empty() {
                         math_flow(para, ctx, &plain);
@@ -378,7 +393,16 @@ fn math_flow(para: &mut Para, ctx: &Ctx, plain: &str) {
 /// wildcard answering it silently.
 fn draws_math(mode: crate::MathMode) -> bool {
     match mode {
-        crate::MathMode::SvgOutline | crate::MathMode::SvgText | crate::MathMode::Katex => true,
+        // `MathMl` sits with `Katex` rather than with `Unicode`: it is a
+        // TYPESETTING target, not a transliteration. `<math>` carries the
+        // alignment as structure the browser lays out, so the grid around it
+        // is the same artefact of `math.satyh` it is for the drawing modes —
+        // whereas `--unicode-math` has only characters and nothing else to
+        // align with.
+        crate::MathMode::SvgOutline
+        | crate::MathMode::SvgText
+        | crate::MathMode::Katex
+        | crate::MathMode::MathMl => true,
         crate::MathMode::Unicode => false,
     }
 }

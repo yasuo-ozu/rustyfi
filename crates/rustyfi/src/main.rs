@@ -189,7 +189,7 @@ fn parse_format(m: &ArgMatches) -> format::OutputFormat {
         .unwrap_or(format::OutputFormat::Pdf)
 }
 
-/// Fold the four math flags into `format`, refusing a combination that has no
+/// Fold the five math flags into `format`, refusing a combination that has no
 /// meaning.
 ///
 /// Each format already carries the math mode that suits its typical reader
@@ -205,18 +205,20 @@ fn parse_format(m: &ArgMatches) -> format::OutputFormat {
 /// `--unicode-math` on `--format html` — the page would come out full of drawn
 /// equations and the only evidence would be that the flag had no effect.
 ///
-/// The three are mutually exclusive with each other, but clap enforces that
-/// (see `dispatch.rs`'s `math_mode` `ArgGroup`) and reports it in its own
-/// usage style, so it is not re-checked here.
+/// They are mutually exclusive with each other, but clap enforces that (see
+/// `dispatch.rs`'s `math_mode` `ArgGroup`) and reports it in its own usage
+/// style, so it is not re-checked here.
 ///
 /// Which flag is valid where, and why:
 ///
-/// - **`--svg-outline-math`, `--svg-math` and `--katex` with `html` or
-///   `markdown`.** Both formats can carry any of the three; which one is the
-///   DEFAULT differs, and naming the one that is already the default is
+/// - **`--svg-outline-math`, `--svg-math`, `--katex` and `--mathml` with
+///   `html` or `markdown`.** Both formats can carry any of the four; which one
+///   is the DEFAULT differs, and naming the one that is already the default is
 ///   accepted rather than refused — stating an intent explicitly is not an
 ///   error, and a script that passes `--svg-math` should not break if the
-///   default it happens to match changes underneath it.
+///   default it happens to match changes underneath it. `--mathml` is a
+///   default nowhere: it is the same re-derivation `--katex` is, so it carries
+///   the same losses, and its support floor is a browser from 2023.
 /// - **`--unicode-math` with `markdown` only.** It is a plain-TEXT fallback
 ///   whose entire purpose is to survive a renderer that strips markup — the
 ///   case an HTML document is definitionally not in. The HTML backend can
@@ -239,6 +241,8 @@ fn apply_math_flags(
         ("--svg-math", MathMode::SvgText)
     } else if m.get_flag("katex") {
         ("--katex", MathMode::Katex)
+    } else if m.get_flag("mathml") {
+        ("--mathml", MathMode::MathMl)
     } else if m.get_flag("unicode_math") {
         ("--unicode-math", MathMode::Unicode)
     } else {
@@ -466,8 +470,8 @@ fn cmd_compile(m: &ArgMatches, format: format::OutputFormat) -> anyhow::Result<(
         // fills alongside `extras`, once `fire_hooks` has run — so `\href`s
         // become real `<a href>`s. Mirrors the arm above for the font-store
         // branch.
-        // `math` is `--katex` or the default outlined SVG; `--unicode-math`
-        // cannot reach here (see `apply_math_flags`).
+        // `math` is `--katex`, `--mathml` or the default outlined SVG;
+        // `--unicode-math` cannot reach here (see `apply_math_flags`).
         format::OutputFormat::Html(math) => match &font_store {
             Some(store) => rustyfi_html::render_html_reflow_ttf_with_decos(
                 doc.reflow_source.as_deref(),

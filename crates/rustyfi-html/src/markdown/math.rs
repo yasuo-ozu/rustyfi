@@ -89,11 +89,11 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
             // guessing at a pair of brackets — the same choice `--katex`
             // makes, and the same one this module makes everywhere else.
             Atom::Delim { open, close, body } => {
-                if let Some(c) = open.and_then(delim_open) {
+                if let Some(c) = open.and_then(DelimKind::open_char) {
                     out.push(c);
                 }
                 out.push_str(&write_atoms(body));
-                if let Some(c) = close.and_then(delim_close) {
+                if let Some(c) = close.and_then(DelimKind::close_char) {
                     out.push(c);
                 }
             }
@@ -106,34 +106,6 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
         }
     }
     out
-}
-
-fn delim_open(k: DelimKind) -> Option<char> {
-    Some(match k {
-        DelimKind::Paren => '(',
-        DelimKind::Bracket => '[',
-        DelimKind::Brace => '{',
-        DelimKind::Floor => '\u{230A}',
-        DelimKind::Ceil => '\u{2308}',
-        DelimKind::Abs => '|',
-        DelimKind::Norm => '\u{2016}',
-        DelimKind::Angle => '\u{27E8}',
-        DelimKind::Unknown => return None,
-    })
-}
-
-fn delim_close(k: DelimKind) -> Option<char> {
-    Some(match k {
-        DelimKind::Paren => ')',
-        DelimKind::Bracket => ']',
-        DelimKind::Brace => '}',
-        DelimKind::Floor => '\u{230B}',
-        DelimKind::Ceil => '\u{2309}',
-        DelimKind::Abs => '|',
-        DelimKind::Norm => '\u{2016}',
-        DelimKind::Angle => '\u{27E9}',
-        DelimKind::Unknown => return None,
-    })
 }
 
 /// Parenthesize a fraction half unless it is a single token, so `1/2` stays

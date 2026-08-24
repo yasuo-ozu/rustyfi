@@ -177,6 +177,7 @@ url = "https://example.org/another-index"
 | `--svg-math` | html and markdown: equations as SVG `<text>` + `<rect>` — markdown's default; see [How math is written](#how-math-is-written) |
 | `--svg-outline-math` | html and markdown: equations as outline paths with selectable text behind them — html's default |
 | `--katex` | html and markdown: equations as LaTeX in math delimiters, for a KaTeX/MathJax reader |
+| `--mathml` | html and markdown: equations as MathML Core, laid out by the browser itself |
 | `--unicode-math` | markdown only: equations as their characters (`x²`) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
@@ -259,7 +260,9 @@ on the rest.
 `--svg-math` draws the same equations with SVG `<text>` and `<rect>` instead,
 which is 0.70x the bytes raw and 0.57x gzipped and depends on the reader
 having the document's faces; `--katex` writes them as LaTeX in `\(…\)`/`\[…\]`
-for a page that runs KaTeX or MathJax. See
+for a page that runs KaTeX or MathJax; `--mathml` writes MathML Core, which the
+browser lays out itself with nothing loaded and nothing run (0.53x raw, 0.42x
+gzipped). See
 [How math is written](#how-math-is-written), including what a re-derivation
 from laid-out glyphs cannot give back.
 
@@ -598,9 +601,10 @@ the file is going to be read.
 | `--svg-math` | **default** | ✔ | SVG `<text>` + `<rect>`/`<line>`, positioned by the layout |
 | `--svg-outline-math` | ✔ | **default** | an outline `<path>` per glyph, characters kept behind it |
 | `--katex` | ✔ | ✔ | LaTeX in math delimiters |
+| `--mathml` | ✔ | ✔ | MathML Core elements, laid out by the browser |
 | `--unicode-math` | ✔ | — | the characters, in reading order |
 
-The four are mutually exclusive, and all four are an error with
+The five are mutually exclusive, and all five are an error with
 `--format pdf`, which typesets the equation itself. **The defaults differ by
 format on purpose**: an HTML page is self-contained and nobody reads it as
 source, so it gets the rendering that reproduces the PDF exactly and depends
@@ -761,6 +765,107 @@ into an undefined command), it does not let two inline formulas run their
 delimiters together into a stray `$$`, and it does not read a script as a
 LIMIT merely because its midpoint happens to coincide with a run of base
 glyphs — `${x^2+y^2+z^2-xy-yz-zx}` is exactly that coincidence.
+
+### `--mathml`: structure the browser lays out
+
+```console
+$ rustyfi --format html --mathml doc.saty
+$ rustyfi --format markdown --mathml doc.saty
+```
+
+The equation becomes MathML Core in the document's own tree — `<mfrac>`,
+`<msub>`, `<msubsup>`, `<munderover>`, `<mover accent="true">`, `<mi>`, `<mn>`,
+`<mo>`, `<mtext>` — and the browser typesets it. Nothing is loaded and nothing
+runs, unlike `--katex`; the equation is real structure rather than a picture,
+unlike either SVG mode, so a screen reader reads it as mathematics and the
+browser's own in-page find works on it.
+
+```html
+<p class="para math-display"><math xmlns="http://www.w3.org/1998/Math/MathML"
+   class="math-ml" display="block"><munderover><mo movablelimits="false">∑</mo
+   ><mrow><mi>𝑘</mi><mo>=</mo><mn>1</mn></mrow><mi>𝑛</mi></munderover><mi>𝑘</mi></math></p>
+```
+
+**MathML Core, not MathML 3.** Core is the profile browsers actually implement
+— Firefox always, Safari since 2013, Chromium since 109 — and its layout is
+specified in CSS terms. Two of its restrictions shape the output and both look
+like omissions until you know why:
+
+- **`mathvariant` has one legal value in Core, `normal`.** It is not needed:
+  SATySFi writes the style into the *codepoint* (`${\bold{R}}` is laid out as
+  `𝐑` U+1D411), so bold, script, fraktur and double-struck survive as
+  themselves. What the attribute *is* used for is the opposite case — a plain
+  ASCII `x` reaching a backend is a letter the document set **upright**, since
+  math italic would have been written as `𝑥`, so it is pinned with
+  `mathvariant="normal"` against Core's automatic italicisation of a lone
+  letter.
+- **`movablelimits` is pinned off on every operator base.** The dictionary
+  marks `∑` and friends movable, so a browser would re-decide whether their
+  scripts go beside or under according to the display style — overwriting a
+  position this port measured. `\sum`'s limits are centred and come out
+  `<munderover>`; `\int`'s are set beside and come out `<msubsup>`; both stay
+  put.
+
+An equation alone in its paragraph is `display="block"`, which is not
+decoration: in block display a browser sets `math-style: normal`, putting a big
+operator's limits above and below at full size. Several math boxes in one
+paragraph merge into **one** element — a formula is not one box.
+
+**It is the same re-derivation `--katex` is**, from the same recovery, so
+[the table above](#what---katex-cannot-recover) applies to it unchanged. Two
+things it does recover that `--katex` structurally cannot, because MathML has
+an element for the shape: an accent binds to its base (`<mover accent="true">`
+rather than `x\hat{}` side by side), and a centred limit stays a limit on any
+base (`\limits` is legal in LaTeX only after a large operator).
+
+### What `--mathml` does about what it cannot recover
+
+**Nothing is invented.** No `<msqrt>`, `<mroot>`, `<mtable>` or delimiter
+`<mo>` is ever synthesized: every element written stands for something the
+recovery actually found. An `<msqrt>` guessed from "there is a wide flat fill
+here" would render as a fact, and confident-looking MathML for a mis-recovered
+construct is worse than visibly rough text, because it reads as authoritative.
+
+**What is done instead is to mark it.** A `<math>` whose rendering this layer
+knows does not match the PDF carries `class="rustyfi-approx"`, for one of two
+detectable reasons: an inked path that did not become a fraction bar (a
+`math-paren` delimiter, a radical sign, an `\overline` — drawn in the PDF, with
+no character to recover and nothing in Core that draws a path), or an accent
+with no base in its run, which is emitted over an empty group and so renders
+beside its character instead of over it. The class has no styling of its own;
+it exists so the loss is countable:
+
+```console
+$ rustyfi --format html --mathml latexcmds-doc.saty && grep -c rustyfi-approx …
+```
+
+Measured: **6 of 48 equations in `latexcmds`, 279 of 561 in `azmath`** — and
+in `azmath` 232 of those are one shape, its `accent.satyh` building every
+accent out of `math-graphics` and two `draw-text`s, so the base and the mark
+arrive as separate math boxes that cannot be paired. Degrading a marked run to
+plain text instead was tried and rejected on that measurement: it would demote
+correctly recovered fractions, scripts and limits along with the parenthesis it
+cannot put back either way.
+
+**In Markdown it is raw HTML**, so it shares the SVG modes' constraints: a
+sanitizing renderer strips it, and every element is written on one line so that
+a renderer with `breaks: true` cannot inject a `<br>` into it and no blank line
+can ever terminate the HTML block. Verified end to end against `marked` with
+`breaks` enabled, across `latexcmds` and `azmath`: 609 elements in, 609 out, no
+`<br>` inside one and nothing escaped to literal text.
+
+Size, on the same documents, against the outline mode:
+
+| | `latexcmds` md | html | `azmath` md | html |
+|---|---|---|---|---|
+| `--svg-outline-math` | 1.00x | 1.00x | 1.00x | 1.00x |
+| `--svg-math` | 0.43x | 0.70x | 0.40x | 0.56x |
+| `--katex` | 0.16x | 0.51x | 0.03x | 0.15x |
+| `--mathml` | **0.20x** | **0.53x** | **0.11x** | **0.19x** |
+
+Gzipped the four sit at 1.00x / 0.45x / 0.25x / **0.27x** on `latexcmds`
+Markdown — MathML is a little larger than the LaTeX it is derived from, which
+is the cost of being markup rather than a language.
 
 ## Editor support
 

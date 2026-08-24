@@ -118,7 +118,7 @@ use std::fmt::Write as _;
 
 use rustyfi_backend::{
     AnnotAction, DecoId, DocExtras, FontKey, FrameDecoration, GraphicsElem, ImageResource,
-    PageGeometry, VertBox,
+    MathGlyph, PageGeometry, VertBox,
 };
 
 use rustyfi_pdf::TtfFontStore;
@@ -316,6 +316,24 @@ impl Ctx<'_> {
         store
             .file_family_name(store.file_index(font))
             .is_some_and(|f| crate::fonts::is_monospace_family(&f))
+    }
+
+    /// The SVG `d` for a math glyph the document placed by GLYPH ID rather
+    /// than by character (`MathGlyph::gid`), plus the face's
+    /// `units_per_em` — `crate::svg::glyph_outline_d`'s two inputs resolved
+    /// against this render's font store.
+    ///
+    /// `None` for every ordinary cmap-driven glyph (`gid: None`), which the
+    /// caller renders as `<text>` exactly as before, and `None` in base-14
+    /// mode — where `FontMetrics::math_vertical_variant`/`math_script_variant`
+    /// answer `None` too, so no `Some(gid)` glyph can have been produced in
+    /// the first place.
+    pub(crate) fn math_glyph_outline(&self, glyph: &MathGlyph) -> Option<(String, f64)> {
+        let gid = glyph.gid?;
+        let face = self.fonts?.face(glyph.info.font)?;
+        let upem = f64::from(face.units_per_em());
+        let d = crate::svg::glyph_outline_d(&face, gid)?;
+        Some((d, upem))
     }
 
     /// Record that a glue box of `natural_pt` natural width stands here.

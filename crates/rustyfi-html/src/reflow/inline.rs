@@ -969,6 +969,13 @@ fn emit_math_svg(
     for g in glyphs {
         let x = g.dx.0;
         let y = height - g.dy.0 - g.info.rising.0;
+        // A glyph the document placed by GLYPH ID is drawn from its own
+        // outline, because no `<text>` can address it — see
+        // [`emit_math_glyph_path`].
+        if let Some((d, upem)) = ctx.math_glyph_outline(g) {
+            emit_math_glyph_path(&mut drawing, &d, upem, g, x, y);
+            continue;
+        }
         let mut style = format!("font-size:{};", math_font_size_uu(g.info.size.0));
         if let Some(stack) = ctx.font_family_for(g.info.font) {
             style.push_str(&format!("font-family:{stack};"));
@@ -1012,6 +1019,84 @@ fn emit_math_svg(
     out.push_str(&drawing);
     out.push_str(&nested);
     out.push_str("</span>\n");
+}
+
+/// One `MathGlyph` whose drawn form is a GLYPH ID rather than a character,
+/// as an SVG `<path>` of the face's own outline — placed at the same
+/// `(x, y)` the `<text>` branch would have used, which is the glyph's ORIGIN
+/// (pen position), not its top-left.
+///
+/// **What was wrong.** `MathGlyph::gid` is `Some` exactly when the glyph the
+/// document laid out is not the one its `text` cmaps to: an OpenType MATH
+/// `MathVariants` record — a display-size big operator (`push_big_char_glyph`),
+/// a stretchy delimiter or one part of a `GlyphAssembly` (`push_delimiter_
+/// glyph`) — or an `ssty` script form (`push_char_glyph`). The PDF writer
+/// emits the id straight into the content stream (`cid.rs`'s
+/// `encode_glyph_run`); an SVG `<text>` can only address the CHARACTER, so
+/// this backend drew the base glyph and there was no spelling of `∑` that
+/// would have produced the display one.
+///
+/// **It was two symptoms of one bug, and this fixes both.** The size was the
+/// visible half; the misplacement was the consequence. Measured on the
+/// playground's "Displayed equations" example at 12pt, in Latin Modern Math:
+/// `∑` is `summation` (advance 1.056 em) and the display variant is
+/// `summation.v1` (advance 1.444 em, ink 0.056..1.387 em).
+/// `layout_math_list`'s `UpperLimit`/`LowerLimit` arms centre each limit on
+/// the base's own width (`center_offsets`) — 17.328pt, the VARIANT's advance,
+/// because the variant is what the document laid out — so `n` and `k = 1`
+/// were both centred on x = 8.664, while the base-size `∑` this backend
+/// actually painted has its ink centred on x = 6.330. Every limit sat 2.334pt
+/// right of the operator it belonged to. `∫` shows the same arithmetic
+/// without the centring: its scripts are set to the RIGHT at the base's
+/// width, so the subscript began at x = 11.988 (again the variant's advance)
+/// with a 4.008pt gap after the 7.980pt base glyph. Drawing the variant
+/// closes both, because every one of those offsets was already right about a
+/// glyph that was not being drawn.
+///
+/// **Why the outline and not a scaled `<text>`**, the cheaper repair. Scaling
+/// the base glyph by the advance ratio fixes the horizontal centring by
+/// construction but not the ink: for `∑` the ratio is 1.367 against a true
+/// height+depth ratio of 1.400 (2.5% short — fine), but for `∫` it is 1.502
+/// against 2.000, leaving the integral 25% too short. The display forms are
+/// separately drawn glyphs, not scalings of the base, and the two operators
+/// the report names disagree by enough that no single scale factor serves
+/// both. The outline is what the PDF draws, so this makes the two backends
+/// agree rather than approximately agree — and it is also the only branch
+/// here that does not depend on the reader having Latin Modern Math
+/// installed, which for these glyphs is the difference between the right
+/// shape and an arbitrary substitute.
+///
+/// **Geometry.** `d` is in design units, y-up (`svg::glyph_outline_d`); the
+/// `<text>` around it is in the math `<svg>`'s native y-DOWN space, at
+/// 1 user unit = 1 pt. So the per-element transform is the whole conversion:
+/// translate to the pen position, then `scale(s, -s)` with
+/// `s = size / units_per_em` — the y-flip that [`emit_math_svg`] deliberately
+/// does NOT apply to `<text>` (it would mirror the letters) is exactly right
+/// for a filled path, which is orientation-independent.
+///
+/// **No `fill-rule`**, unlike every other path this backend writes. Glyph
+/// outlines are defined under NONZERO winding — SVG's default — and CFF faces
+/// in particular use overlapping contours that even-odd would punch holes in.
+/// `svg.rs`'s `Fill`/`Clip` arms say `evenodd` because they are reproducing
+/// PDF's `f*`; this is reproducing a font.
+fn emit_math_glyph_path(
+    out: &mut String,
+    d: &str,
+    upem: f64,
+    g: &MathGlyph,
+    x: f64,
+    y: f64,
+) {
+    let s = g.info.size.0 / upem;
+    let mut attrs = String::new();
+    if g.info.color != Color::Gray(0.0) {
+        attrs.push_str(&format!(" fill=\"{}\"", crate::svg::css_color(g.info.color)));
+    }
+    let _ = writeln!(
+        out,
+        "<path d=\"{d}\" transform=\"translate({x} {y}) scale({s} {})\"{attrs}/>",
+        -s,
+    );
 }
 
 /// A math glyph's `pt` font size, spelled for the inside of

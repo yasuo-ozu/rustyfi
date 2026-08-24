@@ -386,6 +386,186 @@ fn math_rules_render_as_svg_paths() {
     );
 }
 
+/// A math glyph the document placed by GLYPH ID (`MathGlyph::gid`) must be
+/// drawn from that glyph's own OUTLINE, because no `<text>` can address it.
+///
+/// **The bug.** `gid` is `Some` exactly when the drawn form is not the glyph
+/// its `text` cmaps to — a display-size big operator, a stretchy delimiter,
+/// an `ssty` script form. The PDF writer emits the id directly; this backend
+/// wrote `<text>∑</text>`, which can only ever produce the BASE `∑`. So the
+/// operator came out base-size, and — because `layout_math_list` had centred
+/// the limits on the VARIANT's width — `n` and `k = 1` were centred on a
+/// glyph that was not there. In Latin Modern Math at 12pt: `summation`
+/// advances 1.056 em, `summation.v1` 1.444 em, so every limit sat 2.334pt
+/// right of its operator, and `\int`'s scripts began 4.008pt past the end of
+/// the integral sign.
+///
+/// So the assertion that matters is not "a `<path>` appeared" but "the ink
+/// that appeared is the VARIANT's, not the base's" — measured off the
+/// emitted `d` and its `transform`, which is the whole of what the browser
+/// will draw.
+#[test]
+fn a_math_variant_glyph_is_drawn_from_its_own_outline_not_as_a_character() {
+    use rustyfi_backend::{FontMetrics, VertVariantPolicy};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let font = FontKey(0);
+    let size = Length::pt(12.0);
+    // The same call `primitives::push_big_char_glyph` makes, so the fixture
+    // is the real variant record rather than a hand-picked gid.
+    let Some(variant) = store.math_vertical_variant(font, '\u{2211}', size, VertVariantPolicy::BigOp)
+    else {
+        eprintln!("skipping: no MATH BigOp variant for U+2211 in {}", path.display());
+        return;
+    };
+    let base_advance = store
+        .advance(font, '\u{2211}', size)
+        .expect("the face cmaps U+2211");
+    assert!(
+        variant.advance.0 > base_advance.0 + 1.0,
+        "fixture is not exercising anything: the variant must be visibly \
+         wider than the base ({} vs {})",
+        variant.advance.0,
+        base_advance.0
+    );
+
+    let math_box = PureHorzBox::Math {
+        width: variant.advance,
+        height: variant.height,
+        depth: variant.depth,
+        glyphs: vec![MathGlyph {
+            text: "\u{2211}".to_string(),
+            gid: Some(variant.gid),
+            dx: Length::ZERO,
+            dy: Length::ZERO,
+            info: HorzStringInfo {
+                font,
+                size,
+                rising: Length::ZERO,
+                color: Color::Gray(0.0),
+            },
+            width: variant.advance,
+            height: variant.height,
+            depth: variant.depth,
+        }],
+        rules: vec![],
+    };
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&[line(math_box)]),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    assert!(
+        !html.contains('\u{2211}'),
+        "the character was emitted, so the browser draws the BASE glyph:\n{html}"
+    );
+    let (d, transform) = math_path_and_transform(&html).expect("a <path> for the variant glyph");
+
+    // The transform must be `translate(pen) scale(s, -s)` with
+    // `s = size / units_per_em` — the y-flip a filled path needs and a
+    // `<text>` must never get (it would mirror the letters).
+    let s = parse_uniform_flip_scale(&transform).unwrap_or_else(|| {
+        panic!("transform is not a `scale(s -s)` uniform flip: {transform:?}")
+    });
+    assert!(
+        (s - 12.0 / 1000.0).abs() < 1e-9,
+        "scale should be size/units_per_em, got {s}"
+    );
+
+    // The load-bearing measurement: the drawn ink fills the VARIANT's
+    // advance, which is what the surrounding layout was computed against —
+    // not the base glyph's, which is what a `<text>` would have given.
+    //
+    // Ink is compared against ADVANCE, so the two bounds are asymmetric on
+    // purpose. Ink is always the narrower of the two by the glyph's side
+    // bearings (here 0.056 + 0.057 em), hence the 0.85 floor rather than an
+    // equality; and it can only EXCEED the base advance if the glyph drawn is
+    // not the base one, since a glyph's own ink never reaches past its own
+    // advance. That second bound is the one that would have caught the bug.
+    let (x_min, x_max) = path_x_extent(&d).expect("the path has coordinates");
+    let ink = (x_max - x_min) * s;
+    assert!(
+        ink > base_advance.0,
+        "the drawn ink ({ink}pt) is no wider than the BASE advance \
+         ({}pt) — this is still the small glyph",
+        base_advance.0
+    );
+    assert!(
+        ink <= variant.advance.0 && ink >= 0.85 * variant.advance.0,
+        "the drawn ink ({ink}pt) does not fill the variant advance \
+         ({}pt) the limits were centred on",
+        variant.advance.0
+    );
+
+    // Glyph outlines are NONZERO-winding (SVG's default). `evenodd`, which
+    // every other path this backend writes carries because it is reproducing
+    // PDF's `f*`, would punch holes in a CFF face's overlapping contours.
+    let tag = math_path_tag(&html).expect("a <path> for the variant glyph");
+    assert!(
+        !tag.contains("fill-rule"),
+        "a glyph outline must not carry a fill-rule — SVG's nonzero default \
+         is the one fonts are drawn under:\n{tag}"
+    );
+}
+
+/// The first `<path …/>` tag inside a `math-glyphs` `<svg>`.
+fn math_path_tag(html: &str) -> Option<String> {
+    let svg = html.split("class=\"math-glyphs\"").nth(1)?;
+    let svg = svg.split("</svg>").next()?;
+    Some(svg.split("<path ").nth(1)?.split("/>").next()?.to_string())
+}
+
+/// That tag's `d` and `transform`.
+fn math_path_and_transform(html: &str) -> Option<(String, String)> {
+    let tag = math_path_tag(html)?;
+    let field = |name: &str| -> Option<String> {
+        Some(
+            tag.split(&format!("{name}=\""))
+                .nth(1)?
+                .split('"')
+                .next()?
+                .to_string(),
+        )
+    };
+    Some((field("d")?, field("transform")?))
+}
+
+/// `translate(a b) scale(s -s)` -> `Some(s)`, and `None` if the scale is not
+/// a uniform y-flip.
+fn parse_uniform_flip_scale(transform: &str) -> Option<f64> {
+    let inside = transform.split("scale(").nth(1)?.split(')').next()?;
+    let mut parts = inside.split_whitespace();
+    let sx: f64 = parts.next()?.parse().ok()?;
+    let sy: f64 = parts.next()?.parse().ok()?;
+    ((sx + sy).abs() < 1e-12 && sx > 0.0).then_some(sx)
+}
+
+/// The x-extent of an SVG `d`, read off every coordinate PAIR in it. Good
+/// enough for a bound: a Bezier stays inside its control hull, so the
+/// control points can only over-state the extent, never under-state it.
+fn path_x_extent(d: &str) -> Option<(f64, f64)> {
+    let nums: Vec<f64> = d
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['M', 'L', 'Q', 'C', 'Z']))
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    let xs: Vec<f64> = nums.iter().step_by(2).copied().collect();
+    let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
 /// Every length written INSIDE an `<svg>` must be in the viewport's own
 /// user units, i.e. carry no unit at all — or, where CSS forces one
 /// (`font-size`, which is a declaration rather than an attribute), the `px`

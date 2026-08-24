@@ -4,6 +4,11 @@
 //! box. A private submodule of the `rustyfi-html` crate — `pub(super)`, not
 //! `pub`: nothing outside the crate builds SVG.
 //!
+//! It also holds [`glyph_outline_d`], the one path in this backend that comes
+//! from a FONT rather than from a `GraphicsElem` — the MATH-table variant
+//! glyphs (`MathGlyph::gid`) that no `<text>` can address. Same `d` grammar,
+//! different source; see that function.
+//!
 //! **Coordinate system, reconciled once here.** `GraphicsElem`'s `Path`
 //! coordinates are box-local and y-**up** from the box's own baseline-left
 //! origin (`graphics.rs`'s `Point` doc comment); the PDF writer's
@@ -269,6 +274,63 @@ fn path_d(path: &Path) -> String {
         }
     }
     d.trim_end().to_string()
+}
+
+/// One glyph's own outline as an SVG `d` attribute value, in the face's
+/// **design units** and y-**up** — i.e. the glyph exactly as the font draws
+/// it, with no scaling applied. The caller supplies the `size/units_per_em`
+/// scale and the y-flip through a per-element `transform`
+/// (`reflow::inline::emit_math_svg`), which keeps this function a pure
+/// font-to-path conversion and the numbers in `d` the small integers the
+/// face actually stores.
+///
+/// **Why a path at all, when every other glyph in this backend is `<text>`.**
+/// A `MathGlyph` carrying `Some(gid)` is one whose drawn form is NOT the
+/// glyph its `text` cmaps to: an OpenType MATH `MathVariants` record (a
+/// display-size big operator, a stretchy delimiter, one part of a
+/// `GlyphAssembly`) or an `ssty` script form. `<text>∑</text>` can only ever
+/// address the character, so it drew the BASE `∑` where the document had
+/// placed the display one — and, because the surrounding layout was computed
+/// against the variant's metrics, everything positioned relative to it landed
+/// off-centre too. See [`crate::reflow`]'s `emit_math_svg` for the
+/// measurement.
+///
+/// Returns `None` when the face exposes no outline for `gid` (a bitmap-only
+/// face, or a glyph with no contours), leaving the caller on its `<text>`
+/// path — which is what this backend did for every such glyph before.
+pub(super) fn glyph_outline_d(face: &ttf_parser::Face<'_>, gid: u16) -> Option<String> {
+    let mut b = OutlineToPath::default();
+    face.outline_glyph(ttf_parser::GlyphId(gid), &mut b)?;
+    let d = b.d.trim_end().to_string();
+    (!d.is_empty()).then_some(d)
+}
+
+/// [`glyph_outline_d`]'s `ttf_parser::OutlineBuilder` sink: the four outline
+/// callbacks map one-for-one onto SVG's `M`/`L`/`Q`/`C`/`Z`, so this is a
+/// transcription rather than a conversion. Quadratics are kept as `Q` rather
+/// than elevated to cubics — SVG has the segment natively, and a TrueType
+/// face is nothing but quadratics.
+#[derive(Default)]
+struct OutlineToPath {
+    d: String,
+}
+
+impl ttf_parser::OutlineBuilder for OutlineToPath {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let _ = write!(self.d, "M{x} {y} ");
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        let _ = write!(self.d, "L{x} {y} ");
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        let _ = write!(self.d, "Q{x1} {y1} {x} {y} ");
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        let _ = write!(self.d, "C{x1} {y1} {x2} {y2} {x} {y} ");
+    }
+    fn close(&mut self) {
+        self.d.push_str("Z ");
+    }
 }
 
 /// `Color` -> a CSS `rgb()` string. `Gray`/`Rgb` are exact (`f64` 0..=1 ->

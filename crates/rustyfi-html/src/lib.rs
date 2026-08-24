@@ -1,19 +1,53 @@
-//! HTML and Markdown output: two serializations of one recovered document.
+//! HTML and Markdown output, plus the structure recovery a THIRD backend
+//! reads out of this crate.
 //!
 //! `--format html` ([`reflow`]) is one continuous, self-contained, semantic
 //! web document. `--format markdown` ([`markdown`]) is a SUBSET of it —
 //! the same document structure, written in a smaller vocabulary.
+//! `--format latex` is the same structure again, handed to another
+//! typesetter: real `\frac`s, real `tikzpicture`s and real cross-references,
+//! because LaTeX can say most of what SATySFi can. It is a crate of its own,
+//! `rustyfi-latex`, and it reads its half of the recovery from here.
 //!
-//! **The recovery itself is shared** ([`recover`]): which paragraph is a
-//! heading, where the lists and their nesting are, how a table's rows are
-//! regrouped out of a flat cell list, when a glue box is a space and when it
-//! would ruin a Japanese sentence, and whose hyphen sits at the end of a
-//! line. Every one of those was got wrong at least once before it was got
-//! right, so there is one implementation and two callers. What each backend
-//! decides for itself is only what to WRITE.
+//! **The recovery itself is shared** ([`recover`], and `mathrec` for the
+//! inside of a formula): which paragraph is a heading, where the lists and
+//! their nesting are, how a table's rows are regrouped out of a flat cell
+//! list, which of its grid lines it actually draws, when a glue box is a
+//! space and when it would ruin a Japanese sentence, and whose hyphen sits at
+//! the end of a line. Every one of those was got wrong at least once before
+//! it was got right, so there is one implementation and three callers. What
+//! each backend decides for itself is only what to WRITE.
 //!
 //! This root module holds what all of them share: the crate's error type,
 //! HTML escaping, and the `base64`/`fonts`/`image`/`svg` helper modules.
+//!
+//! **[`recover`], [`latex`] and [`collapse_whitespace`] are `pub`, and
+//! nothing else new is.** They are exactly what `rustyfi-latex` reads: the
+//! structure recovery above, the math-run writer it shares with `--katex`,
+//! and the whitespace fold a GFM row and a LaTeX alignment cell both need.
+//! Publishing them is what lets the third backend be its own crate without a
+//! second `wants_space` — a second copy of the CJK glue rule is the one
+//! outcome that would be definitely wrong, because the two would diverge and
+//! the symptom (a space between every pair of Japanese characters, in one
+//! format only) is not one anybody would come looking for here. Everything
+//! else in this crate is still private.
+//!
+//! That is achieved for the rules [`recover`] enumerates, and NOT for eight
+//! box-stream helpers this crate still defines twice or three times over —
+//! see "Still forked" at the end of [`recover`]'s module doc, which names
+//! each one and where its copies are. The debt is `rustyfi-html`-internal
+//! (`rustyfi-latex` calls the hoisted copy); it is written down there rather
+//! than paid off here because all four sites have other work in flight.
+//!
+//! **The crate is still misnamed, and it is a smaller lie than it was.** It
+//! was the HTML backend; it is the HTML and Markdown backends plus the
+//! recovery all three share. Lifting [`recover`]/[`latex`]/`mathrec` into a
+//! fourth crate that this one and `rustyfi-latex` both depend on is the
+//! honest end state, and is deliberately NOT done here: those modules are
+//! named from roughly a hundred sites across `reflow/`, `markdown/` and
+//! `mathsvg`, so the lift is a rename sweep through every file the other two
+//! backends live in, for no behavioural gain. It belongs in a commit that
+//! does only that.
 //!
 //! The document is built from the flat block stream as it stood BEFORE page
 //! breaking (`DocumentValue::reflow_source` in `rustyfi-lang`), so there are
@@ -35,12 +69,17 @@
 mod base64;
 mod fonts;
 mod image;
-mod latex;
+// `latex.rs` documents itself against a dozen of its own helpers and against
+// `mathrec`, all of which stayed private when the module went `pub` so that
+// `rustyfi-latex` could reach `math_latex`. Those links are for the reader of
+// the SOURCE and are worth keeping; rustdoc's objection to them is not.
+#[allow(rustdoc::private_intra_doc_links)]
+pub mod latex;
 mod markdown;
 mod mathml;
 mod mathrec;
 mod mathsvg;
-mod recover;
+pub mod recover;
 mod reflow;
 mod svg;
 
@@ -162,6 +201,30 @@ pub enum MathMode {
 pub enum HtmlError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// Fold every run of whitespace to one space and drop it at the edges.
+///
+/// Not a formatting nicety in either caller: it is what makes a recovered
+/// paragraph safe to put somewhere that has a LINE structure of its own. A
+/// GFM pipe table's row grammar ends at the newline, and a LaTeX alignment
+/// cell treats a blank line as a `\par` — `Paragraph ended before \\ was
+/// complete`, a hard error. The backends had a copy each.
+pub fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_space = true;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !last_space {
+                out.push(' ');
+            }
+            last_space = true;
+        } else {
+            out.push(c);
+            last_space = false;
+        }
+    }
+    out.trim_end().to_string()
 }
 
 /// Escape the five HTML/attribute-hostile characters. Emitted text is never

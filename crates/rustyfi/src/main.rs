@@ -225,6 +225,11 @@ fn parse_format(m: &ArgMatches) -> format::OutputFormat {
 ///   always draw the real glyphs, so there is no reading of the flag there
 ///   that is not a downgrade for nothing.
 /// - **None with `pdf`**, which typesets the equation itself.
+/// - **None with `latex`**, for the mirror-image reason: a `.tex` reaches a
+///   math typesetter by definition, so it always writes the LaTeX that
+///   `--katex` asks for, and every other mode would be a strict downgrade of
+///   it (`∑ₐᵇ` where `\sum_a^b` is available; a PICTURE of an equation in a
+///   source file whose whole point is that the equation is editable).
 fn apply_math_flags(
     m: &ArgMatches,
     format: format::OutputFormat,
@@ -247,6 +252,12 @@ fn apply_math_flags(
         (OutputFormat::Pdf, _) => anyhow::bail!(
             "{flag} needs --format html or --format markdown; \
              --format pdf typesets the equation itself"
+        ),
+        (OutputFormat::Latex, _) => anyhow::bail!(
+            "{flag} needs --format html or --format markdown; \
+             --format latex always writes LaTeX math, which is what --katex \
+             asks for, and the other modes would only lose structure it can \
+             keep"
         ),
         (OutputFormat::Html(_), MathMode::Unicode) => anyhow::bail!(
             "--unicode-math needs --format markdown (it is a plain-text \
@@ -510,6 +521,32 @@ fn cmd_compile(m: &ArgMatches, format: format::OutputFormat) -> anyhow::Result<(
                 &doc.reflow_links,
                 &doc.reflow_dests,
                 math,
+            )?
+            .into_bytes(),
+        },
+        // LaTeX: the SAME recovery once more, written for another
+        // typesetter. It takes the geometry, unlike Markdown, because a
+        // `.tex` declares its own page — and a slide deck reflowed onto
+        // `article`'s A4 portrait would be unrecognisable. It takes no frame
+        // decorations, because it draws no frames.
+        format::OutputFormat::Latex => match &font_store {
+            Some(store) => rustyfi_latex::render_latex_ttf_with(
+                doc.reflow_source.as_deref(),
+                &doc.geometry,
+                store,
+                &doc.images,
+                &doc.extras,
+                &doc.reflow_links,
+                &doc.reflow_dests,
+            )?
+            .into_bytes(),
+            None => rustyfi_latex::render_latex(
+                doc.reflow_source.as_deref(),
+                &doc.geometry,
+                &doc.images,
+                &doc.extras,
+                &doc.reflow_links,
+                &doc.reflow_dests,
             )?
             .into_bytes(),
         },

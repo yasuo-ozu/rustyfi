@@ -801,36 +801,16 @@ fn is_pure_text(elem: &GraphicsElem) -> bool {
 
 /// Record every rules-bearing `Tabular` in this overlay on
 /// [`Ctx::tabular_rules`], returning the stack depth to truncate back to.
+///
+/// The traversal itself is [`crate::recover::overlaid_table_rules`], shared
+/// with the LaTeX backend — which needs the same pairing for the same
+/// `easytable` reason.
 fn collect_overlaid_rules(elems: &[GraphicsElem], ctx: &Ctx) -> usize {
     let base = ctx.tabular_rules.borrow().len();
-    walk_tabulars(elems, &mut |tab| {
-        if !tab.rules.is_empty() {
-            ctx.tabular_rules.borrow_mut().push((
-                tab.width.0,
-                tab.height.0,
-                tab.rules.clone(),
-            ));
-        }
-    });
+    ctx.tabular_rules
+        .borrow_mut()
+        .extend(crate::recover::overlaid_table_rules(elems));
     base
-}
-
-/// Visit every `Tabular` reachable through a text-only graphics group's
-/// nested boxes.
-fn walk_tabulars(elems: &[GraphicsElem], f: &mut impl FnMut(&rustyfi_backend::TabularBox)) {
-    for elem in elems {
-        match elem {
-            GraphicsElem::Text { contents, .. } => {
-                for (_, bx) in contents {
-                    if let PureHorzBox::Tabular(tab) = bx {
-                        f(tab);
-                    }
-                }
-            }
-            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => walk_tabulars(inner, f),
-            _ => {}
-        }
-    }
 }
 
 /// The counterpart of [`is_pure_text`]: emit those runs' contents inline, in

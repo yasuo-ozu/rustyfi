@@ -388,7 +388,7 @@ fn emit_run(para: &mut Para, info: &HorzStringInfo, text: &str, width: f64, ctx:
         }
         ctx.drop_fn_marker.set(false);
     }
-    let mono = crate::recover::is_monospace(ctx.fonts, Some(info.font));
+    let mono = ctx.mono_files.is_monospace(ctx.fonts, Some(info.font));
     ctx.resolve_glue(para, text.chars().next());
     ctx.last_char.set(text.chars().next_back());
     ctx.mono_run.set(mono);

@@ -1538,6 +1538,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-html",
  "rustyfi-lang",
+ "rustyfi-latex",
  "rustyfi-loader",
  "rustyfi-lsp",
  "rustyfi-pdf",
@@ -1581,6 +1582,16 @@ dependencies = [
  "thiserror",
  "unicode-normalization",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "rustyfi-latex"
+version = "0.1.4"
+dependencies = [
+ "rustyfi-backend",
+ "rustyfi-html",
+ "rustyfi-pdf",
+ "thiserror",
 ]
 
 [[package]]

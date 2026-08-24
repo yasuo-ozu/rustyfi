@@ -27,14 +27,32 @@
 /// page geometry) is dropped rather than approximated. Readability
 /// is the goal; layout fidelity is explicitly not.
 ///
-/// ## Why the two non-PDF variants carry a [`MathMode`]
+/// ## What `--format latex` means
 ///
-/// Math is the one thing neither format can simply carry over — it is laid
-/// out during compilation, so what reaches a backend is positioned glyphs and
-/// no `\frac` node — and the right rendering depends on where the file will be
-/// READ rather than on what the document says. So it is five flags
-/// (`--svg-outline-math`, `--svg-math`, `--katex`, `--mathml`,
-/// `--unicode-math`) rather than a heuristic.
+/// `Latex` is the same recovery again, handed to another TYPESETTER rather
+/// than to a reader or a browser: a complete, compilable `.tex` document —
+/// `\documentclass`, a preamble declaring only the packages the body turned
+/// out to need, `\begin{document}` … `\end{document}`. Because the target can
+/// say most of what SATySFi can, very little is dropped: math is real
+/// `$\frac{a+b}{c}$`, a drawing is a `tikzpicture` of the same vector paths
+/// the PDF writer strokes, a `\ref` is a working `\hyperlink`, and a table
+/// carries the rules the document actually drew. Layout fidelity is again
+/// explicitly not the goal — LaTeX breaks the lines and pages itself, at the
+/// measure the generated `geometry` declares.
+///
+/// A document containing CJK requires **lualatex**; one without compiles
+/// under pdflatex, xelatex or lualatex alike. The generated preamble states
+/// which, in a comment, and enforces it with `iftex`.
+///
+/// ## Why the two REFLOWED variants carry a [`MathMode`] and `Latex` does not
+///
+/// Math is the one thing neither HTML nor Markdown can simply carry over — it
+/// is laid out during compilation, so what reaches a backend is positioned
+/// glyphs and no `\frac` node — and the right rendering depends on where the
+/// file will be READ rather than on what the document says. So it is five
+/// flags (`--svg-outline-math`, `--svg-math`, `--katex`, `--mathml`,
+/// `--unicode-math`)
+/// rather than a heuristic.
 ///
 /// It lives INSIDE the format rather than beside it for two reasons, and both
 /// are load-bearing:
@@ -46,6 +64,17 @@
 ///   every format's payload as a bare `<key>.pdf`, so the tag is the only
 ///   thing keeping two renders of one document apart, and five math modes
 ///   are five different renders of it.
+///
+/// `Latex` takes no mode, and that is not an omission. The choice exists
+/// because a `.md` or a `.html` may or may not reach a math typesetter; a
+/// `.tex` reaches one by definition. [`MathMode::Katex`] — LaTeX in
+/// delimiters — is therefore the only reading with any meaning here, and
+/// every other mode would be a strict downgrade of it: `Unicode` would write
+/// `∑ₐᵇ` where `\sum_a^b` is available, `MathMl` would write a parse tree for
+/// a browser into a file no browser reads, and either SVG mode would put a
+/// PICTURE of an equation into a source file whose whole point is that the
+/// equation is editable. `main.rs`'s `apply_math_flags` refuses them against
+/// this format rather than accepting and ignoring them.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
@@ -54,6 +83,8 @@ pub enum OutputFormat {
     Html(MathMode),
     /// GitHub-flavoured Markdown — see this type's doc comment.
     Markdown(MathMode),
+    /// A complete, compilable LaTeX document — see this type's doc comment.
+    Latex,
 }
 
 /// Re-exported so this module and `main.rs` name one type. The renderer owns
@@ -97,8 +128,10 @@ impl std::str::FromStr for OutputFormat {
             // kept so the rename breaks nobody.
             "html" | "html-reflow" => Ok(OutputFormat::Html(MathMode::SvgOutline)),
             "markdown" | "md" => Ok(OutputFormat::Markdown(MathMode::SvgText)),
+            // No math default to pick: a `.tex` always writes LaTeX math.
+            "latex" | "tex" => Ok(OutputFormat::Latex),
             other => Err(format!(
-                "unknown --format {other:?} (expected pdf|html|markdown)"
+                "unknown --format {other:?} (expected pdf|html|markdown|latex)"
             )),
         }
     }
@@ -107,12 +140,14 @@ impl std::str::FromStr for OutputFormat {
 impl OutputFormat {
     /// This format rendering its math as `math` instead.
     ///
-    /// `Pdf` comes back unchanged: it typesets the equation itself and has no
-    /// such choice, and the CLI has already rejected the flag by the time this
+    /// `Pdf` and `Latex` come back unchanged: the first typesets the equation
+    /// itself and the second always writes it as LaTeX, so neither has such a
+    /// choice — and the CLI has already rejected the flag by the time this
     /// could be reached with one.
     pub fn with_math(self, math: MathMode) -> Self {
         match self {
             OutputFormat::Pdf => OutputFormat::Pdf,
+            OutputFormat::Latex => OutputFormat::Latex,
             OutputFormat::Html(_) => OutputFormat::Html(math),
             OutputFormat::Markdown(_) => OutputFormat::Markdown(math),
         }
@@ -124,6 +159,9 @@ impl OutputFormat {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html(_) => "html",
             OutputFormat::Markdown(_) => "md",
+            // `.tex`, not `.latex`: it is what every editor, `latexmk` and
+            // TeX itself expect.
+            OutputFormat::Latex => "tex",
         }
     }
 
@@ -153,7 +191,9 @@ impl OutputFormat {
     /// a cache that could not tell them apart would happily hand a `.md`
     /// request the HTML document it stored earlier — and the stored payload
     /// is a bare `<key>.pdf` whatever the format, so there is no extension,
-    /// no header and no magic number downstream to notice.
+    /// no header and no magic number downstream to notice. `Latex` likewise:
+    /// it is recovered from the identical input by the identical code, so
+    /// every other field in the key matches.
     ///
     /// ## The math modes, and the rule the whole table follows
     ///
@@ -212,7 +252,7 @@ impl OutputFormat {
             OutputFormat::Markdown(MathMode::SvgText) => "markdown-svgtext",
             OutputFormat::Markdown(MathMode::Unicode) => "markdown-unicode",
             OutputFormat::Markdown(MathMode::Katex) => "markdown-katex",
-            OutputFormat::Markdown(MathMode::MathMl) => "markdown-mathml",
+            OutputFormat::Markdown(MathMode::MathMl) => "markdown-mathml",            OutputFormat::Latex => "latex",
         }
     }
 }
@@ -311,7 +351,10 @@ mod tests {
     /// differ from each other in nothing but this field.
     #[test]
     fn every_format_and_math_mode_has_its_own_cache_tag() {
-        let mut tags = vec![OutputFormat::Pdf.cache_tag()];
+        let mut tags = vec![
+            OutputFormat::Pdf.cache_tag(),
+            OutputFormat::Latex.cache_tag(),
+        ];
         for math in ALL_MATH_MODES {
             tags.push(OutputFormat::Html(math).cache_tag());
             tags.push(OutputFormat::Markdown(math).cache_tag());
@@ -427,12 +470,35 @@ mod tests {
             OutputFormat::Pdf.extension(),
             OutputFormat::Html(MathMode::SvgOutline).extension(),
             OutputFormat::Markdown(MathMode::SvgOutline).extension(),
+            OutputFormat::Latex.extension(),
         ];
         let unique: std::collections::HashSet<_> = exts.iter().collect();
         assert_eq!(unique.len(), exts.len(), "extensions collide: {exts:?}");
         for math in ALL_MATH_MODES {
             assert_eq!(OutputFormat::Markdown(math).extension(), "md");
             assert_eq!(OutputFormat::Html(math).extension(), "html");
+        }
+    }
+
+    #[test]
+    fn latex_parses_under_both_spellings_and_names_its_own_extension() {
+        assert_eq!("latex".parse::<OutputFormat>(), Ok(OutputFormat::Latex));
+        assert_eq!("tex".parse::<OutputFormat>(), Ok(OutputFormat::Latex));
+        assert_eq!(OutputFormat::Latex.extension(), "tex");
+    }
+
+    /// A `.tex` reaches a math typesetter by definition, so there is only one
+    /// reading of a math mode for it and the format does not carry one —
+    /// setting one must not silently produce a different format either.
+    #[test]
+    fn latex_has_no_math_mode_to_set() {
+        for math in [
+            MathMode::SvgOutline,
+            MathMode::SvgText,
+            MathMode::Unicode,
+            MathMode::Katex,
+        ] {
+            assert_eq!(OutputFormat::Latex.with_math(math), OutputFormat::Latex);
         }
     }
 }

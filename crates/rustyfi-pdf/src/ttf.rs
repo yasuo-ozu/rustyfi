@@ -106,6 +106,44 @@ impl TtfFontStore {
         oblique: Option<Vec<u8>>,
         label: &str,
     ) -> Result<Self, FontError> {
+        Self::from_bytes_with_abbrevs(regular, bold, oblique, Vec::new(), label)
+    }
+
+    /// [`Self::from_bytes`], additionally registering `named` faces under the
+    /// ABBREVS a document actually asks for by name.
+    ///
+    /// The three slots [`Self::from_bytes`] offers are *styles* of one face —
+    /// regular, bold, oblique — and a document cannot reach any of them by
+    /// name, because a store built that way has an EMPTY abbrev map and
+    /// `resolve_font_abbrev` therefore answers `None` for everything. Every
+    /// `set-font` then falls through to `rustyfi-lang`'s three-face spelling
+    /// heuristic, which cannot fail and so cannot report that the abbrev was
+    /// unknown: `set-font HanIdeographic (`ipaexm`, ..)` silently selects the
+    /// Latin regular face and the document typesets in `.notdef`. That is
+    /// exactly what a browser build hits, since it has no
+    /// `fonts.satysfi-hash` to build a [`crate::fonts::FontRegistry`] from —
+    /// so this is the byte-oriented counterpart of
+    /// [`crate::fonts::FontRegistry::build_store`], and it allocates keys the
+    /// same way that does: `FontKey(0/1/2)` stay regular/bold/oblique, and
+    /// each named face gets its own slot after them.
+    ///
+    /// Duplicate BYTES share one slot's file, so registering one CJK face
+    /// under both `ipaexm` and `ipaexg` (what a single-face browser build
+    /// does — `stdja` asks for the first in body text and the second in
+    /// headings) costs one copy in memory and one embedded font in the PDF,
+    /// not two. `build_store` dedups by canonical path; there is no path
+    /// here, so the comparison is on the bytes themselves — a memcmp per
+    /// already-loaded file, over the handful of files a store holds.
+    ///
+    /// A repeated abbrev keeps the LAST face given for it, the same way a
+    /// repeated key in a `fonts.satysfi-hash` object would.
+    pub fn from_bytes_with_abbrevs(
+        regular: Vec<u8>,
+        bold: Option<Vec<u8>>,
+        oblique: Option<Vec<u8>>,
+        named: impl IntoIterator<Item = (String, Vec<u8>)>,
+        label: &str,
+    ) -> Result<Self, FontError> {
         let validate = |bytes: &[u8]| {
             // Fail at construction rather than at the first metrics call, the
             // same contract `read_and_validate` holds to.
@@ -128,13 +166,55 @@ impl TtfFontStore {
             }
         }
 
+        let mut abbrevs: BTreeMap<String, FontKey> = BTreeMap::new();
+        for (abbrev, bytes) in named {
+            validate(&bytes)?;
+            let file = match files.iter().position(|f| *f == bytes) {
+                Some(index) => index,
+                None => {
+                    files.push(bytes);
+                    files.len() - 1
+                }
+            };
+            let key = FontKey(slots.len() as u16);
+            slots.push(file);
+            abbrevs.insert(abbrev, key);
+        }
+
         Ok(TtfFontStore {
             files,
             slots,
-            abbrevs: BTreeMap::new(),
+            abbrevs,
             script_defaults: [None; 4],
             math_default: None,
         })
+    }
+
+    /// Point `script`'s DEFAULT font at `font`, as
+    /// `default-font.satysfi-hash`'s `scripts` block does for a store built
+    /// from a font root.
+    ///
+    /// `get-initial-context` overlays these onto the context it hands
+    /// `document`, so this is what makes a document typeset Japanese without
+    /// naming a font at all — `stdja-mini` and every bare `@require:`-less
+    /// document never call `set-font`, and would otherwise get the Latin
+    /// regular face for every script no matter what faces the store holds.
+    ///
+    /// `ratio` scales the font size for this script (0.88 is what the bundled
+    /// configuration uses for CJK, which is upstream's own figure) and
+    /// `rising` shifts the baseline. Takes a [`FontKey`] rather than an abbrev
+    /// so that a name this store does not carry cannot be accepted and then
+    /// silently do nothing — get one from [`Self::abbrev_key`].
+    #[must_use]
+    pub fn with_script_default(
+        mut self,
+        script: Script,
+        font: FontKey,
+        ratio: f64,
+        rising: f64,
+    ) -> Self {
+        self.script_defaults[script as usize] = Some((font, ratio, rising));
+        self
     }
 
     /// Builder used only by [`crate::fonts::FontRegistry::build_store`]:
@@ -707,6 +787,89 @@ mod tests {
             "bold.ttf",
         ));
         assert!(matches!(err, FontError::Parse { .. }), "{err}");
+    }
+
+    /// The gap `from_bytes_with_abbrevs` closes: a store built from bytes
+    /// alone answers `None` to EVERY abbrev, which is what sends a browser
+    /// build's `set-font HanIdeographic (`ipaexm`, ..)` through
+    /// `rustyfi-lang`'s three-face spelling heuristic and onto the Latin face.
+    #[test]
+    fn from_bytes_alone_resolves_no_abbrev_at_all() {
+        let Some(regular) = system_font() else {
+            return;
+        };
+        let store = TtfFontStore::from_bytes(regular, None, None, "regular.ttf")
+            .expect("a system font should parse");
+        assert_eq!(store.resolve_font_abbrev("ipaexm"), None);
+        assert_eq!(store.num_slots(), 3);
+    }
+
+    /// Named faces get their own keys after the three style slots, and two
+    /// abbrevs naming the SAME bytes share one file — the case a single-face
+    /// browser build is entirely made of, since `stdja` asks for `ipaexm` in
+    /// body text and `ipaexg` in headings and only one CJK face is fetched.
+    #[test]
+    fn named_abbrevs_get_keys_past_the_style_slots_and_share_equal_bytes() {
+        let Some(regular) = system_font() else {
+            return;
+        };
+        let cjk = regular.clone();
+        let store = TtfFontStore::from_bytes_with_abbrevs(
+            regular,
+            None,
+            None,
+            [
+                ("ipaexm".to_string(), cjk.clone()),
+                ("ipaexg".to_string(), cjk),
+            ],
+            "regular.ttf",
+        )
+        .expect("a system font should parse");
+
+        let mincho = store.resolve_font_abbrev("ipaexm").expect("ipaexm");
+        let gothic = store.resolve_font_abbrev("ipaexg").expect("ipaexg");
+        assert_eq!(mincho, FontKey(3));
+        assert_eq!(gothic, FontKey(4));
+        // Distinct keys, one physical file — so the PDF embeds it once. Here
+        // that file is also the regular face's, which is the point of deduping
+        // on bytes rather than on identity.
+        assert_eq!(store.file_index(mincho), store.file_index(gothic));
+        assert_eq!(store.num_files(), 1);
+        // Unregistered names still decline, so the heuristic still runs for
+        // them rather than this quietly becoming a catch-all.
+        assert_eq!(store.resolve_font_abbrev("lmsans"), None);
+    }
+
+    /// `get-initial-context` reads these, so they are what lets a document
+    /// that never calls `set-font` — `stdja-mini`, or no class at all —
+    /// typeset Japanese.
+    #[test]
+    fn script_defaults_can_be_set_on_a_byte_built_store() {
+        let Some(regular) = system_font() else {
+            return;
+        };
+        let cjk = regular.clone();
+        let store = TtfFontStore::from_bytes_with_abbrevs(
+            regular,
+            None,
+            None,
+            [("ipaexg".to_string(), cjk)],
+            "regular.ttf",
+        )
+        .expect("a system font should parse");
+        let key = store.resolve_font_abbrev("ipaexg").expect("ipaexg");
+        let store = store
+            .with_script_default(Script::HanIdeographic, key, 0.88, 0.0)
+            .with_script_default(Script::Kana, key, 0.88, 0.0);
+
+        assert_eq!(
+            store.default_script_font(Script::HanIdeographic),
+            Some((key, 0.88, 0.0))
+        );
+        assert_eq!(store.default_script_font(Script::Kana), Some((key, 0.88, 0.0)));
+        // Untouched scripts stay unconfigured, so `get-initial-context`'s
+        // overlay leaves `ctx.font` alone for Latin.
+        assert_eq!(store.default_script_font(Script::Latin), None);
     }
 
     /// A real font from the system, when one is installed. Returns `None`

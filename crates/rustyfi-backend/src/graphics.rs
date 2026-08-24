@@ -223,10 +223,17 @@ pub struct FrameDecoration {
     /// laid out narrower, and once the frame is redrawn at the reader's own
     /// width a right-aligned line lands on its border.
     ///
-    /// Meaningless for an inline frame, which has no such channel: its
-    /// horizontal pads are spliced into the box stream as real kerns and its
-    /// vertical ones are already folded into `height`. Recorded as zeroes
-    /// there.
+    /// For an INLINE frame it is the two VERTICAL ones that matter and the
+    /// two horizontal ones that do not: `append_horz_padding` splices `left`
+    /// and `right` into the box stream as real kerns, which the flow already
+    /// carries, while `top` and `bottom` are folded into `height`/`depth` and
+    /// have no representation in the flow at all. A CSS inline box's
+    /// background is drawn over the FONT's content area — the reader's
+    /// ascent and descent, nothing to do with the document's box — so
+    /// without these two the drawing is squashed into it: measured at 12pt,
+    /// `\shadowbox`'s 22.7pt frame into 12.75pt, which turns a drop shadow
+    /// into a bar through the text. `reflow::structure`'s
+    /// `inline_frame_decoration` restores them as real CSS padding.
     pub pads: (crate::Length, crate::Length, crate::Length, crate::Length),
     /// How much of `height` lies BELOW the text baseline, for an INLINE frame
     /// (`inline-frame-outer`/`-inner`/`-breakable`); `None` for a block frame,

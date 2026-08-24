@@ -2668,10 +2668,12 @@ fn fire_inline_frame_fragment(
     if interp.fire_pass == eval::FirePass::HooksOnly {
         return Ok(());
     }
-    let (deco, deco_version) = match &interp.decos[frame.id.0] {
+    let (deco, deco_version, pads) = match &interp.decos[frame.id.0] {
         eval::DecoEntry::InlineBreakable {
-            decoset, version, ..
-        } => (decoset[deco_idx].clone(), *version),
+            decoset,
+            version,
+            pads,
+        } => (decoset[deco_idx].clone(), *version, *pads),
         _ => {
             return eval::eval_error("BUG: non-breakable deco behind an inline frame marker");
         }
@@ -2691,7 +2693,16 @@ fn fire_inline_frame_fragment(
         frame.depth,
     )?;
     interp.current_deco_id = None;
-    record_inline_frame_deco(interp, frame.id, pt, width, frame.height, frame.depth, &gr);
+    record_inline_frame_deco(
+        interp,
+        frame.id,
+        pt,
+        width,
+        frame.height,
+        frame.depth,
+        pads,
+        &gr,
+    );
     interp.page_graphics[page].extend(gr);
     Ok(())
 }
@@ -3161,6 +3172,19 @@ fn fire_block_frame_fragment(
 /// in the number of already-recorded decorations, which is the number of
 /// distinct inline frames that actually DRAW something — a `\href`, the
 /// overwhelmingly common inline frame, has an empty deco and never gets here.
+///
+/// `pads` is the frame's own, for `FrameDecoration::pads`' inline reading —
+/// the two VERTICAL ones are what a reflowing renderer cannot otherwise
+/// recover. Only `inline-frame-breakable` knows them: they are on its
+/// `DecoEntry::InlineBreakable`, which is the entry the deco set itself lives
+/// on. `inline-frame-outer`/`-inner` fold theirs into the atomic
+/// `PureHorzBox::Frame`'s width/height at construction (`make_inline_frame`)
+/// and keep nothing, so that call site passes zeroes — which costs those two
+/// primitives the padding restoration and nothing else. Widening
+/// `DecoEntry::Inline` to carry them would be the fix if a package ever needs
+/// it; nothing in the corpus decorates through them (`\mbox`, the one that
+/// does, pads by zero).
+#[allow(clippy::too_many_arguments)]
 fn record_inline_frame_deco(
     interp: &mut eval::Interp,
     id: rustyfi_backend::DecoId,
@@ -3168,6 +3192,7 @@ fn record_inline_frame_deco(
     width: Length,
     height: Length,
     depth: Length,
+    pads: rustyfi_backend::Paddings,
     gr: &[GraphicsElem],
 ) {
     if gr.is_empty() || interp.frame_decos.iter().any(|(seen, _)| *seen == id) {
@@ -3179,7 +3204,7 @@ fn record_inline_frame_deco(
         rustyfi_backend::FrameDecoration {
             width,
             height: height + depth,
-            pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            pads: (pads.l, pads.r, pads.t, pads.b),
             depth: Some(depth),
             elems: gr.iter().map(|e| shift_graphics(back, e)).collect(),
         },
@@ -3447,7 +3472,23 @@ fn fire_inline_frame(
                     *depth,
                 )?;
                 interp.current_deco_id = None;
-                record_inline_frame_deco(interp, *deco, pt, *width, *height, *depth, &gr);
+                // Zero pads: `DecoEntry::Inline` does not carry them — see
+                // `record_inline_frame_deco`.
+                record_inline_frame_deco(
+                    interp,
+                    *deco,
+                    pt,
+                    *width,
+                    *height,
+                    *depth,
+                    rustyfi_backend::Paddings {
+                        l: Length::ZERO,
+                        r: Length::ZERO,
+                        t: Length::ZERO,
+                        b: Length::ZERO,
+                    },
+                    &gr,
+                );
                 interp.page_graphics[page].extend(gr);
             }
             contents

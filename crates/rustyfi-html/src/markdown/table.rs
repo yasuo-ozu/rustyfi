@@ -29,7 +29,7 @@
 
 use std::fmt::Write as _;
 
-use rustyfi_backend::TabularBox;
+use rustyfi_backend::{PureHorzBox, TabularBox};
 
 use super::escape;
 use super::para::Para;
@@ -57,7 +57,26 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
                 ..Para::default()
             };
             for (_, bx) in &cell.contents {
-                super::inline::emit_inline(&mut para, bx, ctx);
+                match bx {
+                    // A cell wide enough to WRAP holds a whole nested block
+                    // rather than an inline run, and `emit_inline`'s
+                    // `EmbeddedBlock` arm is inert because only the block
+                    // walker can close a paragraph. Left at that the cell
+                    // comes out EMPTY — `easytable`'s own `lw 120pt` example
+                    // loses its third column entirely, which is what that
+                    // section of the manual is demonstrating. (The HTML
+                    // backend has the same hole; fixing it there would change
+                    // its output, and this backend is meant to be purely
+                    // additive.)
+                    PureHorzBox::EmbeddedBlock { block, .. } => {
+                        let inner = super::block::render_block(block, ctx);
+                        // Already Markdown, so it is not escaped again — but
+                        // a `|` in it would end the row it is sitting in.
+                        let inner = inner.trim().replace('|', "\\|");
+                        para.push_markup(inner.clone(), inner);
+                    }
+                    _ => super::inline::emit_inline(&mut para, bx, ctx),
+                }
             }
             ctx.reset_flow();
             // Rendered as prose whatever its face: a fixed-pitch cell becomes

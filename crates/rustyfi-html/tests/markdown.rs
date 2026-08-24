@@ -219,6 +219,42 @@ fn a_tabular_becomes_a_gfm_pipe_table_with_a_delimiter_row() {
     );
 }
 
+/// A cell wide enough to WRAP holds a whole nested block rather than an
+/// inline run. Left to `emit_inline`, whose `EmbeddedBlock` arm is inert
+/// because only the block walker can close a paragraph, the cell comes out
+/// empty — `easytable`'s own `lw 120pt` example lost the entire column it
+/// exists to demonstrate.
+#[test]
+fn a_table_cell_holding_a_wrapped_block_is_not_empty() {
+    let cell = |x: f64, contents: Vec<PureHorzBox>| TabularCellBox {
+        x: Length::pt(x),
+        baseline_y: Length::pt(10.0),
+        contents: contents.into_iter().map(|b| (Length::ZERO, b)).collect(),
+    };
+    let tab = TabularBox {
+        width: Length::pt(180.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        cells: vec![
+            cell(0.0, vec![text_run("narrow")]),
+            cell(
+                60.0,
+                vec![PureHorzBox::EmbeddedBlock {
+                    width: Length::pt(120.0),
+                    height: Length::pt(20.0),
+                    depth: Length::ZERO,
+                    block: vec![text_line("a wrapped"), text_line("cell")],
+                    anchor_last: false,
+                    breakable: false,
+                }],
+            ),
+        ],
+        rules: Vec::new(),
+    };
+    let md = render(&[line_of(vec![PureHorzBox::Tabular(tab)])]);
+    assert!(md.contains("| narrow | a wrapped cell |"), "{md}");
+}
+
 /// `easytable` overlays a rules-only grid of EMPTY cells on the real table.
 /// This backend draws no rules at all, so that half holds nothing whatever
 /// and must not come out as an empty grid above every table.

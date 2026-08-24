@@ -358,13 +358,16 @@ fn compile_command(name: &'static str) -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .help(
-                    "Output format: pdf (default) or html. html is a \
+                    "Output format: pdf (default), html or markdown. html is a \
                      semantic, reflowable web document — one continuous flow of real \
                      paragraphs the browser breaks and justifies, with headings, \
                      lists, links and in-flow footnotes; readable, not \
-                     layout-faithful. (html-reflow is accepted as an alias of html.)",
+                     layout-faithful. markdown is a subset of it: the same \
+                     structure as GitHub-flavoured Markdown, dropping everything \
+                     the format cannot say (frames, alignment, colour, drawings). \
+                     (html-reflow aliases html; md aliases markdown.)",
                 )
-                .value_parser(["pdf", "html", "html-reflow"])
+                .value_parser(["pdf", "html", "html-reflow", "markdown", "md"])
                 .default_value("pdf"),
         )
         .arg(

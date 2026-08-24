@@ -25,6 +25,11 @@ use std::fmt::Write as _;
 use rustyfi_backend::{ListMarkKind, PureHorzBox, VertBox};
 
 use super::{inline, structure, Ctx};
+// The inter-word space standing in for a rejoined line break, and which of
+// the three things a line boundary is — both shared with the Markdown
+// backend, which feeds the same values to the same rules
+// (`crate::recover`).
+use crate::recover::{LineJoin, WORD_SPACE_PT};
 
 /// Accumulated state for "the paragraph currently being built" — `text` is
 /// the flowing inline HTML gathered so far (escaped/styled runs, glue
@@ -244,17 +249,23 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         para.text.push_str("<br>\n");
                         ctx.break_hyphen.set(false);
                         ctx.reset_flow();
-                    } else if ctx.break_hyphen.replace(false) {
-                        // The breaker hyphenated here. Drop its hyphen and
-                        // rejoin the word — no space either.
-                        drop_break_hyphen(&mut para.text);
-                    } else if ends_with_hyphen(&para.text) {
-                        // An AUTHORED hyphen the breaker chose to break after
-                        // (UAX#14 allows it). The hyphen stays — it is the
-                        // author's — but the two halves of `code-printer` must
-                        // not gain a space between them.
                     } else {
-                        ctx.note_glue(WORD_SPACE_PT);
+                        // Which of the three a line boundary is —
+                        // `crate::recover::line_join`, shared with the
+                        // Markdown backend because getting it wrong turns
+                        // `code-printer` into `codeprinter` in either format.
+                        match crate::recover::line_join(
+                            ctx.break_hyphen.replace(false),
+                            ends_with_hyphen(&para.text),
+                        ) {
+                            LineJoin::DropHyphen => drop_break_hyphen(&mut para.text),
+                            // An AUTHORED hyphen the breaker chose to break
+                            // after (UAX#14 allows it). The hyphen stays —
+                            // it is the author's — but the two halves must
+                            // not gain a space between them.
+                            LineJoin::KeepHyphen => {}
+                            LineJoin::Space => ctx.note_glue(WORD_SPACE_PT),
+                        }
                     }
                 }
             }
@@ -359,12 +370,6 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     drain_footnotes(out, ctx);
 }
 
-/// A plain inter-word space, in points, standing in for the line break
-/// between two consecutive `Line`s of one paragraph. The exact value is
-/// immaterial — it only has to be above `text::wants_space`'s zero-width
-/// threshold, since the decision it feeds is "is this a CJK pair" rather
-/// than "how wide".
-const WORD_SPACE_PT: f64 = 3.0;
 
 /// Remove the hyphen the LINE BREAKER put at the end of this line, so a word
 /// it split comes back together for the browser to re-break its own way.
@@ -383,7 +388,7 @@ const WORD_SPACE_PT: f64 = 3.0;
 /// span that has since closed, as [`drop_break_hyphen`] does.
 fn ends_with_hyphen(text: &str) -> bool {
     let body = text.strip_suffix("</span>").unwrap_or(text);
-    matches!(body.chars().next_back(), Some('-' | '\u{2010}'))
+    body.chars().next_back().is_some_and(crate::recover::is_hyphen)
 }
 
 fn drop_break_hyphen(text: &mut String) {
@@ -393,7 +398,7 @@ fn drop_break_hyphen(text: &mut String) {
     } else {
         &text[..]
     };
-    if !matches!(body.chars().next_back(), Some('-' | '\u{2010}')) {
+    if !body.chars().next_back().is_some_and(crate::recover::is_hyphen) {
         return;
     }
     let hyphen_len = body.chars().next_back().map_or(0, char::len_utf8);

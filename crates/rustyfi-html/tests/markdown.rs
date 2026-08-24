@@ -464,7 +464,9 @@ fn a_code_block_keeps_its_line_breaks_and_its_indentation() {
         code_line(12.0, "return 1"),
         code_line(0.0, "done"),
     ];
-    let md = markdown_with_mono_font(&vboxes);
+    let Some(md) = markdown_with_mono_font(&vboxes) else {
+        return;
+    };
     assert_eq!(
         md.trim(),
         "```\nif x:\n  return 1\ndone\n```",
@@ -495,7 +497,9 @@ fn a_code_block_containing_japanese_is_still_a_code_block() {
             , PureHorzBox::OuterFil]),
         line_of(vec![mono("done"), PureHorzBox::OuterFil]),
     ];
-    let md = markdown_with_mono_font(&vboxes);
+    let Some(md) = markdown_with_mono_font(&vboxes) else {
+        return;
+    };
     assert!(md.starts_with("```"), "{md}");
     assert!(md.contains("title = {パッケージ}\ndone"), "{md}");
 }
@@ -521,7 +525,9 @@ fn a_two_line_prose_paragraph_with_inline_code_is_not_a_code_block() {
         line_of(vec![text_run("Use"), glue(3.0), mono("point")]),
         line_of(vec![mono("list"), glue(3.0), text_run("here."), PureHorzBox::OuterFil]),
     ];
-    let md = markdown_with_mono_font(&vboxes);
+    let Some(md) = markdown_with_mono_font(&vboxes) else {
+        return;
+    };
     assert!(!md.starts_with("```"), "{md}");
     // And the code span the line break split comes back as ONE span.
     assert_eq!(md.trim(), "Use `point list` here.", "{md}");
@@ -614,17 +620,19 @@ fn a_missing_reflow_source_renders_an_empty_document() {
 /// read. Without one no face can be fixed-pitch and a code block degrades to
 /// prose — the same degradation the HTML backend takes, and never what the
 /// code-block tests mean to measure.
-fn markdown_with_mono_font(vboxes: &[VertBox]) -> String {
-    let store = mono_font_store();
-    rustyfi_html::render_markdown_ttf_with(
-        Some(vboxes),
-        &store,
-        &[],
-        &DocExtras::default(),
-        &[],
-        &[],
+fn markdown_with_mono_font(vboxes: &[VertBox]) -> Option<String> {
+    let store = mono_font_store()?;
+    Some(
+        rustyfi_html::render_markdown_ttf_with(
+            Some(vboxes),
+            &store,
+            &[],
+            &DocExtras::default(),
+            &[],
+            &[],
+        )
+        .expect("markdown rendering must succeed"),
     )
-    .expect("markdown rendering must succeed")
 }
 
 /// A two-face store: `FontKey(0)` proportional, `FontKey(1)` fixed-pitch.
@@ -635,11 +643,25 @@ fn markdown_with_mono_font(vboxes: &[VertBox]) -> String {
 /// and the test would pass or fail for the wrong reason. The store's three
 /// slots are regular/bold/oblique; LM Mono is installed in the bold slot
 /// purely because that is the slot `FontKey(1)` resolves to.
-fn mono_font_store() -> rustyfi_pdf::TtfFontStore {
+/// `None` when the bundled faces are absent. `download-fonts.sh` fetches
+/// them, and CI runs it for the fidelity and real-package jobs but NOT for
+/// `build · clippy · test` — so a hard `expect` here fails the very job that
+/// runs the unit tests, on a checkout that is perfectly valid. Every other
+/// font-needing test in the workspace skips instead (`reflow.rs`,
+/// `math_table.rs`, `ttf.rs`, ...).
+fn mono_font_store() -> Option<rustyfi_pdf::TtfFontStore> {
     let dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist/fonts");
-    let serif = std::fs::read(dir.join("Junicode.ttf")).expect("bundled Junicode");
-    let mono = std::fs::read(dir.join("lmmono10-regular.otf")).expect("bundled LM Mono");
+    let (Ok(serif), Ok(mono)) = (
+        std::fs::read(dir.join("Junicode.ttf")),
+        std::fs::read(dir.join("lmmono10-regular.otf")),
+    ) else {
+        eprintln!(
+            "skipping: the bundled faces are not in {} \u{2014} run download-fonts.sh",
+            dir.display(),
+        );
+        return None;
+    };
     let store = rustyfi_pdf::TtfFontStore::from_bytes(serif, Some(mono), None, "test fonts")
         .expect("both bundled faces must parse");
     assert!(
@@ -648,5 +670,5 @@ fn mono_font_store() -> rustyfi_pdf::TtfFontStore {
             .is_some_and(|f| f.to_ascii_lowercase().contains("mono")),
         "FontKey(1) must resolve to a face whose family name reads as fixed-pitch",
     );
-    store
+    Some(store)
 }

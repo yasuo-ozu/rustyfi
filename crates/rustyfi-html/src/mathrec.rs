@@ -320,6 +320,36 @@ fn collect_bars(rules: &[GraphicsElem], out: &mut Vec<Bar>) {
     }
 }
 
+/// How many things a math box's `rules` actually DRAW, counting through
+/// groups and clips.
+///
+/// The complement of what [`fraction_bars`] finds a use for, and the only
+/// evidence available at this layer that something was drawn which the
+/// recovery cannot name. A `math-paren` delimiter, a radical sign, an
+/// `\overline` and a fraction bar are all `Fill`s with no tag distinguishing
+/// them, so "was it recovered" is the only question that can be asked — and
+/// the answer is a COUNT rather than a predicate because a run may hold a
+/// fraction and a radical at once.
+///
+/// `Text` and `Destination` draw nothing themselves: the first is a
+/// positioning wrapper whose contents the caller emits as HTML (see
+/// `crate::mathsvg::rules_have_ink`, which asks the boolean form of this
+/// question for a different purpose) and the second is a link target.
+///
+/// Used by [`crate::mathml`] to decide whether a run is `rustyfi-approx`.
+/// `crate::latex` does not consult it: `--katex` states its losses once, in
+/// prose, and has no per-equation channel to report them through.
+pub(crate) fn inked_paths(rules: &[GraphicsElem]) -> usize {
+    rules
+        .iter()
+        .map(|elem| match elem {
+            GraphicsElem::Text { .. } | GraphicsElem::Destination { .. } => 0,
+            GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inked_paths(inner),
+            _ => 1,
+        })
+        .sum()
+}
+
 /// Which bar, if any, spans `g` — the narrowest one that does, so a fraction
 /// nested inside another is claimed by its own bar rather than by the outer
 /// one.

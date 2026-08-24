@@ -481,12 +481,12 @@ sentence.
   preference: a `tikzpicture` is one unbreakable box, and LaTeX responds to
   one taller than `\textheight` by ending the page and trying again, forever.
 
-Math is `--katex`'s conversion — the same function, so everything under
-[`--katex`: LaTeX in delimiters](#katex-latex-in-delimiters) about what a
-re-derivation can and cannot recover applies here word for word. The two math
-flags are **refused** with `--format latex` rather than ignored: a `.tex`
-reaches a math typesetter by definition, so it always writes the LaTeX
-`--katex` asks for and the other modes would only lose structure it can keep.
+Math is `--katex`'s conversion — the same function, so
+[What `--katex` cannot recover](#what---katex-cannot-recover) applies here word
+for word. All four math flags are **refused** with `--format latex` rather than
+ignored: a `.tex` reaches a math typesetter by definition, so it always writes
+the LaTeX `--katex` asks for, and every other rendering would only lose
+structure it can keep.
 
 `--format tex` is accepted as an alias for `latex`.
 

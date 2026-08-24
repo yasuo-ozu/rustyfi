@@ -98,7 +98,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         PureHorzBox::FixedEmpty { width } => {
             if ctx.mono_run.get() {
                 para.pieces.push(Piece::Gap(width.0));
-            } else if width.0 >= HSKIP_MIN_PT {
+            } else if width.0 >= crate::recover::HSKIP_MIN_PT {
                 ctx.resolve_glue(para, None);
                 para.push_text(" ", false);
                 ctx.last_char.set(Some(' '));
@@ -114,8 +114,8 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // break point in the word (a single `\-` makes TeX use only the
         // explicit ones).
         PureHorzBox::Discretionary { pre_break, .. } => {
-            if !pre_break_carries_text(pre_break) {
-                ctx.note_glue(glue_width(pre_break));
+            if !crate::recover::pre_break_carries_text(pre_break) {
+                ctx.note_glue(crate::recover::glue_width(pre_break));
             }
         }
 
@@ -145,7 +145,6 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             emit_nested_text(para, rules, ctx);
             if !body.is_empty() {
                 ctx.open_opaque(para);
-                ctx.mark_math();
                 para.push_markup(format!("${body}$"), &body);
             }
         }
@@ -164,7 +163,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             // wants from it is in the nested boxes. `easytable` wraps every
             // table in exactly this shape, so this arm is also where a
             // table's rules-only twin is paired with the real one.
-            if elems.iter().all(is_pure_text) {
+            if elems.iter().all(crate::recover::is_pure_text) {
                 let depth = ctx.push_overlaid_rules(elems);
                 emit_nested_text(para, elems, ctx);
                 ctx.pop_overlaid_rules(depth);
@@ -218,23 +217,18 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         PureHorzBox::Footnote { block } => {
             ctx.open_opaque(para);
             // Rendered NOW, where the marker rides, so it sees the
-            // surrounding context — but into its own writer, with the
-            // inline-flow state saved across it so the note's last character
-            // does not decide the spacing of the word after the reference.
-            let saved = (
-                ctx.pending_glue.take(),
-                ctx.last_char.take(),
-                ctx.mono_run.get(),
-            );
-            // Park the block queue: without this a table the paragraph
-            // queued before reaching this marker would be emitted INSIDE the
-            // note's body.
-            let parked = std::mem::take(&mut *ctx.pending_blocks.borrow_mut());
-            let body = super::block::render_block(block, ctx);
-            *ctx.pending_blocks.borrow_mut() = parked;
-            ctx.pending_glue.set(saved.0);
-            ctx.last_char.set(saved.1);
-            ctx.mono_run.set(saved.2);
+            // surrounding context — but into its own writer, and inside
+            // `Ctx::isolated` so the note's last character does not decide
+            // the spacing of the word after the reference.
+            let body = ctx.isolated(|| {
+                // Park the block queue too: without this a table the
+                // paragraph queued before reaching this marker would be
+                // emitted INSIDE the note's body.
+                let parked = std::mem::take(&mut *ctx.pending_blocks.borrow_mut());
+                let body = super::block::render_block(block, ctx);
+                *ctx.pending_blocks.borrow_mut() = parked;
+                body
+            });
             let body = body.trim();
             if !body.is_empty() {
                 para.push_markup(format!("\\footnote{{{body}}}"), "");
@@ -260,23 +254,6 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
     }
 }
 
-/// A `FixedEmpty` (`inline-skip`) at least this wide (pt) is a deliberate gap
-/// worth one space; anything narrower is a KERN and renders as nothing. The
-/// same two populations the other backends separate here — a paragraph indent
-/// or a table cell's padding above, the `\LaTeX` logo's own kerns and a
-/// table-of-contents leader's dot spacing below.
-const HSKIP_MIN_PT: f64 = 2.0;
-
-/// Smaller than this in either dimension (pt) and a drawing's INK is a rule,
-/// a leader dot or a piece of underlining, not a figure.
-///
-/// The size measured is the INK's, not the box's, and that distinction is
-/// load-bearing: `stdjabook` draws the rule under a section heading as a
-/// 440pt x 1pt line inside a 440pt x 4pt box. Judged by the box it is a
-/// figure, and every heading in `easytable`'s manual would grow a
-/// `tikzpicture` above and below it.
-const GRAPHIC_MIN_PT: f64 = 4.0;
-
 /// One `InnerString` run.
 fn emit_run(para: &mut Para, info: &HorzStringInfo, text: &str, width: f64, ctx: &Ctx) {
     if text.is_empty() {
@@ -292,24 +269,19 @@ fn emit_run(para: &mut Para, info: &HorzStringInfo, text: &str, width: f64, ctx:
         }
         ctx.drop_fn_marker.set(false);
     }
-    let mono = crate::recover::is_monospace(ctx.fonts, Some(info.font));
+    let mono = ctx.mono_files.is_monospace(ctx.fonts, Some(info.font));
     ctx.resolve_glue(para, text.chars().next());
     ctx.last_char.set(text.chars().next_back());
     ctx.mono_run.set(mono);
-    if text.chars().any(crate::recover::is_cjk) {
+    // Guarded on the flag, not just on the scan: this is a per-RUN question
+    // whose answer never goes back to `false`, and the box stream emits one
+    // run per CJK character.
+    if !ctx.uses_cjk.get() && text.chars().any(crate::recover::is_cjk) {
         ctx.mark_cjk();
     }
-    // The fixed-pitch advance, measured rather than assumed: in a fixed-pitch
-    // face every character is one advance wide, so a run's own width divided
-    // by its character count IS the column width a code block's indentation
-    // is counted in. Only a run of plain ASCII is measured — a fixed-pitch
-    // Latin face still sets a stray CJK character full-width, which would
-    // halve the estimate.
     if mono && ctx.mono_advance.get().is_none() {
-        let n = text.chars().count();
-        if n > 0 && width > 0.0 && text.chars().all(|c| c.is_ascii_graphic()) {
-            ctx.mono_advance.set(Some(width / n as f64));
-        }
+        ctx.mono_advance
+            .set(crate::recover::mono_advance(text, width));
     }
     para.push_text(text, mono);
 }
@@ -338,27 +310,13 @@ fn open_link(para: &mut Para, deco: &DecoId, ctx: &Ctx) -> bool {
 
 /// A drawing that actually draws something.
 fn emit_drawing(para: &mut Para, elems: &[GraphicsElem], width: f64, height: f64, ctx: &Ctx) {
-    let Some(((lo_x, lo_y), (hi_x, hi_y))) = elems
-        .iter()
-        .filter_map(rustyfi_backend::graphics_bbox)
-        .reduce(|(alo, ahi), (blo, bhi)| {
-            (
-                (
-                    Length(alo.0 .0.min(blo.0 .0)),
-                    Length(alo.1 .0.min(blo.1 .0)),
-                ),
-                (
-                    Length(ahi.0 .0.max(bhi.0 .0)),
-                    Length(ahi.1 .0.max(bhi.1 .0)),
-                ),
-            )
-        })
-    else {
+    let Some(((lo_x, lo_y), (hi_x, hi_y))) = crate::recover::ink_bbox(elems) else {
         return;
     };
-    if hi_x.0 - lo_x.0 < GRAPHIC_MIN_PT || hi_y.0 - lo_y.0 < GRAPHIC_MIN_PT {
+    let (ink_w, ink_h) = (hi_x.0 - lo_x.0, hi_y.0 - lo_y.0);
+    if ink_w < crate::recover::GRAPHIC_MIN_PT || ink_h < crate::recover::GRAPHIC_MIN_PT {
         // Not a figure: a hairline rule, a leader dot, a piece of
-        // underlining. Dropped rather than marked — see [`GRAPHIC_MIN_PT`].
+        // underlining. Dropped rather than marked — see `GRAPHIC_MIN_PT`.
         // Its nested text, if any, still flows: an underlined WORD is a
         // `draw-text` over a rule, and the word is the point of it.
         emit_nested_text(para, elems, ctx);
@@ -366,69 +324,31 @@ fn emit_drawing(para: &mut Para, elems: &[GraphicsElem], width: f64, height: f64
     }
     ctx.open_opaque(para);
     // Rendered into its own paragraph buffer so a label carries the same
-    // escaping, emphasis and math handling as body text — and with the
-    // inline-flow state saved across it, since a label's last character must
-    // not decide the spacing after the drawing.
-    let mut label = |contents: &[(Length, PureHorzBox)]| -> String {
-        let saved = (
-            ctx.pending_glue.take(),
-            ctx.last_char.take(),
-            ctx.mono_run.get(),
-        );
-        let mut inner = Para {
-            open: true,
-            ..Para::default()
-        };
-        for (_, cbx) in contents {
-            emit_inline(&mut inner, cbx, ctx);
-        }
-        ctx.pending_glue.set(saved.0);
-        ctx.last_char.set(saved.1);
-        ctx.mono_run.set(saved.2);
-        // As PROSE whatever its face: a node's body is restricted horizontal
-        // mode, where a `verbatim` cannot go.
-        Para {
-            mono: false,
-            has_mono: false,
-            ..inner
-        }
-        .render(None)
-        .map(|r| r.text)
-        .unwrap_or_default()
+    // escaping, emphasis and math handling as body text — and inside
+    // `Ctx::isolated`, since a label's last character must not decide the
+    // spacing after the drawing.
+    let label = |contents: &[(Length, PureHorzBox)]| -> String {
+        ctx.isolated(|| {
+            let mut inner = Para {
+                open: true,
+                ..Para::default()
+            };
+            for (_, cbx) in contents {
+                emit_inline(&mut inner, cbx, ctx);
+            }
+            inner.render_inline()
+        })
     };
-    let scale = super::tikz::fit_scale(
-        hi_x.0 - lo_x.0,
-        hi_y.0 - lo_y.0,
-        ctx.text_area.0,
-        ctx.text_area.1,
-    );
-    match super::tikz::graphics_block(elems, scale, &mut label) {
-        Some(tex) => {
-            ctx.mark_tikz();
-            // `plain` stays a named hole: it feeds the verbatim side of the
-            // paragraph, which is what a content measurement reads, and where
-            // a picture would be worse than useless.
-            para.push_markup(tex, "[graphic]");
-        }
-        None => {
-            ctx.mark_tikz();
-            para.push_markup(
-                super::tikz::placeholder(width, height, "[graphic]"),
-                "[graphic]",
-            );
-        }
-    }
+    let scale = super::tikz::fit_scale(ink_w, ink_h, ctx.text_area.0, ctx.text_area.1);
+    ctx.mark_tikz();
+    // `plain` stays a named hole: it feeds the verbatim side of the
+    // paragraph, which is what a content measurement reads, and where a
+    // picture would be worse than useless.
+    let tex = super::tikz::graphics_block(elems, scale, &label)
+        .unwrap_or_else(|| super::tikz::placeholder(width, height, "[graphic]"));
+    para.push_markup(tex, "[graphic]");
 }
 
-/// Whether `elem` contributes no ink of its own — a `draw-text`, or a group
-/// containing only those.
-fn is_pure_text(elem: &GraphicsElem) -> bool {
-    match elem {
-        GraphicsElem::Text { .. } => true,
-        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inner.iter().all(is_pure_text),
-        _ => false,
-    }
-}
 
 /// Emit the boxes nested inside `draw-text` elements, in document order,
 /// with no drawing around them.
@@ -452,24 +372,4 @@ fn emit_nested_text(para: &mut Para, elems: &[GraphicsElem], ctx: &Ctx) {
     }
 }
 
-/// Does a `Discretionary`'s `pre_break` carry a visible character (the
-/// hyphenation dictionary's hyphen), as opposed to bare glue?
-fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
-    pre_break.iter().any(|b| match b {
-        PureHorzBox::InnerString { text, .. } => !text.is_empty(),
-        _ => false,
-    })
-}
 
-/// The total natural width of a `Discretionary`'s `pre_break` glue, fed to
-/// the ordinary glue rule when there is no hyphen to show.
-fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
-    pre_break
-        .iter()
-        .map(|b| match b {
-            PureHorzBox::OuterEmpty { natural, .. } => natural.0,
-            PureHorzBox::FixedEmpty { width } => width.0,
-            _ => 0.0,
-        })
-        .sum()
-}

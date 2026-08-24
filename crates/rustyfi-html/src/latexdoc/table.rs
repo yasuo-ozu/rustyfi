@@ -39,7 +39,7 @@
 
 use std::fmt::Write as _;
 
-use rustyfi_backend::{GraphicsElem, PureHorzBox, TabularBox};
+use rustyfi_backend::{GraphicsElem, Length, PureHorzBox, TabularBox, VertBox};
 
 use super::para::Para;
 use super::Ctx;
@@ -83,7 +83,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
             // space, and this cell's last character must not decide the
             // spacing of the next.
             ctx.reset_flow();
-            let cell_text = match cell.contents.as_slice() {
+            let cell_text = match sole_embedded_block(&cell.contents) {
                 // A cell wide enough to WRAP holds one whole nested block
                 // rather than an inline run, and the document told us the
                 // measure it wrapped at. A `minipage` of that measure is the
@@ -96,7 +96,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
                 // cell comes out EMPTY: `easytable`'s own `lw 120pt` example
                 // loses its third column entirely, which is what that
                 // section of the manual is demonstrating.
-                [(_, PureHorzBox::EmbeddedBlock { block, width, .. })] => {
+                Some((block, width)) => {
                     let inner = super::block::render_block(block, ctx);
                     let inner = inner.trim();
                     if inner.is_empty() {
@@ -108,12 +108,12 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
                         )
                     }
                 }
-                contents => {
+                None => {
                     let mut para = Para {
                         open: true,
                         ..Para::default()
                     };
-                    for (_, bx) in contents {
+                    for (_, bx) in &cell.contents {
                         match bx {
                             // An embedded block sharing its cell with inline
                             // content has no measure of its own to give a
@@ -129,19 +129,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
                             _ => super::inline::emit_inline(&mut para, bx, ctx),
                         }
                     }
-                    // Rendered as prose whatever its face: a fixed-pitch cell
-                    // becomes `\texttt{}`, never a `Verbatim`, because a
-                    // verbatim environment in an alignment cell reads the `&`
-                    // and `\\` that delimit the cell itself.
-                    let rendered = Para {
-                        mono: false,
-                        has_mono: false,
-                        ..para
-                    }
-                    .render(None)
-                    .map(|r| r.text)
-                    .unwrap_or_default();
-                    cell_body(&rendered)
+                    cell_body(&para.render_inline())
                 }
             };
             ctx.reset_flow();
@@ -183,6 +171,50 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
     Some(out)
 }
 
+/// The block and measure of a cell whose only INK is one `EmbeddedBlock` —
+/// i.e. a cell the document set at its own measure and wrapped.
+///
+/// **Testing the slice for a single element does not work, and it took a
+/// corpus count of zero minipages to notice.** `tabular::solidify_tabular`
+/// runs every cell through `pad_content` (`tabular.rs:270`), which
+/// unconditionally pushes a `FixedEmpty` on each side for the cell padding,
+/// and `justify_line` keeps every box it is given including the zero-width
+/// ones. So a real cell's `contents` is never shorter than three, a
+/// `[(_, EmbeddedBlock)]` pattern can only ever match a hand-built fixture,
+/// and every wrapping cell in `easytable`'s manual was silently taking the
+/// flattening fallback instead.
+///
+/// Skipping the boxes that carry no ink is the rule the pattern was reaching
+/// for, and it survives `easytable` changing its padding.
+fn sole_embedded_block(contents: &[(Length, PureHorzBox)]) -> Option<(&[VertBox], Length)> {
+    let mut found = None;
+    for (_, bx) in contents {
+        match bx {
+            PureHorzBox::EmbeddedBlock { block, width, .. } if found.is_none() => {
+                found = Some((block.as_slice(), *width))
+            }
+            // A second block, or anything that draws: not a sole block.
+            _ if !is_inkless(bx) => return None,
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Does `bx` contribute nothing a reader would see — cell padding, a break
+/// opportunity, an inert marker?
+fn is_inkless(bx: &PureHorzBox) -> bool {
+    matches!(
+        bx,
+        PureHorzBox::FixedEmpty { .. }
+            | PureHorzBox::OuterEmpty { .. }
+            | PureHorzBox::OuterFil
+            | PureHorzBox::HookPageBreak { .. }
+            | PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::InlineMark(_)
+    )
+}
+
 /// The column specification: `l` per column, with a `|` wherever a vertical
 /// rule was recovered — see this module's doc comment on why `l` and not `c`.
 fn colspec(borders: &crate::recover::Borders, width: usize) -> String {
@@ -207,21 +239,7 @@ fn colspec(borders: &crate::recover::Borders, width: usize) -> String {
 /// `Paragraph ended before \\ was complete` — a hard error. Everything
 /// collapses to spaces.
 fn cell_body(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut last_space = true;
-    for c in s.chars() {
-        let c = if c == '\n' || c == '\r' { ' ' } else { c };
-        if c == ' ' {
-            if !last_space {
-                out.push(' ');
-            }
-            last_space = true;
-        } else {
-            out.push(c);
-            last_space = false;
-        }
-    }
-    out.trim().to_string()
+    crate::collapse_whitespace(s)
 }
 
 #[cfg(test)]

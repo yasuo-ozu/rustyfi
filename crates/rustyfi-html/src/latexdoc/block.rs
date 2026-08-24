@@ -46,45 +46,47 @@ use crate::recover::{LineJoin, WORD_SPACE_PT};
 /// `line-break` once per SOURCE LINE, so a thirty-line listing arrives as
 /// thirty one-line paragraphs, and fencing them as they come is thirty
 /// separate `Verbatim` environments with a `\par` between each pair.
-pub(super) struct Writer {
+pub(super) struct Writer<'a, 'b> {
     out: String,
-    /// `true` for an `enumerate`, `false` for an `itemize`; the depth is the
-    /// length.
-    lists: Vec<bool>,
-    /// Whether the current item has had any content yet, so an `\item` is
-    /// written exactly once per item even when the item's content arrives as
-    /// several blocks.
-    item_open: Vec<bool>,
+    /// One frame per open list. `ordered` picks the environment; `item` is
+    /// `Some(false)` for an item that still owes its `\item`, `Some(true)`
+    /// once written, `None` between items. ONE stack rather than two kept in
+    /// lockstep — the unwind in [`Writer::finish`] has to pop them together,
+    /// and two stacks make that an assumption instead of a fact.
+    lists: Vec<ListFrame>,
     /// Code content written but not yet wrapped — see the type's doc comment.
     pending_code: Option<String>,
-    /// Set when the writer emitted at least one `Verbatim`, so `mod.rs` knows
-    /// to declare `fvextra`.
-    used_verbatim: bool,
-    /// No LaTeX ENVIRONMENT may be opened here — see `Ctx::inline_only`.
-    inline_only: bool,
+    /// Read for `inline_only` and marked for `fvextra`; interior-mutable, so
+    /// a shared reference is all this needs and the flags do not have to be
+    /// mirrored and handed back.
+    ctx: &'a Ctx<'b>,
 }
 
-impl Writer {
-    fn new(inline_only: bool) -> Self {
+/// One open `itemize`/`enumerate`.
+struct ListFrame {
+    ordered: bool,
+    item: Option<bool>,
+}
+
+impl<'a, 'b> Writer<'a, 'b> {
+    fn new(ctx: &'a Ctx<'b>) -> Self {
         Writer {
             out: String::new(),
             lists: Vec::new(),
-            item_open: Vec::new(),
             pending_code: None,
-            used_verbatim: false,
-            inline_only,
+            ctx,
         }
     }
 
     /// Write one rendered paragraph.
-    fn rendered(&mut self, r: &Rendered) {
+    fn rendered(&mut self, r: Rendered) {
         if r.code {
             match &mut self.pending_code {
                 Some(open) => {
                     open.push('\n');
                     open.push_str(&r.text);
                 }
-                None => self.pending_code = Some(r.text.clone()),
+                None => self.pending_code = Some(r.text),
             }
         } else {
             self.flush_code();
@@ -99,18 +101,18 @@ impl Writer {
         let Some(content) = self.pending_code.take() else {
             return;
         };
-        if self.inline_only {
+        if self.ctx.inline_only.get() {
             // No environment may be opened here, so the block's own line
             // structure is what has to go: one `\texttt` of the whole thing.
             // `Not allowed in LR mode` is a fatal error, and a table cell
             // with a code sample in it is common enough (`easytable`'s own
             // manual documents its arguments that way) that dropping the
             // cell instead would be visible.
-            let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
+            let flat = crate::collapse_whitespace(&content);
             self.block(&format!("\\texttt{{{}}}", super::escape::text(&flat)));
             return;
         }
-        self.used_verbatim = true;
+        self.ctx.mark_verbatim();
         self.block(&verbatim(&content));
     }
 
@@ -136,12 +138,7 @@ impl Writer {
             }
             self.out.push('\n');
         }
-        // A block that OPENS with a drawing takes no paragraph indent. The
-        // drawing is sized to the measure (`tikz::fit_scale`), so `article`'s
-        // 15pt `\parindent` in front of it is 15pt of overfull `\hbox` and a
-        // rule sticking into the right margin — and the corpus is full of
-        // full-measure rules under headings, which is where it shows.
-        if body.starts_with("\\begin{tikzpicture}") {
+        if opens_box(body) {
             self.out.push_str("\\noindent ");
         }
         self.out.push_str(body);
@@ -157,7 +154,7 @@ impl Writer {
     /// dropping it would slip an `enumerate`'s numbering for everything
     /// below.
     fn open_item(&mut self) -> bool {
-        let Some(open) = self.item_open.last_mut() else {
+        let Some(Some(open)) = self.lists.last_mut().map(|f| &mut f.item) else {
             return false;
         };
         if *open {
@@ -173,11 +170,14 @@ impl Writer {
 
     fn list_start(&mut self, ordered: bool) {
         self.flush_code();
-        if self.inline_only {
+        if self.ctx.inline_only.get() {
             return;
         }
         self.open_item();
-        self.lists.push(ordered);
+        self.lists.push(ListFrame {
+            ordered,
+            item: None,
+        });
         // LaTeX's own `enumerate`/`itemize` nest four deep and no further
         // (`Too deeply nested`), which is two more levels than any document
         // in the corpus uses.
@@ -187,7 +187,7 @@ impl Writer {
 
     fn list_end(&mut self) {
         self.flush_code();
-        let Some(ordered) = self.lists.pop() else {
+        let Some(frame) = self.lists.pop() else {
             return;
         };
         // An `itemize` with no `\item` in it is `Something's wrong--perhaps a
@@ -197,23 +197,24 @@ impl Writer {
         if self.out.ends_with("\\begin{itemize}\n") || self.out.ends_with("\\begin{enumerate}\n") {
             self.out.push_str("\\item\n");
         }
-        let env = if ordered { "enumerate" } else { "itemize" };
+        let env = if frame.ordered { "enumerate" } else { "itemize" };
         self.push_line(&format!("\\end{{{env}}}"));
     }
 
     fn item_start(&mut self) {
         self.flush_code();
-        if self.inline_only {
-            return;
+        if let Some(frame) = self.lists.last_mut() {
+            frame.item = Some(false);
         }
-        self.item_open.push(false);
     }
 
     fn item_end(&mut self) {
         self.flush_code();
         // An item that produced nothing still gets its marker.
         self.open_item();
-        self.item_open.pop();
+        if let Some(frame) = self.lists.last_mut() {
+            frame.item = None;
+        }
     }
 
     fn push_line(&mut self, line: &str) {
@@ -224,16 +225,30 @@ impl Writer {
         self.out.push('\n');
     }
 
-    pub(super) fn finish(mut self) -> (String, bool) {
+    pub(super) fn finish(mut self) -> String {
         self.flush_code();
         // A list left open by a stream that ended inside one would take the
         // `\end{document}` with it.
         while !self.lists.is_empty() {
-            self.item_open.pop();
             self.list_end();
         }
-        (self.out, self.used_verbatim)
+        self.out
     }
+}
+
+/// Does `body` open with a box that fills the measure, so that a paragraph
+/// indent in front of it would push it into the margin?
+///
+/// All three are sized to the measure and all three are unbreakable, so the
+/// rule is the same for each: `article`'s 15pt `\parindent` becomes 15pt of
+/// overfull `\hbox`. It shows most on a drawing, because the corpus is full
+/// of full-measure rules under headings — but a `tabular` released from
+/// `Ctx::pending_blocks` and a `minipage` from a wrapping cell are the same
+/// shape and were missed while this tested only for a picture.
+fn opens_box(body: &str) -> bool {
+    ["\\begin{tikzpicture}", "\\begin{tabular}", "\\begin{minipage}"]
+        .iter()
+        .any(|env| body.starts_with(env))
 }
 
 /// A code block, wrapped.
@@ -286,19 +301,15 @@ fn verbatim(content: &str) -> String {
 /// Render a nested block list — a footnote body, a wrapped table cell — as
 /// its own fragment.
 pub(super) fn render_block(vboxes: &[VertBox], ctx: &Ctx) -> String {
-    let mut w = Writer::new(ctx.inline_only.get());
+    let mut w = Writer::new(ctx);
     walk_vboxes(&mut w, vboxes, ctx);
-    let (out, used_verbatim) = w.finish();
-    if used_verbatim {
-        ctx.mark_verbatim();
-    }
-    out
+    w.finish()
 }
 
 /// Walk one flat vertical-box list. Reentrant: an `EmbeddedBlock` recurses
 /// into the SAME writer, so its content keeps the environment nesting of
 /// whatever list it is inside.
-fn walk_vboxes(w: &mut Writer, vboxes: &[VertBox], ctx: &Ctx) {
+fn walk_vboxes(w: &mut Writer<'_, '_>, vboxes: &[VertBox], ctx: &Ctx) {
     let mut para = Para::default();
     for vb in vboxes {
         match vb {
@@ -322,28 +333,7 @@ fn walk_vboxes(w: &mut Writer, vboxes: &[VertBox], ctx: &Ctx) {
                             walk_vboxes(w, block, ctx);
                         }
                         other => {
-                            if para.heading_level.is_none() {
-                                para.heading_level = crate::recover::find_heading_level(
-                                    other,
-                                    &ctx.dests,
-                                    &ctx.outline_by_dest,
-                                );
-                                if para.heading_level.is_some() {
-                                    para.heading_dest = heading_dest(other, ctx);
-                                    if para.heading_dest.is_some() {
-                                        // A heading's anchor is a
-                                        // `\hypertarget` — so it needs the
-                                        // package too, whether or not
-                                        // anything in the document ever
-                                        // LINKS to it. Marking only at
-                                        // `open_link` is `Undefined control
-                                        // sequence` on the first heading of
-                                        // any document with no `\href` in
-                                        // it, which is most of them.
-                                        ctx.mark_hyperref();
-                                    }
-                                }
-                            }
+                            note_heading(&mut para, other, ctx);
                             para.open = true;
                             super::inline::emit_inline(&mut para, other, ctx);
                             if matches!(other, PureHorzBox::InnerString { .. }) {
@@ -399,24 +389,26 @@ fn walk_vboxes(w: &mut Writer, vboxes: &[VertBox], ctx: &Ctx) {
     flush_para(w, &mut para, ctx);
 }
 
-/// The destination name a heading paragraph was registered under, so it can
-/// carry a `\hypertarget` for the `\ref`s pointing at it.
+/// Promote this paragraph to a heading if `bx` is the destination frame of
+/// one, recording both the level and the anchor name in one lookup.
 ///
-/// The same two-hop lookup `crate::recover::find_heading_level` makes — this
-/// asks for the middle of it rather than the end, and only once the level has
-/// already matched, so it can be a plain scan.
-fn heading_dest(bx: &PureHorzBox, ctx: &Ctx) -> Option<String> {
-    match bx {
-        PureHorzBox::InlineFrameMarker { id, end: false, .. } => {
-            ctx.dests.get(id).map(|n| n.to_string())
-        }
-        PureHorzBox::Frame { deco, contents, .. } => ctx
-            .dests
-            .get(deco)
-            .map(|n| n.to_string())
-            .or_else(|| contents.iter().find_map(|(_, inner)| heading_dest(inner, ctx))),
-        _ => None,
+/// The first match on the paragraph wins and is never un-decided by a later
+/// box on the same line.
+fn note_heading(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
+    if para.heading_level.is_some() {
+        return;
     }
+    let Some((level, dest)) = crate::recover::find_heading(bx, &ctx.dests, &ctx.outline_by_dest)
+    else {
+        return;
+    };
+    para.heading_level = Some(level);
+    para.heading_dest = Some(dest.to_string());
+    // A heading's anchor is a `\hypertarget`, so it needs the package too,
+    // whether or not anything in the document ever LINKS to it. Marking only
+    // at `open_link` is `Undefined control sequence` on the first heading of
+    // any document with no `\href` in it, which is most of them.
+    ctx.mark_hyperref();
 }
 
 /// What happens at the boundary between two `Line`s of one paragraph.
@@ -457,9 +449,9 @@ fn end_of_line(para: &mut Para, ctx: &Ctx, fil_terminated: bool) {
 /// Close the current paragraph, then release anything it queued: the tables
 /// it contained (block-level, so they cannot stay inline) come out
 /// immediately after it, in the order they were reached.
-fn flush_para(w: &mut Writer, para: &mut Para, ctx: &Ctx) {
+fn flush_para(w: &mut Writer<'_, '_>, para: &mut Para, ctx: &Ctx) {
     if let Some(rendered) = para.render(ctx.mono_advance.get()) {
-        w.rendered(&rendered);
+        w.rendered(rendered);
     }
     para.clear();
     ctx.mono_advance.set(None);

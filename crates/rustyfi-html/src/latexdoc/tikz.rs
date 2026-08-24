@@ -43,7 +43,7 @@ use rustyfi_backend::{Closing, Color, GraphicsElem, Length, Path, PathSeg, PureH
 
 /// The label emitter: a `draw-text` run's nested boxes, rendered as inline
 /// LaTeX for a `\node`. Returning an empty string drops the node.
-pub(super) type LabelEmitter<'a> = &'a mut dyn FnMut(&[(Length, PureHorzBox)]) -> String;
+pub(super) type LabelEmitter<'a> = &'a dyn Fn(&[(Length, PureHorzBox)]) -> String;
 
 /// One drawing as a self-contained `tikzpicture`, or `None` when it has no
 /// bounding box (nothing to draw).
@@ -366,11 +366,11 @@ mod tests {
 
     #[test]
     fn a_fill_declares_its_colour_and_the_even_odd_rule() {
-        let mut nothing = |_: &[(Length, PureHorzBox)]| String::new();
+        let nothing = |_: &[(Length, PureHorzBox)]| String::new();
         let tex = graphics_block(
             &[GraphicsElem::Fill(Color::Rgb(1.0, 0.0, 0.5), square())],
             None,
-            &mut nothing,
+            &nothing,
         )
         .expect("a path is something to draw");
         assert!(tex.contains("\\definecolor{rustyficlr}{rgb}{1.0000,0.0000,0.5000}"), "{tex}");
@@ -384,11 +384,11 @@ mod tests {
     /// information doing so; `xcolor` has the model natively.
     #[test]
     fn cmyk_is_not_converted_away() {
-        let mut nothing = |_: &[(Length, PureHorzBox)]| String::new();
+        let nothing = |_: &[(Length, PureHorzBox)]| String::new();
         let tex = graphics_block(
             &[GraphicsElem::Fill(Color::Cmyk(0.1, 0.2, 0.3, 0.4), square())],
             None,
-            &mut nothing,
+            &nothing,
         )
         .unwrap();
         assert!(
@@ -401,7 +401,7 @@ mod tests {
     /// backend can draw one at all — see the `Text` arm.
     #[test]
     fn a_draw_text_run_becomes_a_node_at_its_own_point() {
-        let mut label = |_: &[(Length, PureHorzBox)]| "hello".to_string();
+        let label = |_: &[(Length, PureHorzBox)]| "hello".to_string();
         let tex = graphics_block(
             &[GraphicsElem::Text {
                 pt: (Length::pt(3.0), Length::pt(-2.0)),
@@ -412,7 +412,7 @@ mod tests {
                 transform: None,
             }],
             None,
-            &mut label,
+            &label,
         )
         .unwrap();
         assert!(
@@ -425,8 +425,8 @@ mod tests {
     /// empty `tikzpicture` still reserves its own `\baselineskip`.
     #[test]
     fn an_empty_drawing_is_declined() {
-        let mut nothing = |_: &[(Length, PureHorzBox)]| String::new();
-        assert!(graphics_block(&[], None, &mut nothing).is_none());
+        let nothing = |_: &[(Length, PureHorzBox)]| String::new();
+        assert!(graphics_block(&[], None, &nothing).is_none());
         // …and so is one whose only element draws nothing.
         assert!(graphics_block(
             &[GraphicsElem::Destination {
@@ -434,7 +434,7 @@ mod tests {
                 pt: (Length::ZERO, Length::ZERO)
             }],
             None,
-            &mut nothing
+            &nothing
         )
         .is_none());
     }

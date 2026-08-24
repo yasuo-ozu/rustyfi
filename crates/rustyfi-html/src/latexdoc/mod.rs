@@ -80,6 +80,9 @@ use para::Para;
 /// buffers.
 pub(crate) struct Ctx<'a> {
     fonts: Option<&'a TtfFontStore>,
+    /// Which of the store's FILES are fixed-pitch, computed once — see
+    /// [`crate::recover::MonoFiles`], where the 145ms this saves is measured.
+    mono_files: crate::recover::MonoFiles,
     /// `DecoId -> action` for every `register-link-to-uri`/`-to-location`
     /// call the compile driver observed firing. The `DecoId` a `Frame` or an
     /// `InlineFrameMarker` carries is the SAME one, so this is an exact match
@@ -148,7 +151,6 @@ pub(crate) struct Ctx<'a> {
     uses_cjk: Cell<bool>,
     uses_tikz: Cell<bool>,
     uses_hyperref: Cell<bool>,
-    uses_math: Cell<bool>,
     uses_verbatim: Cell<bool>,
 }
 
@@ -184,6 +186,26 @@ impl Ctx<'_> {
     fn reset_flow(&self) {
         self.pending_glue.set(None);
         self.last_char.set(None);
+    }
+
+    /// Run `f` with the inline-flow state saved and restored around it.
+    ///
+    /// A nested render — a footnote body, a `\node` label — must not let its
+    /// own last character decide the spacing of the word after the marker
+    /// that carried it, and must not inherit the glue pending outside. Both
+    /// call sites saved the same triple by hand before; the risk of that is
+    /// that the triple grows a fourth member and only one of them gets it.
+    fn isolated<T>(&self, f: impl FnOnce() -> T) -> T {
+        let saved = (
+            self.pending_glue.take(),
+            self.last_char.take(),
+            self.mono_run.get(),
+        );
+        let out = f();
+        self.pending_glue.set(saved.0);
+        self.last_char.set(saved.1);
+        self.mono_run.set(saved.2);
+        out
     }
 
     /// Settle any pending glue against "no following character" before
@@ -225,9 +247,6 @@ impl Ctx<'_> {
     }
     fn mark_hyperref(&self) {
         self.uses_hyperref.set(true);
-    }
-    fn mark_math(&self) {
-        self.uses_math.set(true);
     }
     fn mark_verbatim(&self) {
         self.uses_verbatim.set(true);
@@ -290,6 +309,7 @@ fn render_latex_impl(
     let area = text_area(source, paper_w, paper_h);
     let ctx = Ctx {
         fonts: font_store,
+        mono_files: crate::recover::MonoFiles::new(font_store),
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests
             .iter()
@@ -313,7 +333,6 @@ fn render_latex_impl(
         uses_cjk: Cell::new(false),
         uses_tikz: Cell::new(false),
         uses_hyperref: Cell::new(false),
-        uses_math: Cell::new(false),
         uses_verbatim: Cell::new(false),
     };
 
@@ -540,6 +559,7 @@ fn pdf_metadata(extras: &DocExtras) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustyfi_backend::PureHorzBox;
 
     /// The engine is named where a reader will see it, and enforced where TeX
     /// will. A document with no CJK says neither — it compiles anywhere.
@@ -582,5 +602,4 @@ mod tests {
         assert!(tex.contains("研究計画"), "{tex}");
     }
 
-    use rustyfi_backend::PureHorzBox;
 }

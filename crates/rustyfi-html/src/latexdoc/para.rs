@@ -154,30 +154,12 @@ impl Para {
         self.fil_lines = 0;
     }
 
-    /// Is this paragraph a code block — one whose line breaks are the
-    /// AUTHOR's and whose whitespace is significant?
-    ///
-    /// The obvious test, "every run is fixed-pitch", is not enough, and this
-    /// is the Markdown backend's finding rather than a fresh one: a `+code`
-    /// block containing any Japanese fails it, because a fixed-pitch Latin
-    /// face has no CJK glyphs and SATySFi sets those characters in the
-    /// document's own gothic/mincho face, so the paragraph reads as MIXED. In
-    /// `latexcmds`' manual, whose code samples are full of Japanese string
-    /// literals, that is most of the code blocks in the document.
-    ///
-    /// The reliable signal is structural: `code.satyh` builds a block as ONE
-    /// `line-break` over a sequence of
-    /// `inline-skip ++ line ++ inline-fil ++ discretionary`, one per source
-    /// line, so EVERY line of a code block ends with an `inline-fil`. A
-    /// justified prose paragraph ends only its LAST line that way.
-    ///
-    /// A single line cannot be told apart this way, so a one-line paragraph
-    /// falls back to the all-fixed-pitch test. The count is a MAJORITY rather
-    /// than "all", because a code line too long for the measure is broken by
-    /// the paragraph breaker like any other and ends at a hyphenation point
-    /// instead of at its fil.
+    /// Is this paragraph a code block? The rule is
+    /// [`crate::recover::is_code_paragraph`], shared with the Markdown
+    /// backend because it is a question about the box stream rather than
+    /// about either output vocabulary.
     pub(super) fn is_code(&self) -> bool {
-        self.mono || (self.lines >= 2 && self.has_mono && self.fil_lines * 2 > self.lines)
+        crate::recover::is_code_paragraph(self.mono, self.has_mono, self.lines, self.fil_lines)
     }
 
     pub(super) fn note_line(&mut self, ended_with_fil: bool) {
@@ -247,6 +229,21 @@ impl Para {
         Some(Rendered { text, code: false })
     }
 
+    /// This paragraph as LaTeX for a place where no ENVIRONMENT may be
+    /// opened — a `tabular` cell or a `\node` body, both of which are TeX's
+    /// restricted horizontal mode.
+    ///
+    /// The rule is stated here rather than at the two call sites because it
+    /// is a fact about the DESTINATION, not about the paragraph: a
+    /// fixed-pitch cell becomes `\texttt{}`, never a `Verbatim`, because a
+    /// verbatim environment inside an alignment reads the `&` and `\\` that
+    /// delimit the cell itself. Spelling it at the call sites — by zeroing
+    /// the two fields `is_code` happens to read — worked only for as long as
+    /// `is_code` read exactly those two.
+    pub(super) fn render_inline(&self) -> String {
+        self.render_prose()
+    }
+
     /// The paragraph as flowing LaTeX prose.
     fn render_prose(&self) -> String {
         let mut out = String::new();
@@ -301,27 +298,20 @@ impl Para {
                     }
                     open.push((cmd_at, out.len()));
                 }
-                Piece::Close => match open.pop() {
-                    // Nothing but spacing between the braces: withdraw the
-                    // whole wrapper. `\href{u}{}` is an invisible link and
-                    // `\emph{}` is a stray, and a `\href` whose content was a
-                    // drawn bullet produces exactly that.
-                    Some((cmd_at, body_at)) if out[body_at..].trim().is_empty() => {
-                        out.truncate(cmd_at);
-                    }
-                    Some((cmd_at, body_at)) => close_wrapper(&mut out, cmd_at, body_at),
-                    // An unmatched close — the marker pairs are stdlib-paired
-                    // so this should not happen; a stray `}` would be a hard
-                    // error, so it is dropped.
-                    None => {}
-                },
+                // An unmatched close — the marker pairs are stdlib-paired so
+                // this should not happen; a stray `}` would be a hard error,
+                // so `close_top` drops it.
+                Piece::Close => close_top(&mut out, &mut open),
             }
             i += 1;
         }
         // Whatever is still open closes here rather than at the end of the
-        // document.
-        for _ in 0..open.len() {
-            out.push('}');
+        // document — through the SAME path, so an unterminated wrapper gets
+        // the empty-withdrawal and space-migration a terminated one does.
+        // Two closing paths meant the tail emitted the bare `\emph{}` the
+        // other one exists to prevent.
+        while !open.is_empty() {
+            close_top(&mut out, &mut open);
         }
         out
     }
@@ -334,7 +324,7 @@ impl Para {
             match piece {
                 Piece::Text { s, .. } => out.push_str(s),
                 Piece::Gap(pt) => {
-                    for _ in 0..gap_spaces(*pt, advance) {
+                    for _ in 0..crate::recover::gap_spaces(*pt, advance) {
                         out.push(' ');
                     }
                 }
@@ -393,8 +383,23 @@ impl Para {
     }
 }
 
-/// Close the wrapper whose opening command ends at `start`, moving any space
-/// that ended up inside the braces to the OUTSIDE of them.
+/// Close the innermost open wrapper, if there is one. THE only closing path,
+/// used both by `Piece::Close` and by the end-of-paragraph sweep.
+///
+/// A wrapper with nothing but spacing between its braces is withdrawn
+/// entirely: `\href{u}{}` is an invisible, unclickable link and `\emph{}` is
+/// a stray, and a `\href` whose content was a drawn bullet produces exactly
+/// that.
+fn close_top(out: &mut String, open: &mut Vec<(usize, usize)>) {
+    match open.pop() {
+        Some((cmd_at, body_at)) if out[body_at..].trim().is_empty() => out.truncate(cmd_at),
+        Some((cmd_at, body_at)) => close_wrapper(out, cmd_at, body_at),
+        None => {}
+    }
+}
+
+/// Close the wrapper whose opening command runs `cmd_at..body_at`, moving any
+/// space that ended up inside the braces to the OUTSIDE of them.
 ///
 /// The word space before a wrapper is PENDING when the wrapper opens — the
 /// glue rule cannot settle it until the character that follows is known, and
@@ -416,7 +421,7 @@ fn close_wrapper(out: &mut String, cmd_at: usize, body_at: usize) {
     let trail = out.len() - out.trim_end_matches(' ').len();
     out.truncate(out.len() - trail);
     out.push('}');
-    for _ in 0..trail.min(1) {
+    if trail > 0 {
         out.push(' ');
     }
 }
@@ -478,45 +483,19 @@ fn mono_run_text(run: &[Piece]) -> (bool, String, bool) {
     (lead, trimmed.to_string(), trail)
 }
 
-/// How many spaces a gap of `pt` points is, in a document whose fixed-pitch
-/// character advances `advance` points.
-///
-/// `code.satyh` sizes both the leading indent and every inter-word space in
-/// exact multiples of that advance (`set-space-ratio (charwid /' fontsize)`),
-/// so this division is not an estimate — it recovers the source's own column
-/// count. With no advance measured (a base-14 render, where no font file says
-/// whether a face is fixed-pitch at all) it degrades to one space.
-fn gap_spaces(pt: f64, advance: Option<f64>) -> usize {
-    match advance {
-        Some(a) if a > 0.0 => (pt / a).round().max(0.0) as usize,
-        _ => usize::from(pt > 0.0),
-    }
-}
 
 /// Collapse the runs of spaces a rejoined paragraph accumulates — a line
 /// boundary and the glue on either side of it each contribute one — into
 /// single spaces, and drop them at the edges.
 ///
-/// This is not only tidiness. A BLANK line inside what this backend is about
-/// to write as one paragraph starts a new one in LaTeX, and a line beginning
-/// with spaces after a `\\` is a different thing again; folding the whole
-/// paragraph onto one line makes both unreachable.
+/// This is not only tidiness, which is why it is
+/// [`crate::collapse_whitespace`] rather than a local trim. A BLANK line
+/// inside what this backend is about to write as one paragraph starts a new
+/// one in LaTeX, and a line beginning with spaces after a `\\` is a different
+/// thing again; folding the whole paragraph onto one line makes both
+/// unreachable.
 fn collapse_spaces(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut last_space = false;
-    for c in s.chars() {
-        let c = if c == '\n' { ' ' } else { c };
-        if c == ' ' {
-            if !last_space {
-                out.push(' ');
-            }
-            last_space = true;
-        } else {
-            out.push(c);
-            last_space = false;
-        }
-    }
-    out.trim().to_string()
+    crate::collapse_whitespace(s)
 }
 
 #[cfg(test)]
@@ -665,9 +644,9 @@ mod tests {
 
     #[test]
     fn gap_spaces_recovers_the_source_column_count() {
-        assert_eq!(gap_spaces(15.0, Some(5.0)), 3);
-        assert_eq!(gap_spaces(0.0, Some(5.0)), 0);
-        assert_eq!(gap_spaces(15.0, None), 1);
-        assert_eq!(gap_spaces(0.0, None), 0);
+        assert_eq!(crate::recover::gap_spaces(15.0, Some(5.0)), 3);
+        assert_eq!(crate::recover::gap_spaces(0.0, Some(5.0)), 0);
+        assert_eq!(crate::recover::gap_spaces(15.0, None), 1);
+        assert_eq!(crate::recover::gap_spaces(0.0, None), 0);
     }
 }

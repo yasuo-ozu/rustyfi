@@ -130,6 +130,9 @@ body {{\n\
    selection too, which is the whole thing being avoided. */\n\
 .math-glyphs .mphantom {{ fill: none; }}\n\
 .embed {{ margin: 0.5em 0; }}\n\
+/* A block composed into a drawing (`inline.rs`'s `emit_embedded_block`), at\n\
+   the measure the document chose for it. */\n\
+.embed-inline {{ display: inline-block; max-width: 100%; text-align: left; }}\n\
 .iframe {{ display: inline; }}\n\
 .hskip {{ display: inline-block; }}\n\
 .clearpage {{\n\

@@ -50,6 +50,7 @@ use std::fmt::Write as _;
 
 use rustyfi_backend::{
     AnnotAction, Color, GraphicsElem, HorzStringInfo, InlineMarkKind, MathGlyph, PureHorzBox,
+    VertBox,
 };
 
 use super::{Ctx, GlyphOutline};
@@ -375,19 +376,101 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
             let _ = write!(out, "<span class=\"fnref\" id=\"fnref-{n}\"></span>");
         }
 
-        // `EmbeddedBlock` is handled one level up, in `block.rs`'s own
-        // per-`Line`-contents loop (it needs to CLOSE the open paragraph,
-        // which this function's `&mut String` signature has no way to do)
-        // — unreachable in practice, kept as an explicit inert arm rather
-        // than a silent catch-all so a future new `PureHorzBox` variant
-        // still forces a compile error here instead of silently falling
-        // through.
-        PureHorzBox::EmbeddedBlock { .. } => {}
+        // An `EmbeddedBlock` reached from INSIDE inline content — see
+        // [`emit_embedded_block`] for what it is doing there and why this arm
+        // was empty (and wrong) until it was measured.
+        PureHorzBox::EmbeddedBlock { width, block, .. } => {
+            emit_embedded_block(out, width.0, block, ctx)
+        }
 
         // No reflow meaning (zero-width markers/hooks; matches the PDF
         // writer's own wildcard treatment of these two).
         PureHorzBox::HookPageBreak { .. } | PureHorzBox::FrameMarker { .. } => {}
     }
+}
+
+/// An `embed-block-top`/`-bottom` box reached from INSIDE inline content, as
+/// an intrinsically-sized inline-block holding its own text.
+///
+/// **This arm used to be empty, and the comment saying so claimed it was
+/// "unreachable in practice". That was false**, and it silently deleted
+/// content. `block.rs`'s own per-`Line` loop does handle the common case —
+/// an `EmbeddedBlock` sitting directly on a line, where it can flush the open
+/// paragraph and emit a real `<div class="embed">` — but that is not the only
+/// way one arrives. A package that composes a block into a DRAWING reaches
+/// this function instead, through `svg::emit_graphics`' `draw-text` callback:
+/// `figbox`'s `frame`/`bgcolor`/`shift`/`rotate`/`scale`/`graffiti` each wrap
+/// their argument in `inline-graphics (fun (x, y) -> [draw-text (x, y) ib])`,
+/// so `textbox-with-width 100pt {…} |> frame 1pt Color.black` — a framed
+/// paragraph, the single most ordinary thing that package does — put an
+/// `EmbeddedBlock` here and the text vanished, leaving an empty rectangle the
+/// right size. A `Frame`'s `contents` and a nested table cell reach it the
+/// same way.
+///
+/// **Why it renders as an inline-block of INLINE content rather than reusing
+/// `block::walk_vboxes`.** Everything this function writes ends up inside the
+/// enclosing `<p class="para">`, and an HTML parser closes an open `<p>` at
+/// the first block-level start tag it meets — so emitting the `<p>`s that
+/// `walk_vboxes` produces would not nest them, it would TERMINATE the
+/// paragraph they are inside and spill the rest of it out. So each of the
+/// block's lines is emitted as inline content, and only a real paragraph
+/// boundary (a `Skip`/`ParagTop`/`FramePad`, or a frame edge) becomes a
+/// `<br>`; a line-to-line boundary inside one paragraph becomes ordinary
+/// glue, exactly as `block.rs` treats it, because the browser is going to
+/// re-break the text itself.
+///
+/// **The width is the document's and is kept**, since that is the whole
+/// content of the construction — `textbox-with-width 100pt` means "break this
+/// paragraph at 100pt". `max-width:100%` keeps it from overflowing a narrow
+/// reader. The baseline needs no declaration: an inline-block's own baseline
+/// is that of its LAST line box, which is exactly `embed-block-bottom`'s
+/// `anchor_last`. `embed-block-top` anchors on its FIRST line instead and CSS
+/// has no spelling for that; it is left on the same rule, which differs only
+/// for a multi-line top-anchored block and is a great deal closer than the
+/// nothing this emitted before.
+fn emit_embedded_block(out: &mut String, width: f64, block: &[VertBox], ctx: &Ctx) {
+    open_opaque(out, ctx);
+    let _ = write!(
+        out,
+        "<span class=\"embed-inline\" style=\"width:{width}pt;\">"
+    );
+    let mut wrote_line = false;
+    let mut want_break = false;
+    for vb in block {
+        match vb {
+            VertBox::Line { contents, .. } => {
+                if want_break && wrote_line {
+                    close_run(out, ctx);
+                    out.push_str("<br>");
+                    ctx.reset_flow();
+                }
+                want_break = false;
+                for (_, bx) in contents {
+                    emit_inline(out, bx, ctx);
+                }
+                wrote_line = true;
+                // Between two lines of ONE paragraph: the browser re-breaks,
+                // so the port's break becomes glue — or nothing at all where
+                // the breaker hyphenated a word. `block.rs`'s own line loop
+                // makes the identical call.
+                super::block::rejoin_lines(out, ctx);
+            }
+            // A real paragraph boundary inside the embedded block.
+            VertBox::Skip(_)
+            | VertBox::ParagTop(_)
+            | VertBox::FramePad(_)
+            | VertBox::ClearPage
+            | VertBox::FrameStart(_)
+            | VertBox::FrameEnd(_) => want_break = true,
+            // Markers with no inline rendering — a list inside an embedded
+            // block inside a drawing keeps its item text and loses only its
+            // bullet, which is the same trade `bullet_suppress` already makes.
+            _ => {}
+        }
+    }
+    close_run(out, ctx);
+    ctx.reset_flow();
+    out.push_str("</span>");
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) survives as a real

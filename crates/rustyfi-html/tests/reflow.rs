@@ -2869,6 +2869,131 @@ fn span_body<'a>(html: &'a str, open: &str) -> Option<&'a str> {
     None
 }
 
+/// A block composed into a DRAWING keeps its text.
+///
+/// **The shape.** `figbox`'s `frame`, `bgcolor`, `shift`, `rotate`, `scale`
+/// and `graffiti` each wrap their argument in
+/// `inline-graphics (fun (x, y) -> [draw-text (x, y) ib; …])`, so
+/// `textbox-with-width 100pt {…} |> frame 1pt Color.black` — a paragraph
+/// broken to a stated measure with a rule round it, the most ordinary thing
+/// that package does — arrives as a `PureHorzBox::EmbeddedBlock` inside a
+/// `draw-text`, i.e. at `inline::emit_inline` rather than at `block.rs`'s own
+/// per-`Line` loop.
+///
+/// **The bug.** That arm was empty, with a comment asserting it was
+/// "unreachable in practice". It was reachable, and the whole paragraph
+/// silently disappeared: the page kept the frame, correctly sized, with
+/// nothing inside it. Nothing failed and nothing warned.
+///
+/// The assertion is that the text is THERE and inside the drawing's own
+/// wrapper — not merely somewhere on the page, which a fix that deferred the
+/// block to after the paragraph (the way a footnote is deferred) would also
+/// satisfy while moving the caption out of its own figure.
+#[test]
+fn an_embedded_block_inside_a_draw_text_keeps_its_text() {
+    let inner = PureHorzBox::EmbeddedBlock {
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::pt(3.0),
+        block: vec![text_line("INSIDE THE FRAME")],
+        anchor_last: true,
+        breakable: false,
+    };
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::pt(3.0),
+        elems: vec![
+            draw_text(inner),
+            rule_line(0.0, 0.0, 100.0, 0.0, 1.0),
+        ],
+    };
+    let html = render(&[line(gfx)]);
+    assert!(
+        html.contains("INSIDETHEFRAME") || html.contains("INSIDE THE FRAME"),
+        "the embedded block's text was dropped — the frame is drawn empty:\n{html}"
+    );
+    let wrapper = span_body(&html, "<span class=\"gfx\"").expect("a graphics wrapper");
+    assert!(
+        wrapper.contains("INSIDE"),
+        "the text landed outside the drawing it belongs to:\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("class=\"embed-inline\" style=\"width:100pt;\""),
+        "the block's own measure is not kept, so the paragraph reflows to \
+         the full column instead of the 100pt it was built for:\n{wrapper}"
+    );
+    // Inline markup only. Everything here is inside the enclosing
+    // `<p class="para">`, and an HTML parser closes an open `<p>` at the
+    // first block-level start tag — so a `<p>`/`<div>` in here would not
+    // nest, it would terminate the paragraph and eject the rest of it.
+    for tag in ["<p ", "<p>", "<div ", "<div>"] {
+        assert!(
+            !wrapper.contains(tag),
+            "`{tag}` inside inline content closes the surrounding \
+             paragraph:\n{wrapper}"
+        );
+    }
+    // And it stays out of the `<svg>`, like every other nested run.
+    for body in svg_bodies(&html) {
+        assert!(
+            !body.contains("INSIDE"),
+            "HTML inside an <svg> ends the drawing at the first tag:\n{body}"
+        );
+    }
+}
+
+/// Two paragraphs inside one embedded block stay two, and two LINES of one
+/// paragraph rejoin — the same distinction `block.rs` draws, because the
+/// browser is going to re-break the text and the port's own line breaks must
+/// not survive as hard ones.
+#[test]
+fn an_embedded_block_in_a_drawing_rejoins_lines_but_keeps_paragraphs() {
+    let inner = PureHorzBox::EmbeddedBlock {
+        width: Length::pt(100.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        block: vec![
+            text_line("alpha"),
+            text_line("beta"),
+            VertBox::Skip(Length::pt(6.0)),
+            text_line("gamma"),
+        ],
+        anchor_last: true,
+        breakable: false,
+    };
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(100.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        elems: vec![draw_text(inner)],
+    };
+    // A text-only box at its own anchor emits no sized wrapper of its own
+    // (`a_text_only_graphics_box_emits_no_sized_wrapper`), so the embedded
+    // block is the paragraph's own content here.
+    let html = render(&[line(gfx)]);
+    let embed = html
+        .split("class=\"embed-inline\"")
+        .nth(1)
+        .expect("the inline-block wrapper");
+    assert!(
+        embed.contains("alpha beta"),
+        "two lines of one paragraph must rejoin for the browser to \
+         re-break:\n{embed}"
+    );
+    assert_eq!(
+        embed.matches("<br>").count(),
+        1,
+        "exactly one paragraph boundary, and it is the `Skip`:\n{embed}"
+    );
+    assert!(
+        embed.find("<br>") < embed.find("gamma"),
+        "the break belongs before the second paragraph:\n{embed}"
+    );
+}
+
 fn draw_text(bx: PureHorzBox) -> GraphicsElem {
     draw_text_at(0.0, 0.0, bx)
 }

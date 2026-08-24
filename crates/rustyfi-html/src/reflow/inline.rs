@@ -628,15 +628,13 @@ fn emit_graphics_box(
     }
     open_opaque(out, ctx);
     let total_h = height + depth;
-    let _ = write!(
-        out,
-        "<span class=\"gfx\" style=\"position:relative; display:inline-block; \
-         width:{width}pt; height:{total_h}pt; vertical-align:{}pt;\">\n",
-        -depth,
-    );
+    // Built before the wrapper is opened, because whether there is nested
+    // flow content decides how the wrapper states its size — see
+    // [`wrapper_size`].
+    let mut drawing = String::new();
     let mut nested = String::new();
     crate::svg::emit_graphics(
-        out,
+        &mut drawing,
         elems,
         width,
         height,
@@ -645,8 +643,46 @@ fn emit_graphics_box(
         height,
         &mut |_svg, cbx, _x, _y| emit_nested_text(&mut nested, cbx, ctx),
     );
+    let _ = writeln!(
+        out,
+        "<span class=\"gfx\" style=\"position:relative; display:inline-block; \
+         {} vertical-align:{}pt;\">",
+        wrapper_size(width, total_h, !nested.is_empty()),
+        -depth,
+    );
+    out.push_str(&drawing);
     out.push_str(&nested);
     out.push_str("</span>\n");
+}
+
+/// The `width`/`height` declarations for a math or graphics wrapper.
+///
+/// The wrapper is an `inline-block` sized to the box's own metrics, and
+/// while its only children are the absolutely-positioned `<svg>`s that is
+/// exactly right: it reserves the space the layout engine measured, and the
+/// measurements say the SVG ink stays inside it to within a device pixel at
+/// every zoom and device-scale factor.
+///
+/// A `draw-text` run breaks that. Its boxes cannot go inside the `<svg>`
+/// (see [`emit_nested_text`]), so they end up as FLOW content in the
+/// wrapper — and flow content does not make a fixed-size inline-block grow,
+/// it overflows, painting over the lines above and below. Measured on
+/// `latexcmds`: the `∑` of a `\sum`, which arrives here as a nested run
+/// rather than as a `MathGlyph`, hung 6.1pt out of a 10.4pt box. Stating
+/// the reserved size as a MINIMUM keeps it as the floor it was always meant
+/// to be while letting the box contain whatever the nested content needs —
+/// worst overflow across `latexcmds`' 55 wrappers goes from 6.1pt to
+/// 0.4pt, which is antialiasing. The alternative, moving the nested content
+/// out of the wrapper entirely, was tried and is worse: a `draw-text`
+/// operator sits at the box's own origin, which is where in-flow content
+/// starts anyway, so today's placement is right for the common leading-
+/// operator case and moving it puts `\sum_a^b`'s scripts BEFORE its sigma.
+fn wrapper_size(width: f64, total_h: f64, has_flow_content: bool) -> String {
+    if has_flow_content {
+        format!("min-width:{width}pt; min-height:{total_h}pt;")
+    } else {
+        format!("width:{width}pt; height:{total_h}pt;")
+    }
 }
 
 /// Whether `elem` contributes no ink of its own — a `draw-text`, or a group
@@ -726,6 +762,10 @@ fn emit_text_only(out: &mut String, elems: &[GraphicsElem], ctx: &Ctx) {
 /// rather than at its point within it. That is the documented approximation
 /// this backend already made for the construct (there are no page
 /// coordinates to place it at); it is now merely well-formed.
+///
+/// It does stay INSIDE the wrapper `<span>`, and that is what makes the
+/// wrapper's own size a MINIMUM rather than a fixed reservation — see
+/// [`wrapper_size`], which is where the consequence is worked out.
 fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
     emit_inline(nested, bx, ctx);
     close_run(nested, ctx);
@@ -755,6 +795,11 @@ fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
 ///   shape as [`emit_graphics_box`]) for `rules` — these ARE orientation-
 ///   independent paths, so they go through the normal `<g transform>` flip
 ///   this helper already implements.
+///
+/// **`font-size` is written in USER UNITS, not `pt`, and that is the whole
+/// point of [`math_font_size_uu`]** — see that function for why writing the
+/// `pt` value with a `pt` suffix inside this viewport magnifies every glyph
+/// by exactly 4/3 while leaving `dx`/`dy` and the `rules` paths alone.
 fn emit_math_svg(
     out: &mut String,
     width: f64,
@@ -767,37 +812,51 @@ fn emit_math_svg(
     if glyphs.is_empty() && rules.is_empty() {
         return;
     }
+    // A math box that draws NOTHING of its own — no glyphs, and every rule
+    // a `draw-text` — must not emit the wrapper, for exactly the reason
+    // [`emit_graphics_box`] does not: the wrapper would reserve the box's
+    // full size a SECOND time, on top of the nested content's own. Both
+    // `\paren`-style decorations `latexcmds` builds out of `draw-text` are
+    // this shape, and each arrived under a blank rectangle as tall as the
+    // equation.
+    if glyphs.is_empty() && rules.iter().all(is_pure_text) {
+        let mut nested = String::new();
+        emit_text_only(&mut nested, rules, ctx);
+        out.push_str(&nested);
+        return;
+    }
     open_opaque(out, ctx);
     let total_h = height + depth;
-    let _ = write!(
-        out,
-        "<span class=\"math\" style=\"position:relative; display:inline-block; \
-         width:{width}pt; height:{total_h}pt; vertical-align:{}pt;\">\n\
-         <svg class=\"math-glyphs\" style=\"position:absolute; left:0; top:0; overflow:visible;\" \
-         width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">\n",
-        -depth,
+    // Built before the wrapper is opened, because whether there is nested
+    // flow content decides how the wrapper states its size — see
+    // [`wrapper_size`].
+    let mut drawing = String::new();
+    let _ = writeln!(
+        drawing,
+        "<svg class=\"math-glyphs\" style=\"position:absolute; left:0; top:0; overflow:visible;\" \
+         width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">",
     );
     for g in glyphs {
         let x = g.dx.0;
         let y = height - g.dy.0 - g.info.rising.0;
-        let mut style = format!("font-size:{}pt;", g.info.size.0);
+        let mut style = format!("font-size:{};", math_font_size_uu(g.info.size.0));
         if let Some(stack) = ctx.font_family_for(g.info.font) {
             style.push_str(&format!("font-family:{stack};"));
         }
         if g.info.color != Color::Gray(0.0) {
             style.push_str(&format!("fill:{};", crate::svg::css_color(g.info.color)));
         }
-        let _ = write!(
-            out,
-            "<text x=\"{x}\" y=\"{y}\" style=\"{style}\">{}</text>\n",
+        let _ = writeln!(
+            drawing,
+            "<text x=\"{x}\" y=\"{y}\" style=\"{style}\">{}</text>",
             crate::escape_html(&g.text),
         );
     }
-    out.push_str("</svg>\n");
+    drawing.push_str("</svg>\n");
     let mut nested = String::new();
     if !rules.is_empty() {
         crate::svg::emit_graphics(
-            out,
+            &mut drawing,
             rules,
             width,
             height,
@@ -807,6 +866,65 @@ fn emit_math_svg(
             &mut |_svg, cbx, _x, _y| emit_nested_text(&mut nested, cbx, ctx),
         );
     }
+    let _ = writeln!(
+        out,
+        "<span class=\"math\" style=\"position:relative; display:inline-block; \
+         {} vertical-align:{}pt;\">",
+        wrapper_size(width, total_h, !nested.is_empty()),
+        -depth,
+    );
+    out.push_str(&drawing);
     out.push_str(&nested);
     out.push_str("</span>\n");
+}
+
+/// A math glyph's `pt` font size, spelled for the inside of
+/// [`emit_math_svg`]'s viewport — i.e. in SVG USER UNITS, as a `px` length.
+///
+/// **The bug this exists to prevent.** The math `<svg>` is
+/// `width="{w}pt" viewBox="0 0 {w} {h}"`, so one user unit renders as exactly
+/// one `pt` — the deliberate "1 user unit = 1 pt" contract `svg.rs`'s module
+/// comment states, and what makes `MathGlyph::dx`/`dy` and every `rules` path
+/// coordinate emittable as a bare `Length` with no conversion. An ABSOLUTE
+/// CSS length inside that viewport does NOT get the same treatment: `pt`
+/// resolves against the CSS reference pixel *before* the viewBox transform
+/// (SVG fixes 1px = 1 user unit for absolute-unit conversion), so
+/// `font-size:12pt` becomes 16 user units and then renders at 16pt. Every
+/// glyph came out 4/3 too big while its POSITION stayed right, so glyphs
+/// overlapped each other, overflowed the fraction bars and radical overbars
+/// (which, being `rules` paths, were correctly scaled), and — because the
+/// wrapper `<span>` reserves only the box's own `height`/`depth` while the
+/// `<svg>` is `overflow:visible` — spilled ink into the lines above and
+/// below. The PDF was never affected: it positions each glyph absolutely and
+/// sets the size in the content stream's own points.
+///
+/// **Why `px` and not a bare number**, which is what "user units" literally
+/// means. A unitless length is legal in SVG only as a PRESENTATION
+/// ATTRIBUTE (`font-size="12"`); this size goes into `style="…"`, which is
+/// CSS, and CSS requires a unit on a non-zero `<length>`. Measured in
+/// chromium inside a `viewBox="0 0 100 100"`/`width="100pt"` viewport, four
+/// spellings of "12" on the same `<text>`:
+///
+/// | written                     | computed | user units |
+/// |-----------------------------|----------|-----------:|
+/// | `style="font-size:12pt"`    | `16px`   |         16 |
+/// | `style="font-size:12px"`    | `12px`   |         12 |
+/// | `style="font-size:12"`      | `12px`   |         12 |
+/// | `font-size="12"` (attribute)| `12px`   |         12 |
+///
+/// So the bare `style` spelling happens to work in Blink — Blink runs the
+/// SVG presentation-attribute grammar over the declaration — but it is
+/// invalid CSS and Gecko drops it, which would leave the glyph at the
+/// INHERITED body size with no error anywhere. `px` is the portable
+/// spelling of one user unit (SVG fixes 1px = 1 user unit), so the number
+/// is unchanged and only the unit is corrected: 12pt of document size ->
+/// `font-size:12px` -> 12 user units -> 12pt rendered.
+///
+/// Every other length inside this viewport is already unitless, because
+/// every other one is an attribute rather than CSS: `x`/`y` here, and
+/// `svg.rs`'s `d`, `stroke-width`, `stroke-dasharray` and
+/// `stroke-dashoffset`. `font-size` is the only one that had to be a
+/// declaration, which is why it was the only one that got this wrong.
+fn math_font_size_uu(size_pt: f64) -> String {
+    format!("{size_pt}px")
 }

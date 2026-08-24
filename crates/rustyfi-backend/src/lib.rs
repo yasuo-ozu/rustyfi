@@ -37,7 +37,9 @@ pub use length::Length;
 pub use linebreak::{
     break_into_lines, break_opportunities, fit_cell, measure_block, natural_metrics, BreakKind,
 };
-pub use math::{default_math_variant_char, MathCharClass, MathGlyph, MathKind};
+pub use math::{
+    default_math_variant_char, math_alphanumeric_base, MathCharClass, MathGlyph, MathKind,
+};
 pub use pagebreak::{
     chop_page, place_block_at, placed_line_extent, Page, PlacedLine, MIN_FIRST_ASCENDER,
 };

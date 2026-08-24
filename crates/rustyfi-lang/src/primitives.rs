@@ -1552,6 +1552,33 @@ fn measure_run(
         // font-fallback via run-splitting is the documented follow-up.) This
         // only ever changes behavior for a glyph that would otherwise be a
         // hard error, so covered-glyph documents are byte-identical.
+        //
+        // The math path DOES substitute an uncoverable Mathematical
+        // Alphanumeric for its base letter (`degrade_unrenderable_variant`);
+        // this one deliberately does NOT, for two reasons worth recording
+        // here because this half-em is where the question gets asked:
+        //
+        //  * STRUCTURAL. This function computes a WIDTH and nothing else. The
+        //    character that actually reaches the writer comes from the box's
+        //    own `text` field (`make_inner_string_pure_box`), which
+        //    `cid::encode_glyph_run` re-resolves to a gid. Substituting here
+        //    would move the width and leave the ink alone — strictly worse
+        //    than today, since the run would then be both blank AND
+        //    mis-measured. A correct text-path fix has to rewrite the string
+        //    in `text_to_boxes`, ahead of `Script` classification, hyphenation
+        //    and ToUnicode, all of which read it.
+        //  * QUANTITATIVE. Half an em is nowhere near what the substitute
+        //    would measure, so doing it right WOULD reflow existing text.
+        //    Measured over `A-Za-z0-9` plus the Greek bases in the bundled
+        //    faces: the median |advance − 0.5 em| is 0.106 em in Junicode and
+        //    0.125 em in `latinmodern-math.otf`, and the worst cases are `W`
+        //    at 0.962 em (Junicode) and 1.028 em (LM Math) — an error of up to
+        //    111% of the placeholder itself. The math path can substitute
+        //    precisely because it re-measures the character it returns, so
+        //    there the advance follows the ink instead of a placeholder.
+        //
+        // Uncoverable characters here are reported rather than repaired:
+        // `cid::report_missing_glyphs` names every one, deduped per font.
         let advance = interp
             .metrics
             .advance(font, c, size)
@@ -2869,6 +2896,83 @@ fn math_char_available(interp: &Interp, ctx: &Context, c: char, size: Length) ->
         || interp.metrics.advance(ctx.font, c, size).is_some()
 }
 
+/// Last-resort un-styling for a Mathematical Alphanumeric codepoint that
+/// NEITHER the math font nor the text font can draw: hand back the plain
+/// letter it decomposes to (`rustyfi_backend::math_alphanumeric_base`) when
+/// that one IS drawable, otherwise leave `c` alone.
+///
+/// **The failure this replaces.** An uncovered codepoint reaches the writer
+/// as gid 0. On a TrueType face that is a tofu box; on a CFF/OTF face — which
+/// `latinmodern-math.otf`, this port's own default math font, is — `.notdef`
+/// is typically EMPTY, so the character takes up its advance and paints
+/// nothing whatsoever. Either way the author gets no error and no warning,
+/// which is exactly the "some glyphs are not drawn in PDF mode" report: with
+/// a single uploaded text font (how the playground is configured, and how
+/// `--font` behaves) every Greek letter in `math.satyh` is such a codepoint,
+/// because `\pi` and friends are `greek-lowercase 0x1D70B 0x1D745` —
+/// PRE-STYLED, with no plain `π` anywhere for the existing probe to fall back
+/// to.
+///
+/// **Why it is safe.** The guard is `!math_char_available`, i.e. this can
+/// only fire where today's output is a `.notdef`, so no glyph that renders
+/// today changes; and the substitute is only taken when it is itself
+/// covered, so this never trades one missing glyph for another. Measurement
+/// follows the substitution (the caller measures the char this returns), so
+/// the advance matches the ink instead of being `.notdef`'s.
+///
+/// **Why probing exactly two fonts is the WHOLE set**, which is what makes
+/// "only fires where today's output is `.notdef`" airtight rather than
+/// merely likely:
+///
+///  * The only font a math glyph can be drawn in is `math_glyph_font`'s
+///    result, and that is `ctx.math_font` when it covers the char and
+///    `ctx.font` otherwise — precisely the two [`math_char_available`]
+///    probes, OR-ed the same way. There is no per-script selection in math
+///    (no CJK face, no bold/oblique sibling), and no fallback inside the
+///    store: `TtfFontStore::advance` resolves `FontKey -> file` through the
+///    same `file_index` that `cid::encode_glyph_run` uses, then asks the same
+///    `Face::glyph_index`. So the predicate and the writer agree by
+///    construction, not by coincidence.
+///  * When ONE of the two covers the codepoint and the other does not,
+///    `math_char_available` is already true and nothing happens — the case
+///    a naive `advance(ctx.math_font, ..).is_none()` guard would have got
+///    wrong (`a_char_only_the_text_font_covers_is_not_degraded`).
+///  * The `ssty` and `MathVariants` lookups that can substitute a DIFFERENT
+///    gid for the same char (`math_script_variant`, `math_vertical_variant`)
+///    all begin with `Face::glyph_index(c)?`, so none of them can render a
+///    char whose `advance` is `None`. A miss there falls back here.
+///  * Under `Base14Metrics` the probe is ASCII-only, so a styled codepoint
+///    degrades only when its base letter is ASCII — and that path's
+///    alternative was a hard `PdfError` (`winansi`), not a blank.
+///
+/// **Why not in `resolve_variant_char`.** That one declines the FORWARD
+/// remap `default_math_variant_char` proposes, so it only ever sees a pair it
+/// created itself and cannot help a codepoint that arrived already styled.
+/// Sitting in `push_char_glyph` instead covers every math atom uniformly —
+/// `VariantChar` (whose own arm documents having no probe), `Char`,
+/// `CharWithKern` and the class-map path alike.
+///
+/// **Why the plain TEXT path is left warning-only** is argued at
+/// [`measure_run`], with the measurements: that function is width-only, so a
+/// substitution there would move the width without moving the ink.
+///
+/// Upstream does not substitute; `fontInfo.ml:180-187` warns and takes
+/// `notdef`. See `cid::report_missing_glyphs` for the warning half.
+fn degrade_unrenderable_variant(
+    interp: &Interp,
+    ctx: &Context,
+    c: char,
+    size: Length,
+) -> char {
+    if math_char_available(interp, ctx, c, size) {
+        return c;
+    }
+    match rustyfi_backend::math_alphanumeric_base(c) {
+        Some(base) if math_char_available(interp, ctx, base, size) => base,
+        _ => c,
+    }
+}
+
 /// Measure one math character at `size` under `math_glyph_font(ctx, c)` and
 /// push it as a `MathGlyph` at the running `*x` (`dy = 0`; callers shift
 /// scripts afterward), advancing `*x` past it.
@@ -2880,6 +2984,7 @@ fn push_char_glyph(
     out: &mut Vec<MathGlyph>,
     x: &mut Length,
 ) -> Result<(), EvalError> {
+    let c = degrade_unrenderable_variant(interp, ctx, c, size);
     let font = math_glyph_font(interp, ctx, c, size);
     // `fontInfo.ml:379-383`: a math glyph below base level is set in the font's
     // `ssty` variant — a purpose-drawn form with its own advance, not the base

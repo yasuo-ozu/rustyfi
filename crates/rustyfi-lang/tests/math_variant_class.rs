@@ -534,3 +534,252 @@ fn a_stacked_math_line_above_the_anchor_keeps_its_vertical_offset() {
         "every glyph of the non-anchored line sits above the baseline, got {glyphs:?}"
     );
 }
+
+// ============================================================================
+// Unrenderable Mathematical-Alphanumeric codepoints degrade to their base
+// letter (`primitives::degrade_unrenderable_variant`).
+// ============================================================================
+
+/// A `FontMetrics` stub that covers ASCII *and* the Italic remap block, but
+/// nothing else — a deliberately narrow stand-in for the uneven coverage real
+/// faces have. Measured off the bundled `cmap`s, the real shape is:
+/// `latinmodern-math.otf` covers every assigned codepoint of the block EXCEPT
+/// the two script LOWERCASE runs (U+1D4B6..=U+1D4CF, U+1D4EA..=U+1D503, plus
+/// the Letterlike `ℯ ℊ ℴ` filling their holes) and the two bold digammas —
+/// its Greek, Fraktur, Double-struck and script-CAPITAL runs are complete.
+/// The bundled TEXT faces (Junicode, IPAex) cover none of the block at all,
+/// which is the configuration that matters: a document with an uploaded text
+/// font and no math font gets `.notdef` for every Mathematical Alphanumeric,
+/// including every `\pi` in `math.satyh`.
+struct ItalicOnly;
+
+impl FontMetrics for ItalicOnly {
+    fn advance(&self, _f: FontKey, c: char, size: Length) -> Option<Length> {
+        let u = c as u32;
+        let italic_block = (0x1D434..=0x1D467).contains(&u);
+        if c.is_ascii() || italic_block {
+            Some(size * 0.5)
+        } else {
+            None
+        }
+    }
+    fn ascender(&self, _f: FontKey, size: Length) -> Length {
+        size * 0.75
+    }
+    fn descender(&self, _f: FontKey, size: Length) -> Length {
+        size * 0.25
+    }
+}
+
+/// A `math-variant-char` whose codepoint NO font in the document covers must
+/// come out as the plain letter it decomposes to, not as `.notdef`.
+///
+/// This is the "some glyphs are not drawn in PDF mode" bug. `.notdef` is a
+/// tofu box in a TrueType face but is normally EMPTY in a CFF/OTF one — and
+/// `latinmodern-math.otf` is both a CFF face and the default math font — so
+/// the character used to take its advance and paint nothing, with no error
+/// and no warning. Worse for diagnosis, the ToUnicode CMap still carried the
+/// original codepoint, so `pdftotext` reported the character as present while
+/// the page showed a gap.
+///
+/// U+1D4C1 MATHEMATICAL SCRIPT SMALL L is the real case (`manual/logo.md`
+/// records the same codepoints "coming out EMPTY from `lmmath`", and the
+/// `cmap` confirms it: the script lowercase run is the one run of the block
+/// `latinmodern-math.otf` genuinely lacks); it must degrade to `l`.
+#[test]
+fn an_uncoverable_variant_char_degrades_to_its_base_letter() {
+    let src = with_ctx(
+        "let s = string-unexplode [0x1D4C1] in\n\
+         let scr = math-variant-char MathOrd (|\n\
+           italic = s; bold-italic = s; roman = s; bold-roman = s;\n\
+           script = s; bold-script = s; fraktur = s; bold-fraktur = s;\n\
+           double-struck = s;\n\
+         |) in\n\
+         embed-math ctx scr",
+    );
+    let v = run_with(&src, &ItalicOnly).expect("a variant char should evaluate");
+    let (_, glyphs) = math_box(v);
+    assert_eq!(glyphs.len(), 1, "expected one glyph, got {glyphs:?}");
+    assert_eq!(
+        glyphs[0].text, "l",
+        "U+1D4C1 is in no font here and must degrade to `l`, not to .notdef"
+    );
+}
+
+/// The Greek case, which is what the playground actually hits: `math.satyh`
+/// writes `\pi = greek-lowercase 0x1D70B 0x1D745`, i.e. it hands the layout
+/// PRE-STYLED codepoints. `resolve_variant_char`'s existing probe cannot help
+/// there — it only ever declines a remap it proposed itself, and no plain `π`
+/// was ever in play — so `\pi` was drawn as `.notdef` by any font without the
+/// Mathematical Alphanumeric block (e.g. a single uploaded text font).
+#[test]
+fn an_uncoverable_greek_variant_degrades_to_the_plain_greek_letter() {
+    let src = with_ctx(
+        "let s = string-unexplode [0x1D70B] in\n\
+         let pi = math-variant-char MathOrd (|\n\
+           italic = s; bold-italic = s; roman = s; bold-roman = s;\n\
+           script = s; bold-script = s; fraktur = s; bold-fraktur = s;\n\
+           double-struck = s;\n\
+         |) in\n\
+         embed-math ctx pi",
+    );
+    // `Mono` covers every char, so the styled codepoint must survive.
+    let styled = run_with(&src, &Mono).expect("a variant char should evaluate");
+    assert_eq!(
+        math_box(styled).1[0].text,
+        "\u{1D70B}",
+        "a font that HAS the styled codepoint must keep it"
+    );
+
+    // A font with ASCII plus plain Greek, but no Mathematical Alphanumerics —
+    // the single-uploaded-text-font shape.
+    struct AsciiAndPlainGreek;
+    impl FontMetrics for AsciiAndPlainGreek {
+        fn advance(&self, _f: FontKey, c: char, size: Length) -> Option<Length> {
+            let u = c as u32;
+            if c.is_ascii() || (0x370..=0x3FF).contains(&u) {
+                Some(size * 0.5)
+            } else {
+                None
+            }
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+    }
+    let degraded = run_with(&src, &AsciiAndPlainGreek).expect("should evaluate");
+    assert_eq!(
+        math_box(degraded).1[0].text,
+        "\u{3C0}",
+        "U+1D70B is unavailable here and must degrade to plain `π`"
+    );
+}
+
+/// The guard, which is what keeps this from moving any existing document:
+/// when the styled codepoint IS covered, nothing happens. `${x}` under a font
+/// that has U+1D465 must still render U+1D465, never `x`.
+#[test]
+fn a_coverable_variant_char_is_left_exactly_as_it_was() {
+    let src = with_ctx("embed-math ctx ${x}");
+    let (_, glyphs) = math_box(run_with(&src, &ItalicOnly).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D465}",
+        "the italic block IS covered here, so the remap must stand"
+    );
+}
+
+/// And the other half of the guard: when NEITHER the styled codepoint nor its
+/// base letter is drawable, the source character is kept rather than being
+/// swapped for a second glyph that also cannot be drawn.
+#[test]
+fn an_undrawable_base_letter_leaves_the_source_char_alone() {
+    // Covers nothing at all.
+    struct Nothing;
+    impl FontMetrics for Nothing {
+        fn advance(&self, _f: FontKey, _c: char, _size: Length) -> Option<Length> {
+            None
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+    }
+    let src = with_ctx(
+        "let s = string-unexplode [0x1D4C1] in\n\
+         let scr = math-variant-char MathOrd (|\n\
+           italic = s; bold-italic = s; roman = s; bold-roman = s;\n\
+           script = s; bold-script = s; fraktur = s; bold-fraktur = s;\n\
+           double-struck = s;\n\
+         |) in\n\
+         embed-math ctx scr",
+    );
+    let (_, glyphs) = math_box(run_with(&src, &Nothing).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D4C1}",
+        "with no drawable substitute the original codepoint is kept"
+    );
+}
+
+/// The case every stub above is blind to, because they all answer the same
+/// for every `FontKey`: the math font and the text font DISAGREE about the
+/// codepoint. `math_char_available` ORs the two probes, and
+/// `math_glyph_font` picks whichever one covers it — so a codepoint only ONE
+/// of them has must be left exactly alone in both arrangements. A guard
+/// written against `ctx.math_font` alone (the obvious way to write it) would
+/// substitute in the first arrangement and silently restyle a glyph that
+/// renders perfectly well today.
+///
+/// `default_math_font` is what `get-initial-context` consults to split the
+/// two keys apart, so the stub answers `FontKey(1)` there and keys `advance`
+/// on the font.
+#[test]
+fn a_char_only_the_text_font_covers_is_not_degraded() {
+    /// `FontKey(1)` (math) has ASCII only; `FontKey(0)` (text) additionally
+    /// has U+1D4C1 — the arrangement a document reaches by keeping a
+    /// text-only math face and uploading a text face that happens to be rich.
+    struct TextFontHasIt;
+    impl FontMetrics for TextFontHasIt {
+        fn advance(&self, f: FontKey, c: char, size: Length) -> Option<Length> {
+            let covered = c.is_ascii() || (f == FontKey(0) && c == '\u{1D4C1}');
+            covered.then(|| size * 0.5)
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+        fn default_math_font(&self) -> Option<FontKey> {
+            Some(FontKey(1))
+        }
+    }
+    /// The mirror: the MATH font has it, the text font does not.
+    struct MathFontHasIt;
+    impl FontMetrics for MathFontHasIt {
+        fn advance(&self, f: FontKey, c: char, size: Length) -> Option<Length> {
+            let covered = c.is_ascii() || (f == FontKey(1) && c == '\u{1D4C1}');
+            covered.then(|| size * 0.5)
+        }
+        fn ascender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.75
+        }
+        fn descender(&self, _f: FontKey, size: Length) -> Length {
+            size * 0.25
+        }
+        fn default_math_font(&self) -> Option<FontKey> {
+            Some(FontKey(1))
+        }
+    }
+
+    let src = with_ctx(
+        "let s = string-unexplode [0x1D4C1] in\n\
+         let scr = math-variant-char MathOrd (|\n\
+           italic = s; bold-italic = s; roman = s; bold-roman = s;\n\
+           script = s; bold-script = s; fraktur = s; bold-fraktur = s;\n\
+           double-struck = s;\n\
+         |) in\n\
+         embed-math ctx scr",
+    );
+    let (_, glyphs) = math_box(run_with(&src, &TextFontHasIt).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D4C1}",
+        "only the TEXT font covers it, but it still renders — must not degrade"
+    );
+    assert_eq!(
+        glyphs[0].info.font,
+        FontKey(0),
+        "and it must be drawn in the font that actually has it"
+    );
+
+    let (_, glyphs) = math_box(run_with(&src, &MathFontHasIt).expect("should evaluate"));
+    assert_eq!(
+        glyphs[0].text, "\u{1D4C1}",
+        "only the MATH font covers it — must not degrade either"
+    );
+    assert_eq!(glyphs[0].info.font, FontKey(1));
+}

@@ -297,6 +297,64 @@ fn math_renders_as_an_inline_svg_with_glyph_text() {
     );
 }
 
+/// A math glyph's `font-size` must be in the math `<svg>`'s own USER UNITS,
+/// never an absolute `pt` length.
+///
+/// The `<svg>` is `width="{w}pt" … viewBox="0 0 {w} {h}"`, so one user unit
+/// renders as one `pt` — which is exactly why `dx`/`dy` and the `rules` path
+/// coordinates are emitted as bare `Length` numbers. An absolute CSS length
+/// does NOT get that treatment: SVG converts `pt` to user units at
+/// 1px = 1 user unit, so `font-size:12pt` inside this viewport resolves to
+/// 16 user units and paints at 16pt. Every glyph came out 4/3 too big at a
+/// position computed for 12pt, so glyphs overlapped each other, overflowed
+/// the fraction bars and radical overbars beside them (`rules` paths, which
+/// were correctly scaled all along), and spilled outside the wrapper
+/// `<span>`'s reserved height into the lines above and below. Inline and
+/// displayed math alike, since both are this one `PureHorzBox::Math` arm.
+///
+/// Asserting on the ABSENCE of `pt` here rather than on an exact string, so
+/// the test keeps its meaning if the size is ever reformatted.
+#[test]
+fn math_glyph_font_size_is_in_svg_user_units_not_points() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(8.0),
+        depth: Length::ZERO,
+        glyphs: vec![MathGlyph {
+            text: "x".to_string(),
+            gid: None,
+            dx: Length::ZERO,
+            dy: Length::ZERO,
+            info: HorzStringInfo {
+                font: FontKey(0),
+                size: Length::pt(12.0),
+                rising: Length::ZERO,
+                color: Color::Gray(0.0),
+            },
+            width: Length::pt(10.0),
+            height: Length::pt(8.0),
+            depth: Length::ZERO,
+        }],
+        rules: vec![],
+    };
+    let html = render(&[line(math_box)]);
+    let text_elem = html
+        .lines()
+        .find(|l| l.contains("<text"))
+        .unwrap_or_else(|| panic!("no SVG <text> glyph emitted:\n{html}"));
+    assert!(
+        !text_elem.contains("font-size:12pt"),
+        "math glyph font-size is an absolute `pt` length inside a \
+         1-user-unit-per-pt viewBox — it will paint 4/3 too big:\n{text_elem}"
+    );
+    // 12 user units is what "12pt of document font size" means in here;
+    // `px` is the standards-safe spelling of one user unit.
+    assert!(
+        text_elem.contains("font-size:12px"),
+        "math glyph font-size is not the box's own 12 user units:\n{text_elem}"
+    );
+}
+
 /// A `Math` box's `rules` (fraction bar / radical) must ALSO render — via
 /// the same `svg::emit_graphics` path `Graphics` boxes use — as an SVG
 /// `<path>` inside the math `<svg>`.
@@ -326,6 +384,140 @@ fn math_rules_render_as_svg_paths() {
         html.contains("<path"),
         "missing SVG <path> for the fraction-bar rule:\n{html}"
     );
+}
+
+/// Every length written INSIDE an `<svg>` must be in the viewport's own
+/// user units, i.e. carry no unit at all — or, where CSS forces one
+/// (`font-size`, which is a declaration rather than an attribute), the `px`
+/// that SVG defines as exactly one user unit.
+///
+/// The generalisation of `math_glyph_font_size_is_in_svg_user_units_
+/// not_points`. That test pins the one emitter that got it wrong; this one
+/// pins the RULE, over every emitter at once — `<text>`'s `x`/`y` and
+/// `font-size`, and `svg.rs`'s `d`, `stroke-width`, `stroke-dasharray` and
+/// `stroke-dashoffset` — so a new length written into SVG content with a
+/// `pt` on it fails here even if nobody thinks to extend the other test.
+/// The `<svg>` OPENING tag is deliberately exempt: its `width`/`height` and
+/// its CSS `left`/`top` live in the PARENT's coordinate space, where `pt`
+/// is exactly right and is what makes one user unit come out as one point.
+#[test]
+fn no_absolute_length_unit_appears_inside_an_svg_body() {
+    let dashed = GraphicsElem::DashedStroke(
+        Length::pt(0.8),
+        (Length::pt(3.0), Length::pt(2.0), Length::pt(1.0)),
+        Color::Rgb(0.0, 0.0, 1.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(10.0)),
+                segs: vec![PathSeg::Line((Length::pt(20.0), Length::pt(0.0)))],
+                closing: Closing::Open,
+            }],
+        },
+    );
+    let clipped = GraphicsElem::Clip(
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(0.0)),
+                segs: vec![PathSeg::Line((Length::pt(20.0), Length::pt(20.0)))],
+                closing: Closing::Line,
+            }],
+        },
+        vec![GraphicsElem::Group(vec![rule_line(0.0, 0.0, 20.0, 10.0, 1.5)])],
+    );
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(14.0),
+        depth: Length::pt(4.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![dashed.clone(), clipped.clone()],
+    };
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(20.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![dashed, clipped],
+    };
+    let html = render(&[line(math_box), line(gfx_box)]);
+    let bodies = svg_bodies(&html);
+    assert!(!bodies.is_empty(), "no <svg> emitted at all:\n{html}");
+    for body in bodies {
+        if let Some((num, unit)) = first_absolute_length(body) {
+            panic!(
+                "`{num}{unit}` inside an <svg> body: the viewBox makes one \
+                 user unit one point, so an absolute unit is resolved \
+                 against the CSS reference pixel FIRST and comes out {}/1 \
+                 too big:\n{body}",
+                if unit == "pt" { "4/3" } else { "some other ratio" },
+            );
+        }
+    }
+}
+
+/// One positioned math glyph: `text` at box-local `(dx, dy)`, set at
+/// `size` pt.
+fn glyph(text: &str, size: f64, dx: f64, dy: f64) -> MathGlyph {
+    MathGlyph {
+        text: text.to_string(),
+        gid: None,
+        dx: Length::pt(dx),
+        dy: Length::pt(dy),
+        info: HorzStringInfo {
+            font: FontKey(0),
+            size: Length::pt(size),
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        width: Length::pt(size * 0.6),
+        height: Length::pt(size * 0.7),
+        depth: Length::ZERO,
+    }
+}
+
+/// The `<svg>` bodies of `html`, i.e. what lies between each `<svg …>` and
+/// its `</svg>`. These never nest (`emit_graphics` is the only emitter and
+/// it never re-enters itself), so a flat scan is exact.
+fn svg_bodies(html: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(open) = rest.find("<svg") {
+        let after_tag = rest[open..]
+            .find('>')
+            .map(|i| open + i + 1)
+            .expect("unterminated <svg> tag");
+        let close = rest[after_tag..]
+            .find("</svg>")
+            .map(|i| after_tag + i)
+            .expect("unclosed <svg>");
+        out.push(&rest[after_tag..close]);
+        rest = &rest[close + "</svg>".len()..];
+    }
+    out
+}
+
+/// The first `<digit><unit>` in `s` for any absolute or font-relative CSS
+/// unit other than `px`, or `None`. Scans for the UNIT and looks left, so a
+/// unit inside a word (`Modern`, `points`) is rejected by the digit test.
+fn first_absolute_length(s: &str) -> Option<(char, &'static str)> {
+    const UNITS: [&str; 11] = [
+        "pt", "pc", "in", "mm", "cm", "rem", "em", "ex", "ch", "vw", "vh",
+    ];
+    let bytes = s.as_bytes();
+    for (i, _) in s.char_indices() {
+        for unit in UNITS {
+            if !s[i..].starts_with(unit) {
+                continue;
+            }
+            let before = bytes[..i].last().copied();
+            let after = bytes.get(i + unit.len()).copied();
+            let digit_before = before.is_some_and(|b| b.is_ascii_digit());
+            let word_after = after.is_some_and(|b| b.is_ascii_alphanumeric());
+            if digit_before && !word_after {
+                return Some((before.unwrap() as char, unit));
+            }
+        }
+    }
+    None
 }
 
 /// Slice 2 (§4 "Graphics — inline SVG, reuse `svg::emit_graphics`
@@ -1951,6 +2143,152 @@ fn a_text_only_graphics_box_emits_no_sized_wrapper() {
         render(&[line(drawn)]).contains("class=\"gfx\""),
         "a real drawing lost its wrapper"
     );
+}
+
+/// A wrapper that carries a `draw-text` run's HTML states its reserved
+/// size as a MINIMUM, not as a fixed `width`/`height`.
+///
+/// The wrapper is an `inline-block`. A fixed height is right while its only
+/// children are the absolutely-positioned `<svg>`s, but a `draw-text` run's
+/// boxes cannot go inside the `<svg>` (they eject the rest of the drawing
+/// from it, see `svg.rs`), so they land in the wrapper as FLOW content —
+/// and flow content does not make a fixed-size inline-block grow, it
+/// overflows, painting over the lines above and below. Measured on
+/// `latexcmds`, where the `∑` of a `\sum` arrives as a nested run rather
+/// than as a `MathGlyph`: 6.1pt of ink below a 10.4pt box, into the next
+/// line. Both wrappers, since both had it.
+///
+/// The control below is the point: a wrapper with NO nested content keeps
+/// the fixed size, because there the reservation is exact and letting the
+/// box grow would let a stray line box change the layout.
+#[test]
+fn a_wrapper_carrying_draw_text_reserves_a_minimum_size_not_a_fixed_one() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(8.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![glyph("\u{22ef}", 12.0, 0.0, 0.0)],
+        rules: vec![draw_text(text_run("BIGSIGMA"))],
+    };
+    let gfx_box = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(20.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![
+            rule_line(0.0, 0.0, 20.0, 10.0, 1.0),
+            draw_text(text_run("DRAWN")),
+        ],
+    };
+    for (bx, cls, marker) in [(math_box, "math", "BIGSIGMA"), (gfx_box, "gfx", "DRAWN")] {
+        let out = render(&[line(bx)]);
+        let html = body_of(&out);
+        assert!(html.contains(marker), "lost the nested content:\n{html}");
+        let open = format!("<span class=\"{cls}\"");
+        let wrapper = span_body(html, &open)
+            .unwrap_or_else(|| panic!("no `{open}` wrapper emitted:\n{html}"));
+        assert!(
+            wrapper.contains(marker),
+            "the nested `draw-text` run left its wrapper:\n{wrapper}"
+        );
+        let tag = &html[html.find(&open).unwrap()..][..html[html.find(&open).unwrap()..]
+            .find('>')
+            .unwrap()];
+        assert!(
+            tag.contains("min-height:") && tag.contains("min-width:"),
+            "a `{cls}` wrapper carrying flow content must reserve a MINIMUM \
+             size, or the content overflows it onto the neighbouring \
+             lines:\n{tag}"
+        );
+        // And nowhere inside an <svg> either — an HTML child there makes the
+        // parser close the <svg> and drops the rest of the drawing.
+        for body in svg_bodies(html) {
+            assert!(
+                !body.contains(marker),
+                "nested HTML inside an <svg>:\n{body}"
+            );
+        }
+    }
+    // The control: no nested content, so the reservation stays exact.
+    let plain = PureHorzBox::Math {
+        width: Length::pt(20.0),
+        height: Length::pt(8.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![],
+    };
+    let out = render(&[line(plain)]);
+    assert!(
+        out.contains("display:inline-block; width:20pt; height:10pt;"),
+        "a wrapper with no flow content must keep its exact size:\n{out}"
+    );
+}
+
+/// A math box that draws nothing of its own — no glyphs, and every rule a
+/// `draw-text` — must emit no wrapper at all, exactly as
+/// `a_text_only_graphics_box_emits_no_sized_wrapper` requires of a graphics
+/// box. `latexcmds` builds two `\paren`-style decorations this way, and
+/// each one reserved a blank rectangle the full size of the equation and
+/// then painted the equation's real content on top of the following lines.
+#[test]
+fn a_text_only_math_box_emits_no_sized_wrapper() {
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(60.0),
+        height: Length::pt(30.0),
+        depth: Length::pt(8.0),
+        glyphs: vec![],
+        rules: vec![draw_text(text_run("only drawn text"))],
+    };
+    let out = render(&[line(math_box)]);
+    let html = body_of(&out);
+    assert!(
+        html.contains("only drawn text"),
+        "lost the content:\n{html}"
+    );
+    assert!(
+        !html.contains("class=\"math\""),
+        "emitted a wrapper for a math box that draws nothing:\n{html}"
+    );
+    // The control: one real glyph and the wrapper comes back.
+    let drawn = PureHorzBox::Math {
+        width: Length::pt(60.0),
+        height: Length::pt(30.0),
+        depth: Length::pt(8.0),
+        glyphs: vec![glyph("x", 12.0, 0.0, 0.0)],
+        rules: vec![draw_text(text_run("only drawn text"))],
+    };
+    assert!(
+        render(&[line(drawn)]).contains("class=\"math\""),
+        "a math box with a real glyph lost its wrapper"
+    );
+}
+
+/// The contents of the first `<span …>` in `html` whose opening tag starts
+/// with `open`, matching nested `<span>`s so an inner wrapper does not end
+/// the outer one early.
+fn span_body<'a>(html: &'a str, open: &str) -> Option<&'a str> {
+    let start = html.find(open)?;
+    let body_at = start + html[start..].find('>')? + 1;
+    let mut depth = 1usize;
+    let mut i = body_at;
+    while depth > 0 {
+        let next_open = html[i..].find("<span").map(|d| i + d);
+        let next_close = html[i..].find("</span>").map(|d| i + d)?;
+        match next_open {
+            Some(o) if o < next_close => {
+                depth += 1;
+                i = o + "<span".len();
+            }
+            _ => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&html[body_at..next_close]);
+                }
+                i = next_close + "</span>".len();
+            }
+        }
+    }
+    None
 }
 
 fn draw_text(bx: PureHorzBox) -> GraphicsElem {

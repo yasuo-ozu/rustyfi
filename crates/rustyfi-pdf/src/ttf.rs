@@ -193,6 +193,30 @@ impl TtfFontStore {
         self.files.len()
     }
 
+    /// A human name for physical file `file_index`, for diagnostics only —
+    /// the configured abbrev where there is one (what the author actually
+    /// wrote in `fonts.satysfi-hash`, so it is the name they can act on),
+    /// else the default slot's role, else the resource name.
+    ///
+    /// Reverse scan for the same reason [`FontMetrics::font_abbrev`] is one:
+    /// the map holds one row per configured font, and this runs once per file
+    /// per document.
+    pub(crate) fn file_label(&self, file_index: usize) -> String {
+        if let Some((abbrev, _)) = self
+            .abbrevs
+            .iter()
+            .find(|(_, k)| self.file_index(**k) == file_index)
+        {
+            return abbrev.clone();
+        }
+        match self.slots.iter().position(|&f| f == file_index) {
+            Some(0) => "regular".to_string(),
+            Some(1) => "bold".to_string(),
+            Some(2) => "oblique".to_string(),
+            _ => format!("file {file_index}"),
+        }
+    }
+
     /// Number of allocated `FontKey` slots (3 for a bare `load`; 3 + one
     /// per extra configured abbrev for a registry-built store).
     ///

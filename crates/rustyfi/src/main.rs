@@ -151,7 +151,24 @@ fn run_lsp(m: &ArgMatches) -> i32 {
 }
 
 fn run_compile(m: &ArgMatches) -> i32 {
-    match cmd_compile(m) {
+    // A USAGE error exits 2, like clap's own; anything else — a parse error,
+    // a missing package, a failed render — exits 1.
+    //
+    // The distinction was not being made, and it showed: `--katex
+    // --unicode-math` exited 2 because clap rejected it, while `--katex
+    // --format pdf` exited 1 because this function reached the same kind of
+    // conclusion one layer later. Two flag-validation failures reporting
+    // differently is exactly what a script cannot work around, and `run`'s own
+    // doc comment has promised 2 for a usage error since before this flag set
+    // existed.
+    let format = match apply_math_flags(m, parse_format(m)) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: {e:#}");
+            return 2;
+        }
+    };
+    match cmd_compile(m, format) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("Error: {e:#}");
@@ -160,20 +177,92 @@ fn run_compile(m: &ArgMatches) -> i32 {
     }
 }
 
-fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
+/// `--format`'s value, or `Pdf` if it does not parse.
+///
+/// Never fails: clap's `.value_parser([...])` on the flag has already rejected
+/// every spelling `OutputFormat: FromStr` would, so the fallback is
+/// unreachable and exists only to keep [`run_compile`]'s error handling to one
+/// shape. `cmd_compile` re-parses and reports properly if it ever is reached.
+fn parse_format(m: &ArgMatches) -> format::OutputFormat {
+    m.get_one::<String>("format")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(format::OutputFormat::Pdf)
+}
+
+/// Fold the four math flags into `format`, refusing a combination that has no
+/// meaning.
+///
+/// Each format already carries the math mode that suits its typical reader
+/// (`OutputFormat::from_str`), so this only OVERRIDES a default. With no flag
+/// it returns `format` untouched, which is what keeps the per-format defaults
+/// in one place instead of two.
+///
+/// **Refused loudly rather than ignored**, and that is the whole reason this
+/// is a function with an error type instead of three `if`s. A math flag
+/// silently dropped on `--format pdf` looks exactly like a math flag that
+/// worked: the PDF is valid, it renders, and nothing anywhere says the
+/// equation was not written the way the caller asked. The same goes for
+/// `--unicode-math` on `--format html` — the page would come out full of drawn
+/// equations and the only evidence would be that the flag had no effect.
+///
+/// The three are mutually exclusive with each other, but clap enforces that
+/// (see `dispatch.rs`'s `math_mode` `ArgGroup`) and reports it in its own
+/// usage style, so it is not re-checked here.
+///
+/// Which flag is valid where, and why:
+///
+/// - **`--svg-outline-math`, `--svg-math` and `--katex` with `html` or
+///   `markdown`.** Both formats can carry any of the three; which one is the
+///   DEFAULT differs, and naming the one that is already the default is
+///   accepted rather than refused — stating an intent explicitly is not an
+///   error, and a script that passes `--svg-math` should not break if the
+///   default it happens to match changes underneath it.
+/// - **`--unicode-math` with `markdown` only.** It is a plain-TEXT fallback
+///   whose entire purpose is to survive a renderer that strips markup — the
+///   case an HTML document is definitionally not in. The HTML backend can
+///   always draw the real glyphs, so there is no reading of the flag there
+///   that is not a downgrade for nothing.
+/// - **None with `pdf`**, which typesets the equation itself.
+fn apply_math_flags(
+    m: &ArgMatches,
+    format: format::OutputFormat,
+) -> anyhow::Result<format::OutputFormat> {
+    use format::{MathMode, OutputFormat};
+    let (flag, math) = if m.get_flag("svg_outline_math") {
+        ("--svg-outline-math", MathMode::SvgOutline)
+    } else if m.get_flag("svg_math") {
+        ("--svg-math", MathMode::SvgText)
+    } else if m.get_flag("katex") {
+        ("--katex", MathMode::Katex)
+    } else if m.get_flag("unicode_math") {
+        ("--unicode-math", MathMode::Unicode)
+    } else {
+        return Ok(format);
+    };
+    match (format, math) {
+        (OutputFormat::Pdf, _) => anyhow::bail!(
+            "{flag} needs --format html or --format markdown; \
+             --format pdf typesets the equation itself"
+        ),
+        (OutputFormat::Html(_), MathMode::Unicode) => anyhow::bail!(
+            "--unicode-math needs --format markdown (it is a plain-text \
+             fallback for renderers that strip HTML; --format html draws the \
+             real glyphs)"
+        ),
+        _ => Ok(format.with_math(math)),
+    }
+}
+
+/// `format` is already resolved — parsed from `--format` and folded with the
+/// math flags by [`run_compile`], which reports a bad combination as a USAGE
+/// error rather than a compile one.
+fn cmd_compile(m: &ArgMatches, format: format::OutputFormat) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
     let input = m
         .get_one::<PathBuf>("input")
         .expect("input is required by clap")
         .clone();
-    // `--format` has a clap `.default_value("pdf")`, so this `get_one` is
-    // always `Some`.
-    let format: format::OutputFormat = m
-        .get_one::<String>("format")
-        .expect("--format has a clap default")
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
     let output = m
         .get_one::<PathBuf>("output")
         .cloned()
@@ -366,7 +455,9 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         // fills alongside `extras`, once `fire_hooks` has run — so `\href`s
         // become real `<a href>`s. Mirrors the arm above for the font-store
         // branch.
-        format::OutputFormat::Html => match &font_store {
+        // `math` is `--katex` or the default outlined SVG; `--unicode-math`
+        // cannot reach here (see `apply_math_flags`).
+        format::OutputFormat::Html(math) => match &font_store {
             Some(store) => rustyfi_html::render_html_reflow_ttf_with_decos(
                 doc.reflow_source.as_deref(),
                 &doc.geometry,
@@ -376,6 +467,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.reflow_links,
                 &doc.reflow_dests,
                 &doc.reflow_frame_decos,
+                math,
             )?
             .into_bytes(),
             None => rustyfi_html::render_html_reflow_with_decos(
@@ -386,6 +478,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.reflow_links,
                 &doc.reflow_dests,
                 &doc.reflow_frame_decos,
+                math,
             )?
             .into_bytes(),
         },
@@ -395,7 +488,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
         // vocabulary. It takes no geometry, because Markdown has no page,
         // and no frame decorations, because it has no borders to draw them
         // on.
-        format::OutputFormat::Markdown => match &font_store {
+        format::OutputFormat::Markdown(math) => match &font_store {
             Some(store) => rustyfi_html::render_markdown_ttf_with(
                 doc.reflow_source.as_deref(),
                 store,
@@ -403,6 +496,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
                 &doc.reflow_links,
                 &doc.reflow_dests,
+                math,
             )?
             .into_bytes(),
             None => rustyfi_html::render_markdown(
@@ -411,6 +505,7 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
                 &doc.extras,
                 &doc.reflow_links,
                 &doc.reflow_dests,
+                math,
             )?
             .into_bytes(),
         },

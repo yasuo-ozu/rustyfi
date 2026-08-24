@@ -69,7 +69,22 @@ fn render_full(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> String {
-    rustyfi_html::render_markdown(Some(vboxes), &[], extras, links, dests)
+    rustyfi_html::render_markdown(
+        Some(vboxes),
+        &[],
+        extras,
+        links,
+        dests,
+        rustyfi_html::MathMode::SvgOutline,
+    )
+    .expect("markdown rendering must succeed")
+}
+
+/// The same, in a chosen math mode — the one axis this backend has three
+/// answers for. Every test above this line is about structure rather than
+/// math and takes the default.
+fn render_math(vboxes: &[VertBox], math: rustyfi_html::MathMode) -> String {
+    rustyfi_html::render_markdown(Some(vboxes), &[], &DocExtras::default(), &[], &[], math)
         .expect("markdown rendering must succeed")
 }
 
@@ -534,12 +549,8 @@ fn a_two_line_prose_paragraph_with_inline_code_is_not_a_code_block() {
     assert_eq!(md.trim(), "Use `point list` here.", "{md}");
 }
 
-/// Math is flattened to positioned glyphs during evaluation, so what is left
-/// is characters and their coordinates. Reading order plus Unicode scripts is
-/// the honest maximum — see `markdown/math.rs`.
-#[test]
-fn math_renders_as_its_characters_in_reading_order_with_unicode_scripts() {
-    let glyph = |text: &str, dx: f64, dy: f64, size: f64| MathGlyph {
+fn math_glyph(text: &str, dx: f64, dy: f64, size: f64) -> MathGlyph {
+    MathGlyph {
         info: HorzStringInfo {
             font: FontKey(0),
             size: Length::pt(size),
@@ -553,23 +564,206 @@ fn math_renders_as_its_characters_in_reading_order_with_unicode_scripts() {
         width: Length::pt(size * 0.5),
         height: Length::pt(size * 0.7),
         depth: Length::ZERO,
-    };
-    let md = render(&[line_of(vec![PureHorzBox::Math {
+    }
+}
+
+/// `x² + 1`, with the glyphs deliberately OUT of document order: `dx` is what
+/// decides reading order, and every mode below shares that recovery.
+fn x_squared_plus_one() -> VertBox {
+    line_of(vec![PureHorzBox::Math {
         width: Length::pt(30.0),
         height: Length::pt(10.0),
         depth: Length::pt(2.0),
-        // Deliberately out of document order: `dx` is what decides.
         glyphs: vec![
-            glyph("2", 6.0, 5.0, 7.0),
-            glyph("x", 0.0, 0.0, 10.0),
-            glyph("+", 12.0, 0.0, 10.0),
-            glyph("1", 20.0, 0.0, 10.0),
+            math_glyph("2", 6.0, 5.0, 7.0),
+            math_glyph("x", 0.0, 0.0, 10.0),
+            math_glyph("+", 12.0, 0.0, 10.0),
+            math_glyph("1", 20.0, 0.0, 10.0),
         ],
         rules: Vec::new(),
-    }])]);
+    }])
+}
+
+/// `--unicode-math`: the characters, in reading order, with Unicode's own
+/// script forms. Math is flattened to positioned glyphs during evaluation, so
+/// this is the honest maximum for a plain-text vocabulary — see
+/// `markdown/math.rs`.
+#[test]
+fn unicode_math_renders_characters_in_reading_order_with_unicode_scripts() {
+    let md = render_math(
+        &[x_squared_plus_one()],
+        rustyfi_html::MathMode::Unicode,
+    );
     assert_eq!(md.trim(), "x² + 1", "{md}");
-    // Not a placeholder, and not raw HTML.
+    // The whole point of this mode: no markup at all, so a renderer that
+    // strips HTML still shows the equation.
     assert!(!md.contains("<svg"), "{md}");
+    assert!(!md.contains('$'), "{md}");
+}
+
+/// **With no font store, both drawing modes fall back to characters.**
+///
+/// A drawing needs a face — to outline, or at minimum to NAME so the reader's
+/// browser picks something with the right advances. Base-14 mode has neither,
+/// so a `<svg>` would be `<text>` at absolute coordinates in whatever the
+/// reader defaults to, and under the sanitizing pipeline a `.md` is usually
+/// read through, nothing at all. Reading-order characters are strictly better,
+/// and are what this backend wrote before any of these modes existed.
+///
+/// Not a corner case: it is CI's own state on `build · clippy · test`, which
+/// does not run `download-fonts.sh`.
+#[test]
+fn a_render_with_no_font_store_writes_characters_rather_than_an_empty_drawing() {
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+    ] {
+        let md = render_math(&[x_squared_plus_one()], mode);
+        assert_eq!(md.trim(), "x² + 1", "{mode:?}: {md}");
+        assert!(!md.contains("<svg"), "{mode:?}: {md}");
+    }
+}
+
+/// The trailing space after an inline equation survives.
+///
+/// **The bug this pins was in every drawing and LaTeX mode at once.** An
+/// equation is not an opaque box — `Ctx::open_opaque`, right for an image,
+/// clears `last_char`, and the glue that follows is then judged by
+/// `wants_space(None, …)`, which returns `false` and drops the space. The word
+/// after every equation ran into it: `ここで 𝑙 は線の太さ` came out as
+/// `…</svg>は線の太さ`. The space BEFORE always survived, which is what made
+/// it easy to miss.
+///
+/// Asserted in all four modes, because the fix is per-arm and three of the
+/// arms had to be changed.
+#[test]
+fn the_space_after_an_inline_equation_is_not_swallowed() {
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+        rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::Unicode,
+    ] {
+        let md = render_math(
+            &[line_of(vec![
+                text_run("see"),
+                glue(4.0),
+                PureHorzBox::Math {
+                    width: Length::pt(10.0),
+                    height: Length::pt(10.0),
+                    depth: Length::pt(2.0),
+                    glyphs: vec![math_glyph("y", 0.0, 0.0, 10.0)],
+                    rules: Vec::new(),
+                },
+                glue(4.0),
+                text_run("then"),
+            ])],
+            mode,
+        );
+        // The word after the equation must not be glued to it. Checked on the
+        // rendered text rather than on a marker, so it holds however the
+        // equation itself is written.
+        assert!(
+            md.contains(" then"),
+            "{mode:?} lost the space before `then`:\n{md}"
+        );
+        assert!(md.contains("see "), "{mode:?} lost the space after `see`:\n{md}");
+    }
+}
+
+/// `--katex`: LaTeX in `$…$`, and `$$…$$` when the equation is the whole
+/// paragraph.
+#[test]
+fn katex_writes_latex_in_dollar_delimiters() {
+    // Alone in its paragraph: displayed.
+    let md = render_math(&[x_squared_plus_one()], rustyfi_html::MathMode::Katex);
+    assert_eq!(md.trim(), "$$x^{2}+1$$", "{md}");
+
+    // With prose beside it, the same equation is inline — same LaTeX, one
+    // dollar. This is the distinction `Para::sole_math` exists to make.
+    let md = render_math(
+        &[line_of(vec![
+            text_run("see"),
+            glue(4.0),
+            PureHorzBox::Math {
+                width: Length::pt(30.0),
+                height: Length::pt(10.0),
+                depth: Length::pt(2.0),
+                glyphs: vec![
+                    math_glyph("x", 0.0, 0.0, 10.0),
+                    math_glyph("2", 6.0, 5.0, 7.0),
+                ],
+                rules: Vec::new(),
+            },
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert!(md.contains("$x^{2}$"), "{md}");
+    assert!(!md.contains("$$"), "inline math must not be displayed: {md}");
+}
+
+/// Two equations side by side must not run their delimiters together.
+///
+/// One construction routinely produces several math boxes in a row —
+/// `latexcmds`' Schrödinger equation is five — and written flush, the closing
+/// `$` of one and the opening `$` of the next form a literal `$$` that every
+/// renderer understanding display math reads as the start of one. Measured on
+/// that document: `$h$$\frac{1}{2m}…` swallowed the rest of the formula into a
+/// display block that never closed.
+#[test]
+fn two_adjacent_equations_do_not_run_their_delimiters_together() {
+    let one_math = |ch: &str, dx: f64| PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![math_glyph(ch, dx, 0.0, 10.0)],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        // Two math boxes with nothing between them, plus a text run so the
+        // paragraph is not display math.
+        &[line_of(vec![
+            text_run("x"),
+            one_math("a", 0.0),
+            one_math("b", 0.0),
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert!(md.contains("$a$"), "{md}");
+    assert!(md.contains("$b$"), "{md}");
+    assert!(
+        !md.contains("$$"),
+        "adjacent inline equations formed a display delimiter:\n{md}"
+    );
+}
+
+/// A formula is not one box. `latexcmds`' Schrödinger equation reaches this
+/// backend as FOUR, because each `\underset`-style construction splits the
+/// run — and they are pieces of one DISPLAYED equation, so they belong in one
+/// `$$…$$`. Four separate display blocks would be four centred lines where the
+/// document has one; four inline `$…$` would set a displayed equation in the
+/// middle of a paragraph.
+#[test]
+fn a_paragraph_of_nothing_but_equations_is_one_display_block() {
+    let one_math = |ch: &str| PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![math_glyph(ch, 0.0, 0.0, 10.0)],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        &[line_of(vec![
+            PureHorzBox::OuterFil,
+            one_math("a"),
+            one_math("b"),
+            one_math("c"),
+            PureHorzBox::OuterFil,
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert_eq!(md.trim(), "$$a b c$$", "{md}");
+    assert_eq!(md.matches("$$").count(), 2, "one block, not three:\n{md}");
 }
 
 // ---------------------------------------------------------------------------
@@ -612,8 +806,15 @@ fn punctuation_that_is_only_special_at_a_line_start_is_left_alone_mid_line() {
 /// nothing rather than panicking — the same guarantee the HTML backend makes.
 #[test]
 fn a_missing_reflow_source_renders_an_empty_document() {
-    let md = rustyfi_html::render_markdown(None, &[], &DocExtras::default(), &[], &[])
-        .expect("must succeed");
+    let md = rustyfi_html::render_markdown(
+        None,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        rustyfi_html::MathMode::SvgOutline,
+    )
+    .expect("must succeed");
     assert_eq!(md, "");
 }
 
@@ -631,6 +832,7 @@ fn markdown_with_mono_font(vboxes: &[VertBox]) -> Option<String> {
             &DocExtras::default(),
             &[],
             &[],
+            rustyfi_html::MathMode::SvgOutline,
         )
         .expect("markdown rendering must succeed"),
     )

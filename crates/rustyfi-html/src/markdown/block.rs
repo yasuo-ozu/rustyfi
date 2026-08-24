@@ -403,7 +403,7 @@ fn end_of_line(para: &mut Para, ctx: &Ctx, fil_terminated: bool) {
 /// it contained (block-level in Markdown, so they cannot stay inline) come
 /// out immediately after it, in the order they were reached.
 fn flush_para(w: &mut Writer, para: &mut Para, ctx: &Ctx) {
-    if let Some(rendered) = para.render(ctx.mono_advance.get()) {
+    if let Some(rendered) = para.render(ctx.mono_advance.get(), false) {
         w.rendered(&rendered);
     }
     para.clear();

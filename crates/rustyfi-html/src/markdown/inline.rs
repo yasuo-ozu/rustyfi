@@ -122,22 +122,97 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             }
         }
 
-        // Math: its characters, in reading order. See `math.rs` for what that
-        // recovers, what it costs, and why an inline `<svg>` was rejected.
-        PureHorzBox::Math { glyphs, rules, .. } => {
+        // Math, in whichever of the three vocabularies was asked for — see
+        // `crate::MathMode`, and `math.rs`'s module comment for what each one
+        // can and cannot say.
+        PureHorzBox::Math {
+            width,
+            height,
+            depth,
+            glyphs,
+            rules,
+        } => {
             // The `rules` are the paths a font cannot draw, but they also
             // carry any `draw-text` the construction built — and a BIG
             // OPERATOR arrives that way rather than as a `MathGlyph`. Emitted
-            // FIRST, because a `draw-text` operator sits at the box's own
-            // origin: `\sum_a^b` is a sigma with limits, and putting the
-            // sigma after them would read as `ₐᵇ∑`.
+            // FIRST in every mode, because a `draw-text` operator sits at the
+            // box's own origin: `\sum_a^b` is a sigma with limits, and putting
+            // the sigma after them would read as `ₐᵇ∑`.
+            //
+            // It stays TEXT even when the equation beside it is a drawing.
+            // Its contents are `PureHorzBox`es — inline runs, images, whole
+            // nested tables — and an HTML child of an `<svg>` does not merely
+            // look wrong, it ends the parser's foreign-content insertion mode
+            // and ejects the rest of the drawing from the element (see
+            // `crate::svg`'s module comment, where that was measured). So the
+            // one construction that mixes the two comes out as its operator in
+            // text followed by its limits as a drawing, which is legible and
+            // whole, rather than as a broken `<svg>`.
             emit_nested_text(para, rules, ctx);
-            let text = math::math_text(glyphs, rules);
-            if !text.is_empty() {
-                ctx.resolve_glue(para, text.chars().next());
-                ctx.last_char.set(text.chars().next_back());
-                para.push_text(&text, false);
-                ctx.mono_run.set(false);
+            // Every mode below writes something with CHARACTERS in it, so the
+            // inline-flow state is carried across it from the equation's own
+            // reading-order text — see [`math_flow`]. Only the drawing modes
+            // could be tempted into `Ctx::open_opaque`, and that is exactly
+            // the bug it prevents.
+            let plain = math::math_text(glyphs, rules);
+            // **Nothing to draw with.** With no font store there is no face to
+            // outline and none to NAME, so a drawing degrades to `<text>` at
+            // absolute coordinates in whatever the reader's default is — and
+            // in the sanitizing pipeline this format is usually read through,
+            // to nothing at all. Reading-order characters are strictly better
+            // than a `<svg>` that may vanish, and are what this backend wrote
+            // before any of these modes existed. Reached in base-14 renders
+            // and on a checkout that has not run `download-fonts.sh`.
+            let mode = match ctx.math {
+                m @ (crate::MathMode::SvgOutline | crate::MathMode::SvgText)
+                    if ctx.fonts.is_none() =>
+                {
+                    let _ = m;
+                    crate::MathMode::Unicode
+                }
+                m => m,
+            };
+            match mode {
+                crate::MathMode::SvgOutline | crate::MathMode::SvgText => {
+                    // Built in BOTH shapes, because whether this equation is
+                    // displayed — and so whether its `<svg>` may be broken
+                    // across lines — is a property of the paragraph, which is
+                    // not finished yet. See `para.rs`'s `Piece::MathSvg`.
+                    let build = |wrap| {
+                        crate::mathsvg::math_block(
+                            width.0, height.0, depth.0, glyphs, rules, ctx.fonts, mode, wrap,
+                        )
+                    };
+                    if let Some(inline) = build(crate::mathsvg::Wrap::Inline) {
+                        let block = build(crate::mathsvg::Wrap::Block).unwrap_or_else(|| {
+                            unreachable!("the same box declined only one wrap")
+                        });
+                        math_flow(para, ctx, &plain);
+                        // The reading-order text is the `plain` side: it is
+                        // what a code fence writes instead of the markup, and
+                        // what the plain-text half of the paragraph — the one
+                        // content measurement and search read — gets. A wall
+                        // of path data there would be worse than useless.
+                        para.pieces.push(Piece::MathSvg {
+                            inline,
+                            block,
+                            plain,
+                        });
+                    }
+                }
+                crate::MathMode::Katex => {
+                    let latex = crate::latex::math_latex(glyphs, rules);
+                    if !latex.is_empty() {
+                        math_flow(para, ctx, &plain);
+                        para.pieces.push(Piece::Math { latex, plain });
+                    }
+                }
+                crate::MathMode::Unicode => {
+                    if !plain.is_empty() {
+                        math_flow(para, ctx, &plain);
+                        para.push_text(&plain, false);
+                    }
+                }
             }
         }
 
@@ -244,6 +319,34 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // Zero-width markers and hooks: no meaning in any reflowed format.
         PureHorzBox::HookPageBreak { .. } | PureHorzBox::FrameMarker { .. } => {}
     }
+}
+
+/// Settle the inline-flow state across an equation, whatever it is written as.
+///
+/// **An equation is not an opaque box, and treating it as one loses the space
+/// after it.** `Ctx::open_opaque` — right for an image or a table, which have
+/// no characters — clears `last_char`, and the glue that follows is then
+/// judged by `recover::wants_space(None, …)`, whose first line is
+/// `let Some(p) = prev else { return false }`. So the space is discarded and
+/// the next word runs into the drawing: `ここで 𝑙 は線の太さ` came out as
+/// `…</svg>は線の太さ`, and `see ${y} then` as `see <SVG>then`.
+///
+/// The space BEFORE an equation always survived, which is what made this hard
+/// to see: `resolve_glue` is called with the equation's first character and
+/// answers correctly. Only the trailing side was lost, on 47 of `latexcmds`'
+/// 55 equations.
+///
+/// So the flow is carried across the equation from its own reading-order text
+/// (`math::math_text`) — the same characters `--unicode-math` would write — in
+/// every mode. The Unicode arm always did this; the others did not, and
+/// nothing covered it.
+///
+/// `mono_run` is cleared because an equation is never fixed-pitch, whatever
+/// the run before it was.
+fn math_flow(para: &mut Para, ctx: &Ctx, plain: &str) {
+    ctx.resolve_glue(para, plain.chars().next());
+    ctx.last_char.set(plain.chars().next_back());
+    ctx.mono_run.set(false);
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) is a deliberate gap

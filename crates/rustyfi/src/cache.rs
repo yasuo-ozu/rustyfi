@@ -471,19 +471,42 @@ mod tests {
             None,
         )
         .unwrap();
-        let html = hash_inputs(
-            [a.as_path()].into_iter(),
-            "0.1.0",
-            RustyfiVersion::DEFAULT,
-            &a,
-            None,
-            OutputFormat::Html,
-            None,
-        )
-        .unwrap();
+        let key_for = |format| {
+            hash_inputs(
+                [a.as_path()].into_iter(),
+                "0.1.0",
+                RustyfiVersion::DEFAULT,
+                &a,
+                None,
+                format,
+                None,
+            )
+            .unwrap()
+        };
+        let html = key_for(OutputFormat::Html(crate::format::MathMode::SvgOutline));
         assert_ne!(
             pdf, html,
             "--format pdf and --format html must hash to different keys"
+        );
+        // …and so must the math modes, which change the rendered bytes while
+        // leaving every other field of the key identical — see
+        // `OutputFormat::cache_tag`. `html` above is already
+        // `Html(Outline)`, so the loop starts from `pdf` alone and every
+        // format/mode pair is enumerated exactly once.
+        let mut keys = vec![pdf];
+        for math in [
+            crate::format::MathMode::SvgOutline,
+            crate::format::MathMode::Unicode,
+            crate::format::MathMode::Katex,
+        ] {
+            keys.push(key_for(OutputFormat::Markdown(math)));
+            keys.push(key_for(OutputFormat::Html(math)));
+        }
+        let unique: std::collections::HashSet<_> = keys.iter().collect();
+        assert_eq!(
+            unique.len(),
+            keys.len(),
+            "two renders that differ in their bytes share a cache key"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

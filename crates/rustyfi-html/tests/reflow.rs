@@ -3101,6 +3101,7 @@ fn a_frames_own_decoration_is_drawn_over_it() {
         &[],
         &[],
         &decos,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("reflow HTML rendering must succeed");
     let html = body_of(&out);
@@ -3162,6 +3163,7 @@ fn an_inline_frames_decoration_is_painted_on_its_own_wrapper() {
         &[],
         &[],
         &decos,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("reflow HTML rendering must succeed");
 
@@ -3248,6 +3250,7 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
         &[],
         &[],
         &decos,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("reflow HTML rendering must succeed");
     let html = body_of(&out);

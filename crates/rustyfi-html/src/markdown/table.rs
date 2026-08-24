@@ -87,7 +87,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
                 has_mono: false,
                 ..para
             }
-            .render(None)
+            .render(None, true)
             .map(|r| r.text)
             .unwrap_or_default();
             let cell_text = escape::table_cell(&rendered);

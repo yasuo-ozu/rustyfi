@@ -364,12 +364,82 @@ fn compile_command(name: &'static str) -> Command {
                      lists, links and in-flow footnotes; readable, not \
                      layout-faithful. markdown is a subset of it: the same \
                      structure as GitHub-flavoured Markdown, dropping everything \
-                     the format cannot say (frames, alignment, colour, drawings). \
+                     the format cannot say (frames, alignment, colour). Both \
+                     draw equations and figures as inline SVG; see \
+                     --svg-math/--svg-outline-math/--katex/--unicode-math. \
                      (html-reflow aliases html; md aliases markdown.)",
                 )
                 .value_parser(["pdf", "html", "html-reflow", "markdown", "md"])
                 .default_value("pdf"),
         )
+        // The three math-rendering flags. Each format already has a DEFAULT
+        // that suits its typical reader (markdown -> KaTeX, html -> outlined
+        // SVG; see `OutputFormat::from_str`), so these only override it.
+        //
+        // Mutual exclusion is one `ArgGroup` rather than a web of pairwise
+        // `conflicts_with`: with three flags that would be six declarations to
+        // keep in step, and a fourth mode later would need three more. The
+        // group also gives clap's own "cannot be used with" message naming
+        // both offenders. Which FORMATS each flag is valid with is checked in
+        // `main.rs`, where the parsed `--format` is to hand.
+        .arg(
+            Arg::new("svg_outline_math")
+                .long("svg-outline-math")
+                .help(
+                    "html and markdown: draw each glyph as an SVG outline path \
+                     taken from the document's own face, with the characters \
+                     kept behind it as invisible selectable text. Reproduces \
+                     the PDF exactly and needs nothing of the reader -- no \
+                     font, no math typesetter -- at the cost of size. The \
+                     default for --format html.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("svg_math")
+                .long("svg-math")
+                .help(
+                    "html and markdown: draw equations with SVG's own <text> \
+                     for the glyphs and <rect>/<line> for fraction bars and \
+                     rules, positioned where the layout put them. Compact, \
+                     with real selectable text and a source a person can read; \
+                     depends on the reader having the document's faces. The \
+                     default for --format markdown.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("katex")
+                .long("katex")
+                .help(
+                    "html and markdown: write equations as LaTeX in math \
+                     delimiters ($...$/$$...$$ in Markdown, \\(...\\)/\\[...\\] \
+                     in HTML) for a KaTeX/MathJax-enabled reader. Re-derived \
+                     from the laid-out glyphs, so radicals, delimiters, \
+                     matrices and nested fractions do not come back -- see \
+                     rustyfi man, section MATH RENDERING.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("unicode_math")
+                .long("unicode-math")
+                .help(
+                    "Markdown only: write equations as their characters in \
+                     reading order (x\u{b2}, \u{2211}\u{2090}\u{1d47}, \
+                     (a+b)/(c+d)). The only form that is plain TEXT -- it \
+                     survives any renderer, reads in a terminal and is \
+                     greppable -- at the cost of radicals, delimiters, \
+                     matrices and nested fractions.",
+                )
+                .action(ArgAction::SetTrue),
+        )
+        .group(ArgGroup::new("math_mode").args([
+            "svg_outline_math",
+            "svg_math",
+            "katex",
+            "unicode_math",
+        ]))
         .arg(
             Arg::new("deps")
                 .long("deps")

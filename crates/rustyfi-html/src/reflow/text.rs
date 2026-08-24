@@ -93,6 +93,51 @@ pub(crate) fn has_visible_content(html: &str) -> bool {
     }
 }
 
+/// The tag `--katex` wraps an equation in. One constant, because two places
+/// have to agree about it exactly: [`inline::emit_math_svg`] writes it and
+/// [`sole_math_tex`] reads it back.
+///
+/// [`inline::emit_math_svg`]: crate::reflow::inline
+pub(crate) const MATH_TEX_OPEN: &str = "<span class=\"math-tex\">\\(";
+/// The closing half of [`MATH_TEX_OPEN`].
+pub(crate) const MATH_TEX_CLOSE: &str = "\\)</span>";
+
+/// The LaTeX of a flushed paragraph that holds ONE `--katex` equation and
+/// nothing else — i.e. an equation that was DISPLAYED — or `None`.
+///
+/// **Why this reads the buffer back instead of being decided where the box
+/// was walked.** Whether an equation is inline or displayed is a property of
+/// the paragraph, not of the equation: nothing in the box stream says
+/// "display style", and what makes one displayed is that its `line-break`
+/// holds nothing else. The inline emitters take `&mut String`, not `&mut
+/// Para`, so at the point the math box is seen there is no paragraph to ask —
+/// and the answer is not known yet anyway, since the rest of the line has not
+/// arrived. `block.rs`'s flush is the first place the whole paragraph exists.
+///
+/// **Why sniffing the string is safe here.** The markup being matched is this
+/// backend's OWN, written a few lines away from a shared constant, and its
+/// body is `escape_html`'d LaTeX — which by construction contains no `<`, no
+/// `&` and therefore no nested element. So "the trimmed paragraph is exactly
+/// one `math-tex` span" is decidable by looking at its two ends. It is the
+/// same layer, and the same kind of reasoning, as [`has_visible_content`]
+/// just above.
+///
+/// The distinction is worth the trouble: `\(…\)` and `\[…\]` are not two
+/// spellings of one thing. In inline style KaTeX sets `\sum`'s limits BESIDE
+/// the operator and shrinks the operator itself; in display style it sets
+/// them above and below at full size. Getting it wrong turns every displayed
+/// equation in a document into a cramped inline one.
+pub(crate) fn sole_math_tex(html: &str) -> Option<&str> {
+    let trimmed = html.trim();
+    let inner = trimmed
+        .strip_prefix(MATH_TEX_OPEN)?
+        .strip_suffix(MATH_TEX_CLOSE)?;
+    // A second span anywhere inside means the paragraph held more than this
+    // one equation — the `strip_prefix`/`strip_suffix` pair alone would also
+    // accept `<span class="math-tex">\(a\)</span> text <span …>\(b\)</span>`.
+    (!inner.contains('<')).then_some(inner)
+}
+
 /// The document's body text style: the `(font, size)` pair the most
 /// characters are set in. `css.rs` writes it onto `body`, and `inline.rs`
 /// omits from each run's `<span>` every property that matches it — omitting

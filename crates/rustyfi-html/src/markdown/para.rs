@@ -68,6 +68,22 @@ pub(super) enum Piece {
     /// the paragraph turns out to be a code block, where the markup would be
     /// literal text.
     Markup { md: String, plain: String },
+    /// An equation as LaTeX (`--katex`), still undelimited.
+    ///
+    /// Kept apart from [`Piece::Markup`] for one reason: whether it is written
+    /// `$…$` or `$$…$$` is not a property of the equation but of the
+    /// PARAGRAPH around it, and is therefore not knowable when the box is
+    /// walked. An equation that is the whole of its paragraph was DISPLAYED —
+    /// nothing else can be alone in a block — and every renderer that
+    /// understands `$$` sets it centred, on its own line, with big operators
+    /// carrying their limits above and below. An equation with prose beside it
+    /// was inline. Deciding at render time, where the whole paragraph is
+    /// visible, is the same deferral this module exists for; see
+    /// [`Para::sole_math`].
+    ///
+    /// `plain` is the reading-order text, for a code fence — where `$x^2$`
+    /// would be literal characters rather than an equation.
+    Math { latex: String, plain: String },
     /// An emphasis delimiter. Kept distinct from [`Piece::Markup`] because a
     /// Markdown delimiter may not sit against the whitespace inside its own
     /// span (`* text *` is not emphasis) — see [`Para::render`], which moves
@@ -265,8 +281,35 @@ impl Para {
         Some(Rendered { text, code: false })
     }
 
+    /// Is this paragraph nothing but ONE equation — i.e. was the equation
+    /// DISPLAYED rather than set inside a sentence?
+    ///
+    /// Nothing in the box stream says "display style" directly: a displayed
+    /// equation is a `line-break` over an inline sequence like any other, and
+    /// what makes it displayed is that the sequence holds nothing else. So
+    /// this is the signal, and it is exact rather than a heuristic — a
+    /// paragraph whose only ink is one math box cannot have been part of a
+    /// sentence.
+    ///
+    /// Everything without ink is ignored: the `inline-fil`s that centre the
+    /// equation, the glue around it, the line boundary, and an emphasis or
+    /// link wrapper that contributes no characters of its own.
+    fn sole_math(&self) -> bool {
+        let mut maths = 0usize;
+        for piece in &self.pieces {
+            match piece {
+                Piece::Math { .. } => maths += 1,
+                Piece::Text { s, .. } if !s.trim().is_empty() => return false,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return false,
+                _ => {}
+            }
+        }
+        maths == 1
+    }
+
     /// The paragraph as one flowing line of prose.
     fn render_prose(&self) -> String {
+        let display_math = self.sole_math();
         let mut out = String::new();
         // An emphasis delimiter waiting for the first non-space character, so
         // it never ends up leaning against a space.
@@ -308,6 +351,19 @@ impl Para {
                 // there must not be one.
                 Piece::Newline { .. } => {}
                 Piece::Markup { md, .. } => push_markup(&mut out, &mut pending_open, md),
+                // `$…$` inline, `$$…$$` displayed — the delimiters GitHub,
+                // Pandoc, VS Code and Typora all read. (The HTML backend uses
+                // `\(…\)`/`\[…\]` instead, because KaTeX's `auto-render` and
+                // MathJax enable those by default and `$…$` by configuration;
+                // `crate::latex`'s module comment has the argument.)
+                Piece::Math { latex, .. } => {
+                    let delim = if display_math { "$$" } else { "$" };
+                    push_markup(
+                        &mut out,
+                        &mut pending_open,
+                        &format!("{delim}{latex}{delim}"),
+                    );
+                }
                 Piece::EmphOpen(delim) => {
                     // Two delimiters in a row would open and immediately
                     // reopen; flush the first as ordinary markup.
@@ -387,8 +443,9 @@ impl Para {
                     out.push('\n');
                 }
                 // Inside a fence there is no markup, only text — so a link
-                // contributes its URL-free text and an image its label.
-                Piece::Markup { plain, .. } => out.push_str(plain),
+                // contributes its URL-free text, an image its label, and an
+                // equation its characters rather than its LaTeX.
+                Piece::Markup { plain, .. } | Piece::Math { plain, .. } => out.push_str(plain),
                 Piece::EmphOpen(_)
                 | Piece::EmphClose(_)
                 | Piece::LinkOpen(_)

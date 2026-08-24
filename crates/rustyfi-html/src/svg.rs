@@ -167,19 +167,42 @@ pub(super) fn graphics_block(elems: &[GraphicsElem]) -> Option<String> {
     let _ = write!(
         out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"gfx\" role=\"img\" \
-         width=\"{w}pt\" height=\"{h}pt\" viewBox=\"0 0 {w} {h}\">\
-         <g transform=\"translate({},{}) scale(1,-1)\">",
-        -lo_x.0, hi_y.0,
+         width=\"{w}pt\" height=\"{h}pt\" viewBox=\"0 0 {w} {h}\">",
     );
-    // Both `after` and the nested emitter are discarded: see the note above.
-    let mut after = String::new();
-    let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64| {};
-    emit_elems(&mut out, &mut after, elems, 0.0, 0.0, &mut nested);
-    out.push_str("</g></svg>");
+    emit_flipped_group(&mut out, elems, -lo_x.0, hi_y.0);
+    out.push_str("</svg>");
     // `emit_elems` ends each element with a newline; a Markdown paragraph is
     // one line, so they are folded out rather than left to be reflowed by
     // whatever reads the file.
     Some(out.replace('\n', ""))
+}
+
+/// `elems` as one `<g>` that carries the y-up-to-y-down flip, with no `<svg>`
+/// of its own — the reusable inside of [`graphics_block`], for a caller that
+/// already has a viewport open.
+///
+/// Split out for [`crate::mathsvg::math_block`], which draws a math run's
+/// fraction bars and radical signs INSIDE the same `<svg>` as the glyph
+/// outlines. It cannot use [`emit_graphics`] for that: that helper opens an
+/// `<svg>` of its own and positions it absolutely, which is right for the
+/// reflow backend's positioned wrapper and wrong for a self-contained one.
+///
+/// `(tx, ty)` is the translate the flip is composed with — `(0, height)` to
+/// put a box-local origin on the box's baseline, or `(-lo_x, hi_y)` to fit a
+/// drawing's own bounding box. A local point `(px, py)` lands at
+/// `(tx + px, ty - py)`.
+///
+/// `GraphicsElem::Text` sub-boxes are DROPPED, exactly as in
+/// [`graphics_block`]: they are HTML, and an HTML child ejects the remainder
+/// of the drawing from the `<svg>` (see this module's own doc comment). The
+/// caller is responsible for their text.
+pub(super) fn emit_flipped_group(out: &mut String, elems: &[GraphicsElem], tx: f64, ty: f64) {
+    let _ = write!(out, "<g transform=\"translate({tx},{ty}) scale(1,-1)\">");
+    // Both `after` and the nested emitter are discarded: see the note above.
+    let mut after = String::new();
+    let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64| {};
+    emit_elems(out, &mut after, elems, 0.0, 0.0, &mut nested);
+    out.push_str("</g>");
 }
 
 /// The recursive element walker (`Group`/`Clip` reenter this, not

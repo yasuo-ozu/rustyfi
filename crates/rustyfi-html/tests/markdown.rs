@@ -69,7 +69,22 @@ fn render_full(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> String {
-    rustyfi_html::render_markdown(Some(vboxes), &[], extras, links, dests)
+    rustyfi_html::render_markdown(
+        Some(vboxes),
+        &[],
+        extras,
+        links,
+        dests,
+        rustyfi_html::MathMode::Outline,
+    )
+    .expect("markdown rendering must succeed")
+}
+
+/// The same, in a chosen math mode — the one axis this backend has three
+/// answers for. Every test above this line is about structure rather than
+/// math and takes the default.
+fn render_math(vboxes: &[VertBox], math: rustyfi_html::MathMode) -> String {
+    rustyfi_html::render_markdown(Some(vboxes), &[], &DocExtras::default(), &[], &[], math)
         .expect("markdown rendering must succeed")
 }
 
@@ -534,12 +549,8 @@ fn a_two_line_prose_paragraph_with_inline_code_is_not_a_code_block() {
     assert_eq!(md.trim(), "Use `point list` here.", "{md}");
 }
 
-/// Math is flattened to positioned glyphs during evaluation, so what is left
-/// is characters and their coordinates. Reading order plus Unicode scripts is
-/// the honest maximum — see `markdown/math.rs`.
-#[test]
-fn math_renders_as_its_characters_in_reading_order_with_unicode_scripts() {
-    let glyph = |text: &str, dx: f64, dy: f64, size: f64| MathGlyph {
+fn math_glyph(text: &str, dx: f64, dy: f64, size: f64) -> MathGlyph {
+    MathGlyph {
         info: HorzStringInfo {
             font: FontKey(0),
             size: Length::pt(size),
@@ -553,23 +564,99 @@ fn math_renders_as_its_characters_in_reading_order_with_unicode_scripts() {
         width: Length::pt(size * 0.5),
         height: Length::pt(size * 0.7),
         depth: Length::ZERO,
-    };
-    let md = render(&[line_of(vec![PureHorzBox::Math {
+    }
+}
+
+/// `x² + 1`, with the glyphs deliberately OUT of document order: `dx` is what
+/// decides reading order, and every mode below shares that recovery.
+fn x_squared_plus_one() -> VertBox {
+    line_of(vec![PureHorzBox::Math {
         width: Length::pt(30.0),
         height: Length::pt(10.0),
         depth: Length::pt(2.0),
-        // Deliberately out of document order: `dx` is what decides.
         glyphs: vec![
-            glyph("2", 6.0, 5.0, 7.0),
-            glyph("x", 0.0, 0.0, 10.0),
-            glyph("+", 12.0, 0.0, 10.0),
-            glyph("1", 20.0, 0.0, 10.0),
+            math_glyph("2", 6.0, 5.0, 7.0),
+            math_glyph("x", 0.0, 0.0, 10.0),
+            math_glyph("+", 12.0, 0.0, 10.0),
+            math_glyph("1", 20.0, 0.0, 10.0),
         ],
         rules: Vec::new(),
-    }])]);
+    }])
+}
+
+/// `--unicode-math`: the characters, in reading order, with Unicode's own
+/// script forms. Math is flattened to positioned glyphs during evaluation, so
+/// this is the honest maximum for a plain-text vocabulary — see
+/// `markdown/math.rs`.
+#[test]
+fn unicode_math_renders_characters_in_reading_order_with_unicode_scripts() {
+    let md = render_math(
+        &[x_squared_plus_one()],
+        rustyfi_html::MathMode::Unicode,
+    );
     assert_eq!(md.trim(), "x² + 1", "{md}");
-    // Not a placeholder, and not raw HTML.
+    // The whole point of this mode: no markup at all, so a renderer that
+    // strips HTML still shows the equation.
     assert!(!md.contains("<svg"), "{md}");
+    assert!(!md.contains('$'), "{md}");
+}
+
+/// The DEFAULT: an inline `<svg>`, on one line, carrying the equation as a
+/// drawing.
+///
+/// Rendered with no font store, so every glyph takes the `<text>` fallback
+/// rather than an outline — which is exactly what should happen, and is the
+/// half of the behaviour that can be asserted without a bundled face.
+/// `crates/rustyfi/tests/markdown_math.rs` covers the outlined half against
+/// the real fonts, and skips when they are absent.
+#[test]
+fn the_default_draws_math_as_a_single_line_inline_svg() {
+    let md = render_math(
+        &[x_squared_plus_one()],
+        rustyfi_html::MathMode::Outline,
+    );
+    assert!(md.contains("<svg"), "{md}");
+    // One line: a raw `<svg>` split across lines would have blank lines and
+    // `nl2br` inserted into the middle of it by the reader's own parser.
+    let svg_lines: Vec<&str> = md.lines().filter(|l| l.contains("<svg")).collect();
+    assert_eq!(svg_lines.len(), 1, "{md}");
+    assert!(svg_lines[0].contains("</svg>"), "not closed on its line: {md}");
+    // Sized to the box, sitting on the text baseline, and NOT positioned —
+    // there is no positioned ancestor in a Markdown file to position against.
+    assert!(svg_lines[0].contains("viewBox=\"0 0 30 12\""), "{md}");
+    assert!(svg_lines[0].contains("vertical-align:-2pt"), "{md}");
+    assert!(!md.contains("position:absolute"), "{md}");
+}
+
+/// `--katex`: LaTeX in `$…$`, and `$$…$$` when the equation is the whole
+/// paragraph.
+#[test]
+fn katex_writes_latex_in_dollar_delimiters() {
+    // Alone in its paragraph: displayed.
+    let md = render_math(&[x_squared_plus_one()], rustyfi_html::MathMode::Katex);
+    assert_eq!(md.trim(), "$$x^{2}+1$$", "{md}");
+
+    // With prose beside it, the same equation is inline — same LaTeX, one
+    // dollar. This is the distinction `Para::sole_math` exists to make.
+    let md = render_math(
+        &[line_of(vec![
+            text_run("see"),
+            glue(4.0),
+            PureHorzBox::Math {
+                width: Length::pt(30.0),
+                height: Length::pt(10.0),
+                depth: Length::pt(2.0),
+                glyphs: vec![
+                    math_glyph("x", 0.0, 0.0, 10.0),
+                    math_glyph("2", 6.0, 5.0, 7.0),
+                ],
+                rules: Vec::new(),
+            },
+        ])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert!(md.contains("$x^{2}$"), "{md}");
+    assert!(!md.contains("$$"), "inline math must not be displayed: {md}");
 }
 
 // ---------------------------------------------------------------------------
@@ -612,8 +699,15 @@ fn punctuation_that_is_only_special_at_a_line_start_is_left_alone_mid_line() {
 /// nothing rather than panicking — the same guarantee the HTML backend makes.
 #[test]
 fn a_missing_reflow_source_renders_an_empty_document() {
-    let md = rustyfi_html::render_markdown(None, &[], &DocExtras::default(), &[], &[])
-        .expect("must succeed");
+    let md = rustyfi_html::render_markdown(
+        None,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        rustyfi_html::MathMode::Outline,
+    )
+    .expect("must succeed");
     assert_eq!(md, "");
 }
 
@@ -631,6 +725,7 @@ fn markdown_with_mono_font(vboxes: &[VertBox]) -> Option<String> {
             &DocExtras::default(),
             &[],
             &[],
+            rustyfi_html::MathMode::Outline,
         )
         .expect("markdown rendering must succeed"),
     )

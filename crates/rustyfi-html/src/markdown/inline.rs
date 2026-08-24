@@ -122,22 +122,71 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             }
         }
 
-        // Math: its characters, in reading order. See `math.rs` for what that
-        // recovers, what it costs, and why an inline `<svg>` was rejected.
-        PureHorzBox::Math { glyphs, rules, .. } => {
+        // Math, in whichever of the three vocabularies was asked for — see
+        // `crate::MathMode`, and `math.rs`'s module comment for what each one
+        // can and cannot say.
+        PureHorzBox::Math {
+            width,
+            height,
+            depth,
+            glyphs,
+            rules,
+        } => {
             // The `rules` are the paths a font cannot draw, but they also
             // carry any `draw-text` the construction built — and a BIG
             // OPERATOR arrives that way rather than as a `MathGlyph`. Emitted
-            // FIRST, because a `draw-text` operator sits at the box's own
-            // origin: `\sum_a^b` is a sigma with limits, and putting the
-            // sigma after them would read as `ₐᵇ∑`.
+            // FIRST in every mode, because a `draw-text` operator sits at the
+            // box's own origin: `\sum_a^b` is a sigma with limits, and putting
+            // the sigma after them would read as `ₐᵇ∑`.
+            //
+            // It stays TEXT even when the equation beside it is a drawing.
+            // Its contents are `PureHorzBox`es — inline runs, images, whole
+            // nested tables — and an HTML child of an `<svg>` does not merely
+            // look wrong, it ends the parser's foreign-content insertion mode
+            // and ejects the rest of the drawing from the element (see
+            // `crate::svg`'s module comment, where that was measured). So the
+            // one construction that mixes the two comes out as its operator in
+            // text followed by its limits as a drawing, which is legible and
+            // whole, rather than as a broken `<svg>`.
             emit_nested_text(para, rules, ctx);
-            let text = math::math_text(glyphs, rules);
-            if !text.is_empty() {
-                ctx.resolve_glue(para, text.chars().next());
-                ctx.last_char.set(text.chars().next_back());
-                para.push_text(&text, false);
-                ctx.mono_run.set(false);
+            match ctx.math {
+                crate::MathMode::Outline => {
+                    if let Some(svg) = crate::mathsvg::math_block(
+                        width.0,
+                        height.0,
+                        depth.0,
+                        glyphs,
+                        rules,
+                        ctx.fonts,
+                    ) {
+                        ctx.open_opaque(para);
+                        // The reading-order text is the `plain` side: it is
+                        // what a code fence writes instead of the markup, and
+                        // what the plain-text half of the paragraph — the one
+                        // content measurement and search read — gets. A wall
+                        // of path data there would be worse than useless.
+                        para.push_markup(svg, math::math_text(glyphs, rules));
+                    }
+                }
+                crate::MathMode::Katex => {
+                    let latex = crate::latex::math_latex(glyphs, rules);
+                    if !latex.is_empty() {
+                        ctx.open_opaque(para);
+                        para.pieces.push(Piece::Math {
+                            latex,
+                            plain: math::math_text(glyphs, rules),
+                        });
+                    }
+                }
+                crate::MathMode::Unicode => {
+                    let text = math::math_text(glyphs, rules);
+                    if !text.is_empty() {
+                        ctx.resolve_glue(para, text.chars().next());
+                        ctx.last_char.set(text.chars().next_back());
+                        para.push_text(&text, false);
+                        ctx.mono_run.set(false);
+                    }
+                }
             }
         }
 

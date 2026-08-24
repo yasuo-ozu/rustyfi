@@ -370,6 +370,39 @@ fn compile_command(name: &'static str) -> Command {
                 .value_parser(["pdf", "html", "html-reflow", "markdown", "md"])
                 .default_value("pdf"),
         )
+        // The two math-rendering flags. Mutually exclusive at the CLAP level
+        // (`conflicts_with`), so supplying both is a usage error with clap's
+        // own message rather than a silent last-one-wins; which FORMATS each
+        // is valid with is checked in `main.rs`, where the parsed `--format`
+        // is to hand.
+        .arg(
+            Arg::new("unicode_math")
+                .long("unicode-math")
+                .help(
+                    "Markdown only: write equations as their characters in \
+                     reading order (x\u{b2}, \u{2211}\u{2090}\u{1d47}, \
+                     (a+b)/(c+d)) instead of drawing them as SVG. The only \
+                     form that survives a sanitizing Markdown renderer and the \
+                     only one that reads as plain text, at the cost of \
+                     radicals, matrices and nested fractions. Conflicts with \
+                     --katex.",
+                )
+                .action(ArgAction::SetTrue)
+                .conflicts_with("katex"),
+        )
+        .arg(
+            Arg::new("katex")
+                .long("katex")
+                .help(
+                    "html and markdown: write equations as LaTeX in math \
+                     delimiters ($...$/$$...$$ in Markdown, \\(...\\)/\\[...\\] \
+                     in HTML) for a KaTeX/MathJax-enabled reader, instead of \
+                     drawing them as SVG. Derived from the laid-out glyphs, so \
+                     radicals, matrices and nested fractions do not come back \
+                     -- see the manual. Conflicts with --unicode-math.",
+                )
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("deps")
                 .long("deps")

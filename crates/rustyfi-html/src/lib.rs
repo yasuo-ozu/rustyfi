@@ -35,7 +35,10 @@
 mod base64;
 mod fonts;
 mod image;
+mod latex;
 mod markdown;
+mod mathrec;
+mod mathsvg;
 mod recover;
 mod reflow;
 mod svg;
@@ -45,6 +48,52 @@ pub use reflow::{
     render_html_reflow, render_html_reflow_ttf_with, render_html_reflow_ttf_with_decos,
     render_html_reflow_with_decos,
 };
+
+/// How an equation is written into the output.
+///
+/// Math is the one part of a document that no reflowed format can simply
+/// carry over: `${\frac{a}{b}}` is laid out during compilation, so what
+/// reaches a backend is positioned glyphs and a couple of filled paths, with
+/// no `\frac` node left anywhere ([`crate::mathrec`]'s doc comment has the
+/// detail). There is therefore no single right answer, only three answers
+/// that are right for different readers — and which one a document wants is a
+/// property of where it is going to be READ, not of the document. So it is a
+/// flag rather than a heuristic.
+///
+/// [`MathMode::Outline`] is the default for both backends. It is the only one
+/// that reproduces what the PDF draws.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum MathMode {
+    /// Draw each glyph as an SVG outline path taken from the document's own
+    /// face, with the characters kept behind it as invisible, selectable text
+    /// ([`crate::mathsvg`]).
+    ///
+    /// Faithful, self-contained and font-independent — and, in Markdown, the
+    /// one mode that a sanitizing renderer will strip to nothing, because it
+    /// is raw HTML. That is the trade the default makes: the common case (a
+    /// file read locally, in an editor preview, or by any renderer that passes
+    /// HTML through) gets the actual equation.
+    #[default]
+    Outline,
+    /// Write the equation's characters in reading order, using Unicode's own
+    /// super/subscript characters where they exist (`x²`, `∑ₐᵇ`) and splitting
+    /// a fraction at its bar (`(a+b)/(c+d)`).
+    ///
+    /// Markdown only. It is the only form that survives a sanitizing renderer,
+    /// the only one that reads as text in a terminal, and the only one that is
+    /// searchable in the raw file — and it loses radicals, matrices and nested
+    /// fractions to get there. Meaningless for the HTML backend, which can
+    /// always draw the real thing.
+    Unicode,
+    /// Write LaTeX in math delimiters, for a reader whose renderer runs KaTeX
+    /// or MathJax ([`crate::latex`]).
+    ///
+    /// A RE-DERIVATION from the laid-out glyphs rather than a round trip, so
+    /// several constructs cannot come back — `crate::latex`'s doc comment
+    /// lists exactly which, and why each is unavailable rather than merely
+    /// unimplemented.
+    Katex,
+}
 
 /// Rendering is in practice infallible — every text run is valid
 /// UTF-8/HTML-escapable, and image/font handling reads from tables the

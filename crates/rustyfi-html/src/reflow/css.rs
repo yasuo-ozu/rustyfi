@@ -225,6 +225,28 @@ aside.footnote .para + .para {{ margin-top: 0.3em; }}\n\
 /// called AFTER it). Each image's bytes appear once here instead of once per
 /// placement; see `inline.rs`'s `Image` arm for why that matters and what it
 /// costs.
+/// The two rules `--katex` needs, and nothing at all in any other mode.
+///
+/// Emitted as a separate block rather than folded into [`stylesheet`] for one
+/// reason that is worth stating plainly: without the mode test, adding these
+/// declarations would change the bytes of EVERY `--format html` render,
+/// including the ones this flag has nothing to do with. Opt-in has to mean
+/// byte-for-byte opt-in, or "did anything else move?" stops being answerable
+/// with `sha256sum`.
+///
+/// `text-align: center` because a displayed equation is centred in the PDF
+/// too, and the surrounding `.para` rule justifies — which, on a paragraph
+/// whose sole content is one `\[…\]`, stretches nothing and left-aligns it.
+pub(crate) fn math_tex_rules(ctx: &Ctx) -> String {
+    if ctx.math != crate::MathMode::Katex {
+        return String::new();
+    }
+    "/* --katex: the equation is LaTeX for the reader's own typesetter. */\n\
+     .math-tex { white-space: nowrap; }\n\
+     .para.math-display { text-align: center; margin: 1em 0; }\n"
+        .to_string()
+}
+
 pub(crate) fn shared_image_rules(ctx: &Ctx) -> String {
     let mut out = String::new();
     for id in ctx.shared_images.borrow().iter() {

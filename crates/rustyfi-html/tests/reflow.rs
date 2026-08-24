@@ -386,6 +386,444 @@ fn math_rules_render_as_svg_paths() {
     );
 }
 
+/// A math glyph the document placed by GLYPH ID (`MathGlyph::gid`) must be
+/// drawn from that glyph's own OUTLINE, because no `<text>` can address it.
+///
+/// **The bug.** `gid` is `Some` exactly when the drawn form is not the glyph
+/// its `text` cmaps to — a display-size big operator, a stretchy delimiter,
+/// an `ssty` script form. The PDF writer emits the id directly; this backend
+/// wrote `<text>∑</text>`, which can only ever produce the BASE `∑`. So the
+/// operator came out base-size, and — because `layout_math_list` had centred
+/// the limits on the VARIANT's width — `n` and `k = 1` were centred on a
+/// glyph that was not there. In Latin Modern Math at 12pt: `summation`
+/// advances 1.056 em, `summation.v1` 1.444 em, so every limit sat 2.334pt
+/// right of its operator, and `\int`'s scripts began 4.008pt past the end of
+/// the integral sign.
+///
+/// So the assertion that matters is not "a `<path>` appeared" but "the ink
+/// that appeared is the VARIANT's, not the base's" — measured off the
+/// emitted `d` and its `transform`, which is the whole of what the browser
+/// will draw.
+#[test]
+fn a_math_variant_glyph_is_drawn_from_its_own_outline_not_as_a_character() {
+    use rustyfi_backend::{FontMetrics, VertVariantPolicy};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let font = FontKey(0);
+    let size = Length::pt(12.0);
+    // The same call `primitives::push_big_char_glyph` makes, so the fixture
+    // is the real variant record rather than a hand-picked gid.
+    let Some(variant) = store.math_vertical_variant(font, '\u{2211}', size, VertVariantPolicy::BigOp)
+    else {
+        eprintln!("skipping: no MATH BigOp variant for U+2211 in {}", path.display());
+        return;
+    };
+    let base_advance = store
+        .advance(font, '\u{2211}', size)
+        .expect("the face cmaps U+2211");
+    assert!(
+        variant.advance.0 > base_advance.0 + 1.0,
+        "fixture is not exercising anything: the variant must be visibly \
+         wider than the base ({} vs {})",
+        variant.advance.0,
+        base_advance.0
+    );
+
+    let math_box = PureHorzBox::Math {
+        width: variant.advance,
+        height: variant.height,
+        depth: variant.depth,
+        glyphs: vec![MathGlyph {
+            text: "\u{2211}".to_string(),
+            gid: Some(variant.gid),
+            dx: Length::ZERO,
+            dy: Length::ZERO,
+            info: HorzStringInfo {
+                font,
+                size,
+                rising: Length::ZERO,
+                color: Color::Gray(0.0),
+            },
+            width: variant.advance,
+            height: variant.height,
+            depth: variant.depth,
+        }],
+        rules: vec![],
+    };
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&[line(math_box)]),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    // The character must not be DRAWN — a `<text>` can only ever address the
+    // base glyph — but it must still be PRESENT, in the invisible phantom
+    // layer, or the operator becomes uncopyable and unsearchable. Both halves
+    // are asserted, because dropping either is a real regression: this test
+    // originally required the character to be absent altogether, and that is
+    // exactly the accessibility hole the phantom layer closes.
+    let sigma = html.match_indices('\u{2211}').collect::<Vec<_>>();
+    assert_eq!(
+        sigma.len(),
+        1,
+        "the variant's character should appear exactly once:\n{html}"
+    );
+    let before = &html[..sigma[0].0];
+    let open = before.rfind("<text ").expect("inside a <text> element");
+    assert!(
+        before[open..].contains("class=\"mphantom\""),
+        "the character is in DRAWN text, so the browser paints the BASE \
+         glyph over the variant's outline:\n{}",
+        &before[open..]
+    );
+    assert!(
+        html.contains(".math-glyphs .mphantom { fill: none; }"),
+        "the phantom layer is not made invisible:\n{html}"
+    );
+    let (d, transform) = math_path_and_transform(&html).expect("a <path> for the variant glyph");
+
+    // The transform must be `translate(pen) scale(s, -s)` with
+    // `s = size / units_per_em` — the y-flip a filled path needs and a
+    // `<text>` must never get (it would mirror the letters).
+    let s = parse_uniform_flip_scale(&transform).unwrap_or_else(|| {
+        panic!("transform is not a `scale(s -s)` uniform flip: {transform:?}")
+    });
+    assert!(
+        (s - 12.0 / 1000.0).abs() < 1e-9,
+        "scale should be size/units_per_em, got {s}"
+    );
+
+    // The load-bearing measurement: the drawn ink fills the VARIANT's
+    // advance, which is what the surrounding layout was computed against —
+    // not the base glyph's, which is what a `<text>` would have given.
+    //
+    // Ink is compared against ADVANCE, so the two bounds are asymmetric on
+    // purpose. Ink is always the narrower of the two by the glyph's side
+    // bearings (here 0.056 + 0.057 em), hence the 0.85 floor rather than an
+    // equality; and it can only EXCEED the base advance if the glyph drawn is
+    // not the base one, since a glyph's own ink never reaches past its own
+    // advance. That second bound is the one that would have caught the bug.
+    let (x_min, x_max) = path_x_extent(&d).expect("the path has coordinates");
+    let ink = (x_max - x_min) * s;
+    assert!(
+        ink > base_advance.0,
+        "the drawn ink ({ink}pt) is no wider than the BASE advance \
+         ({}pt) — this is still the small glyph",
+        base_advance.0
+    );
+    assert!(
+        ink <= variant.advance.0 && ink >= 0.85 * variant.advance.0,
+        "the drawn ink ({ink}pt) does not fill the variant advance \
+         ({}pt) the limits were centred on",
+        variant.advance.0
+    );
+
+    // Glyph outlines are NONZERO-winding (SVG's default). `evenodd`, which
+    // every other path this backend writes carries because it is reproducing
+    // PDF's `f*`, would punch holes in a CFF face's overlapping contours.
+    let tag = math_path_tag(&html).expect("a <path> for the variant glyph");
+    assert!(
+        !tag.contains("fill-rule"),
+        "a glyph outline must not carry a fill-rule — SVG's nonzero default \
+         is the one fonts are drawn under:\n{tag}"
+    );
+}
+
+/// An ORDINARY math glyph — one whose `text` really does cmap to the glyph
+/// the document laid out — is drawn from its outline too, not as a `<text>`.
+///
+/// **The bug this closes is not the variant one above; it is bigger.** A
+/// `<text>` names a face and hopes the reader has it. Where they do not, the
+/// substitute's advances are not the ones the equation was measured against,
+/// and math is the one place where that is fatal rather than untidy: every
+/// glyph carries an absolute `dx`, so there is no flow to absorb the
+/// difference and the glyphs simply overlap. Measured on this repo's own
+/// fonts, `∀` at 12pt in Latin Modern Math advances 7.992pt; a reader
+/// substituting DejaVu draws it 12.000 wide, which puts the next glyph inside
+/// it. Only the variant glyphs were being outlined, so every ordinary one —
+/// which is nearly all of them — was exposed.
+///
+/// The assertion is on the drawn INK, not on the presence of a `<path>`: the
+/// ink must fall inside the advance the document reserved, which is the
+/// property a substituted face violates and a `<path>` cannot.
+#[test]
+fn an_ordinary_math_glyph_is_drawn_from_its_outline_not_left_to_the_readers_font() {
+    use rustyfi_backend::FontMetrics;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let font = FontKey(0);
+    let size = Length::pt(12.0);
+    let advance = store
+        .advance(font, '\u{2200}', size)
+        .expect("the face cmaps U+2200 FOR ALL");
+
+    let g = MathGlyph {
+        text: "\u{2200}".to_string(),
+        // The whole point: NO gid. Before this change that meant `<text>`.
+        gid: None,
+        dx: Length::ZERO,
+        dy: Length::ZERO,
+        info: HorzStringInfo {
+            font,
+            size,
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        width: advance,
+        height: Length::pt(9.0),
+        depth: Length::ZERO,
+    };
+    let math_box = PureHorzBox::Math {
+        width: advance,
+        height: Length::pt(9.0),
+        depth: Length::ZERO,
+        glyphs: vec![g],
+        rules: vec![],
+    };
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&[line(math_box)]),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    let (d, transform) = math_path_and_transform(&html).expect("a <path> for the glyph");
+    let s = parse_uniform_flip_scale(&transform)
+        .unwrap_or_else(|| panic!("transform is not a `scale(s -s)` uniform flip: {transform:?}"));
+    let (x_min, x_max) = path_x_extent(&d).expect("the path has coordinates");
+    let ink = (x_max - x_min) * s;
+    assert!(
+        ink > 0.5 * advance.0 && ink <= advance.0,
+        "the drawn ink ({ink}pt) is not this glyph's own, measured against \
+         the {}pt advance the document reserved for it",
+        advance.0
+    );
+    // And the character is still there to be copied.
+    assert!(
+        html.contains("class=\"mphantom\"") && html.contains('\u{2200}'),
+        "the character was dropped along with the <text>:\n{html}"
+    );
+}
+
+/// A stretchy delimiter grown from a `GlyphAssembly` is several glyph records
+/// stacked in ONE column — `push_delimiter_glyph` gives every part the same
+/// `text` and the same `dx` — and its character must be copied ONCE.
+///
+/// Without the guard the clipboard gets `(((` for a bracket the page draws
+/// once, which is worse than the `<text>` behaviour it replaced. The parts
+/// are hand-built here because the port only reaches
+/// `push_delimiter_glyph` on the paren-closure fallback path, so no fixture
+/// document produces the shape reliably — and the point of the guard is that
+/// it holds whenever the shape arrives, not that today's corpus makes one.
+#[test]
+fn a_stacked_delimiter_column_copies_its_character_once_not_once_per_part() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let part = |dy: f64, width: f64| MathGlyph {
+        text: "(".to_string(),
+        gid: None,
+        dx: Length::ZERO,
+        dy: Length::pt(dy),
+        info: HorzStringInfo {
+            font: FontKey(0),
+            size: Length::pt(12.0),
+            rising: Length::ZERO,
+            color: Color::Gray(0.0),
+        },
+        // Only the first part carries the column's width, exactly as
+        // `push_delimiter_glyph` builds it.
+        width: Length::pt(width),
+        height: Length::pt(6.0),
+        depth: Length::ZERO,
+    };
+    let math_box = PureHorzBox::Math {
+        width: Length::pt(4.0),
+        height: Length::pt(14.0),
+        depth: Length::pt(4.0),
+        glyphs: vec![part(0.0, 4.0), part(6.0, 0.0), part(12.0, 0.0)],
+        rules: vec![],
+    };
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&[line(math_box)]),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    // Three parts are DRAWN…
+    assert_eq!(
+        html.matches("<path ").count(),
+        3,
+        "each part of the column should still be painted:\n{html}"
+    );
+    // …and one character is copied. Counted inside the phantom layer, since
+    // the stylesheet is full of unrelated `(`s.
+    assert_eq!(
+        html.matches("<tspan").count(),
+        1,
+        "the delimiter's character is repeated once per assembly part, so a \
+         reader copying one bracket gets several:\n{html}"
+    );
+    assert!(html.contains(">(</tspan>"), "the bracket was not copied at all");
+}
+
+/// A `MathGlyph` whose `text` is several characters — what
+/// `primitives::math_boxes_of_inline_boxes` produces for a `text-in-math`
+/// body, folding a whole run into one record — is outlined character by
+/// character, with the pen advancing by each glyph's own `hmtx` advance.
+///
+/// That reproduces the port's own measurement rather than approximating it:
+/// `measure_run` is purely additive per character with no kerning or
+/// ligatures, and `FontMetrics::advance` is the same `hmtx / units_per_em`
+/// ratio. The assertion is on the SECOND character's translate, which is
+/// exactly the first character's advance and nothing else.
+#[test]
+fn a_multi_character_math_run_advances_the_pen_by_each_glyphs_own_advance() {
+    use rustyfi_backend::FontMetrics;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib-rustyfi/dist/fonts/latinmodern-math.otf");
+    let Ok(store) = rustyfi_pdf::TtfFontStore::load(&path, None, None) else {
+        eprintln!("skipping: {} did not load", path.display());
+        return;
+    };
+    let font = FontKey(0);
+    let size = Length::pt(12.0);
+    let (a, b) = ('A', 'V');
+    let wa = store.advance(font, a, size).expect("cmaps A");
+    let total = wa + store.advance(font, b, size).expect("cmaps V");
+
+    let math_box = PureHorzBox::Math {
+        width: total,
+        height: Length::pt(9.0),
+        depth: Length::ZERO,
+        glyphs: vec![MathGlyph {
+            text: format!("{a}{b}"),
+            gid: None,
+            dx: Length::pt(3.0),
+            dy: Length::ZERO,
+            info: HorzStringInfo {
+                font,
+                size,
+                rising: Length::ZERO,
+                color: Color::Gray(0.0),
+            },
+            width: total,
+            height: Length::pt(9.0),
+            depth: Length::ZERO,
+        }],
+        rules: vec![],
+    };
+    let html = rustyfi_html::render_html_reflow_ttf_with(
+        Some(&[line(math_box)]),
+        &geometry(),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    let xs: Vec<f64> = html
+        .match_indices("transform=\"translate(")
+        .filter_map(|(i, _)| {
+            let rest = &html[i + "transform=\"translate(".len()..];
+            rest.split_whitespace().next()?.parse().ok()
+        })
+        .collect();
+    assert_eq!(xs.len(), 2, "expected one <path> per character:\n{html}");
+    assert!(
+        (xs[0] - 3.0).abs() < 1e-9,
+        "the first character should sit at the record's own dx, got {}",
+        xs[0]
+    );
+    assert!(
+        (xs[1] - (3.0 + wa.0)).abs() < 1e-9,
+        "the second character should sit one `A`-advance ({}pt) further on, \
+         got {}",
+        wa.0,
+        xs[1] - 3.0,
+    );
+    // Both characters are copied, from ONE phantom text element.
+    assert_eq!(html.matches("class=\"mphantom\"").count(), 1);
+    assert!(html.contains(">AV</tspan>"), "the run's text is not intact");
+}
+
+/// The first `<path …/>` tag inside a `math-glyphs` `<svg>`.
+fn math_path_tag(html: &str) -> Option<String> {
+    let svg = html.split("class=\"math-glyphs\"").nth(1)?;
+    let svg = svg.split("</svg>").next()?;
+    Some(svg.split("<path ").nth(1)?.split("/>").next()?.to_string())
+}
+
+/// That tag's `d` and `transform`.
+fn math_path_and_transform(html: &str) -> Option<(String, String)> {
+    let tag = math_path_tag(html)?;
+    let field = |name: &str| -> Option<String> {
+        Some(
+            tag.split(&format!("{name}=\""))
+                .nth(1)?
+                .split('"')
+                .next()?
+                .to_string(),
+        )
+    };
+    Some((field("d")?, field("transform")?))
+}
+
+/// `translate(a b) scale(s -s)` -> `Some(s)`, and `None` if the scale is not
+/// a uniform y-flip.
+fn parse_uniform_flip_scale(transform: &str) -> Option<f64> {
+    let inside = transform.split("scale(").nth(1)?.split(')').next()?;
+    let mut parts = inside.split_whitespace();
+    let sx: f64 = parts.next()?.parse().ok()?;
+    let sy: f64 = parts.next()?.parse().ok()?;
+    ((sx + sy).abs() < 1e-12 && sx > 0.0).then_some(sx)
+}
+
+/// The x-extent of an SVG `d`, read off every coordinate PAIR in it. Good
+/// enough for a bound: a Bezier stays inside its control hull, so the
+/// control points can only over-state the extent, never under-state it.
+fn path_x_extent(d: &str) -> Option<(f64, f64)> {
+    let nums: Vec<f64> = d
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['M', 'L', 'Q', 'C', 'Z']))
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    let xs: Vec<f64> = nums.iter().step_by(2).copied().collect();
+    let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
 /// Every length written INSIDE an `<svg>` must be in the viewport's own
 /// user units, i.e. carry no unit at all — or, where CSS forces one
 /// (`font-size`, which is a declaration rather than an attribute), the `px`
@@ -626,11 +1064,17 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The invariant that defines this backend: NOTHING
-/// in reflow output is absolutely positioned. `left:` is never emitted at
-/// all; every occurrence of the substring `top:` must be part of
-/// `margin-top:` (a legitimate flow property), never a bare CSS `top`
-/// positioning declaration.
+/// The invariant that defines this backend: no RUN, PARAGRAPH, FRAME or
+/// TABLE is placed at a coordinate — the reader's browser lays the document
+/// out, so `left:` is never emitted for flowing content and every occurrence
+/// of the substring `top:` is part of `margin-top:` or another flow-safe
+/// longhand, never a bare CSS `top`.
+///
+/// The two exceptions are both DRAWING-scoped and both live in the
+/// stylesheet, where the assertion below counts them: see the comment on
+/// that count. This fixture is deliberately made of plain lines and a frame,
+/// with no math or graphics box in it, so its BODY exercises the strict form
+/// of the rule.
 #[test]
 fn reflow_output_never_uses_absolute_positioning() {
     let vboxes = vec![
@@ -649,24 +1093,36 @@ fn reflow_output_never_uses_absolute_positioning() {
         !body.contains("position:absolute") && !body.contains("position: absolute"),
         "reflow content must never use position:absolute:\n{body}"
     );
-    // The STYLESHEET has exactly one absolute rule, and it is a DRAWING
-    // layer, not page positioning: a framed block's decoration is stretched
-    // over its own relatively-positioned box (`css.rs`'s `svg.frame-deco`,
-    // the same licence the inline `svg`/math wrappers already have — see
-    // this module's doc comment). Pinned by count so a second one cannot
-    // arrive unnoticed.
+    // The STYLESHEET has exactly TWO absolute rules, and NEITHER is page
+    // positioning — both are scoped to one relatively-positioned inline or
+    // block box, the same licence the inline `svg`/math wrappers already
+    // have (see this module's doc comment):
+    //
+    // - `svg.frame-deco`, a framed block's decoration stretched over its own
+    //   box;
+    // - `.dtx`, one row of a `draw-text` construction placed inside its own
+    //   math/graphics wrapper. It was ONE until `\overset`/`\underset` and
+    //   every big operator carrying limits were found rendering their rows
+    //   side by side in source order — `\underset{m}{Y}` as `Y m` — because
+    //   flow has no way to say "above" and the wrapper-local coordinates the
+    //   SVG walker computes for each row were being discarded. See
+    //   `inline.rs`'s `emit_placed_text`, and `all_nested_text_at_anchor`
+    //   for the (unchanged) case where flow IS the right answer.
+    //
+    // Pinned by count so a THIRD one cannot arrive unnoticed.
     let sheet = html.split("<style>").nth(1).expect("a stylesheet");
     let sheet = sheet.split("</style>").next().unwrap();
     assert_eq!(
-        sheet.matches("position: absolute").count()
-            + sheet.matches("position:absolute").count(),
-        1,
+        sheet.matches("position: absolute").count() + sheet.matches("position:absolute").count(),
+        2,
         "unexpected absolute positioning in the stylesheet:\n{sheet}"
     );
-    assert!(
-        sheet.contains("svg.frame-deco"),
-        "the one absolute rule should be the decoration layer:\n{sheet}"
-    );
+    for rule in ["svg.frame-deco", ".dtx {"] {
+        assert!(
+            sheet.contains(rule),
+            "the absolute rules should be `{rule}` and the other one:\n{sheet}"
+        );
+    }
     // `top:`/`left:` are allowed only as the tail of a flow-safe longhand
     // (`margin-top`, `border-top`, `padding-left`, … — used by the static
     // `.clearpage`/`aside.footnote`/`nav.toc` stylesheet rules, `css.rs`),
@@ -2263,6 +2719,128 @@ fn a_text_only_math_box_emits_no_sized_wrapper() {
     );
 }
 
+/// A `draw-text` run anchored anywhere BUT the box's own origin is the
+/// document PLACING content, and the placement is honoured
+/// (`inline.rs`'s `emit_placed_text`).
+///
+/// This is how every stacked math construction in the corpus is built:
+/// `latexcmds`' `\overset`/`\underset`/`\normal-overset` and each big
+/// operator carrying limits is one `inline-graphics` holding two or three
+/// `draw-text`s, one per row, differing only in their point. Rendered in
+/// flow they came out side by side in source order — `\underset{m}{Y}` as
+/// `Y m`, `\normal-overset{TOP}{BASE}` as `BASETOP` — while the SVG walker
+/// was computing the right wrapper-local coordinates for each row and the
+/// backend discarded them.
+///
+/// The three things that have to hold, and each of which was wrong:
+/// 1. every row is placed, not appended;
+/// 2. the ACCENT row lands above the BASE row (the bug was that "above" had
+///    no expression in flow at all, so it became "after");
+/// 3. `top` is the row's BASELINE minus that row's OWN ascent — the strut
+///    carries the ascent, which is what makes `top` independent of whatever
+///    font the reader's browser resolves the text to.
+#[test]
+fn an_off_anchor_draw_text_row_is_placed_above_the_row_it_accents() {
+    // `\normal-overset`-shaped: a base row on the box's baseline and an
+    // accent row 13pt above it, in a 24pt-tall box. `text_run` is 9pt tall.
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(80.0),
+        height: Length::pt(24.0),
+        depth: Length::pt(2.0),
+        elems: vec![
+            draw_text_at(0.0, 0.0, text_run("BASE")),
+            draw_text_at(4.0, 13.0, text_run("ACCENT")),
+        ],
+    };
+    let out = render(&[line(gfx)]);
+    let html = body_of(&out);
+
+    // (1) Both rows placed, inside the wrapper that scopes the placement.
+    let wrapper = span_body(html, "<span class=\"gfx\"")
+        .unwrap_or_else(|| panic!("no graphics wrapper emitted:\n{html}"));
+    assert_eq!(
+        wrapper.matches("class=\"dtx\"").count(),
+        2,
+        "both `draw-text` rows must be placed:\n{wrapper}"
+    );
+
+    // (3) `top = baseline - ascent`, per row. The base row's baseline is the
+    // box's own (24pt down from the wrapper's top), the accent row's is 13pt
+    // above that; both runs are 9pt tall.
+    assert!(
+        wrapper.contains("<span class=\"dtx\" style=\"left:0pt; top:15pt;\">"),
+        "the base row is at (0, 24-9):\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("<span class=\"dtx\" style=\"left:4pt; top:2pt;\">"),
+        "the accent row is at (4, 24-13-9):\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("<span class=\"dtx-strut\" style=\"height:9pt;\"></span>"),
+        "each placed row needs its own ascent as a strut, or `top` depends \
+         on the reader's font metrics:\n{wrapper}"
+    );
+
+    // (2) And so the accent really is ABOVE, not after: source order still
+    // puts BASE first, which is exactly why flow got this wrong.
+    let base = wrapper.find("BASE").expect("lost the base row");
+    let accent = wrapper.find("ACCENT").expect("lost the accent row");
+    assert!(
+        base < accent,
+        "source order should be unchanged:\n{wrapper}"
+    );
+    assert!(
+        wrapper.find("top:2pt").unwrap() > wrapper.find("top:15pt").unwrap(),
+        "the LATER row in source order is the one placed higher:\n{wrapper}"
+    );
+
+    // Still nowhere inside the `<svg>` — an HTML child there closes it and
+    // ejects the rest of the drawing (`svg.rs`).
+    for body in svg_bodies(html) {
+        assert!(
+            !body.contains("class=\"dtx\""),
+            "placed row inside an <svg>:\n{body}"
+        );
+    }
+}
+
+/// The control for the test above, and the reason it is keyed on the POINT
+/// rather than on "is this a `draw-text`": a run at the box's OWN origin is
+/// a package WRAPPING content it has already laid out, not positioning it —
+/// `easytable` overlays a table and its rules with two `draw-text (x, y)` at
+/// the callback's own point, `figbox` and `enumitem` wrap a single one. For
+/// those, in flow is both where the content belongs and the only rendering
+/// that still reflows, so nothing about them may change.
+#[test]
+fn a_draw_text_run_at_the_boxs_own_origin_stays_in_flow() {
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(80.0),
+        height: Length::pt(24.0),
+        depth: Length::pt(2.0),
+        elems: vec![
+            draw_text_at(0.0, 0.0, text_run("RULES")),
+            draw_text_at(0.0, 0.0, text_run("TABLE")),
+        ],
+    };
+    let out = render(&[line(gfx)]);
+    let html = body_of(&out);
+    assert!(
+        !html.contains("class=\"dtx\""),
+        "an at-origin run must not be placed — it would stop reflowing:\n{html}"
+    );
+    for marker in ["RULES", "TABLE"] {
+        assert!(html.contains(marker), "lost {marker}:\n{html}");
+    }
+    // …and, this being a box that draws nothing else, with no sized wrapper
+    // around it at all (`a_text_only_graphics_box_emits_no_sized_wrapper`).
+    assert!(
+        !html.contains("class=\"gfx\""),
+        "an all-at-origin text-only box must emit no wrapper:\n{html}"
+    );
+}
+
 /// The contents of the first `<span …>` in `html` whose opening tag starts
 /// with `open`, matching nested `<span>`s so an inner wrapper does not end
 /// the outer one early.
@@ -2291,9 +2869,140 @@ fn span_body<'a>(html: &'a str, open: &str) -> Option<&'a str> {
     None
 }
 
+/// A block composed into a DRAWING keeps its text.
+///
+/// **The shape.** `figbox`'s `frame`, `bgcolor`, `shift`, `rotate`, `scale`
+/// and `graffiti` each wrap their argument in
+/// `inline-graphics (fun (x, y) -> [draw-text (x, y) ib; …])`, so
+/// `textbox-with-width 100pt {…} |> frame 1pt Color.black` — a paragraph
+/// broken to a stated measure with a rule round it, the most ordinary thing
+/// that package does — arrives as a `PureHorzBox::EmbeddedBlock` inside a
+/// `draw-text`, i.e. at `inline::emit_inline` rather than at `block.rs`'s own
+/// per-`Line` loop.
+///
+/// **The bug.** That arm was empty, with a comment asserting it was
+/// "unreachable in practice". It was reachable, and the whole paragraph
+/// silently disappeared: the page kept the frame, correctly sized, with
+/// nothing inside it. Nothing failed and nothing warned.
+///
+/// The assertion is that the text is THERE and inside the drawing's own
+/// wrapper — not merely somewhere on the page, which a fix that deferred the
+/// block to after the paragraph (the way a footnote is deferred) would also
+/// satisfy while moving the caption out of its own figure.
+#[test]
+fn an_embedded_block_inside_a_draw_text_keeps_its_text() {
+    let inner = PureHorzBox::EmbeddedBlock {
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::pt(3.0),
+        block: vec![text_line("INSIDE THE FRAME")],
+        anchor_last: true,
+        breakable: false,
+    };
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::pt(3.0),
+        elems: vec![
+            draw_text(inner),
+            rule_line(0.0, 0.0, 100.0, 0.0, 1.0),
+        ],
+    };
+    let html = render(&[line(gfx)]);
+    assert!(
+        html.contains("INSIDETHEFRAME") || html.contains("INSIDE THE FRAME"),
+        "the embedded block's text was dropped — the frame is drawn empty:\n{html}"
+    );
+    let wrapper = span_body(&html, "<span class=\"gfx\"").expect("a graphics wrapper");
+    assert!(
+        wrapper.contains("INSIDE"),
+        "the text landed outside the drawing it belongs to:\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("class=\"embed-inline\" style=\"width:100pt;\""),
+        "the block's own measure is not kept, so the paragraph reflows to \
+         the full column instead of the 100pt it was built for:\n{wrapper}"
+    );
+    // Inline markup only. Everything here is inside the enclosing
+    // `<p class="para">`, and an HTML parser closes an open `<p>` at the
+    // first block-level start tag — so a `<p>`/`<div>` in here would not
+    // nest, it would terminate the paragraph and eject the rest of it.
+    for tag in ["<p ", "<p>", "<div ", "<div>"] {
+        assert!(
+            !wrapper.contains(tag),
+            "`{tag}` inside inline content closes the surrounding \
+             paragraph:\n{wrapper}"
+        );
+    }
+    // And it stays out of the `<svg>`, like every other nested run.
+    for body in svg_bodies(&html) {
+        assert!(
+            !body.contains("INSIDE"),
+            "HTML inside an <svg> ends the drawing at the first tag:\n{body}"
+        );
+    }
+}
+
+/// Two paragraphs inside one embedded block stay two, and two LINES of one
+/// paragraph rejoin — the same distinction `block.rs` draws, because the
+/// browser is going to re-break the text and the port's own line breaks must
+/// not survive as hard ones.
+#[test]
+fn an_embedded_block_in_a_drawing_rejoins_lines_but_keeps_paragraphs() {
+    let inner = PureHorzBox::EmbeddedBlock {
+        width: Length::pt(100.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        block: vec![
+            text_line("alpha"),
+            text_line("beta"),
+            VertBox::Skip(Length::pt(6.0)),
+            text_line("gamma"),
+        ],
+        anchor_last: true,
+        breakable: false,
+    };
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(100.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        elems: vec![draw_text(inner)],
+    };
+    // A text-only box at its own anchor emits no sized wrapper of its own
+    // (`a_text_only_graphics_box_emits_no_sized_wrapper`), so the embedded
+    // block is the paragraph's own content here.
+    let html = render(&[line(gfx)]);
+    let embed = html
+        .split("class=\"embed-inline\"")
+        .nth(1)
+        .expect("the inline-block wrapper");
+    assert!(
+        embed.contains("alpha beta"),
+        "two lines of one paragraph must rejoin for the browser to \
+         re-break:\n{embed}"
+    );
+    assert_eq!(
+        embed.matches("<br>").count(),
+        1,
+        "exactly one paragraph boundary, and it is the `Skip`:\n{embed}"
+    );
+    assert!(
+        embed.find("<br>") < embed.find("gamma"),
+        "the break belongs before the second paragraph:\n{embed}"
+    );
+}
+
 fn draw_text(bx: PureHorzBox) -> GraphicsElem {
+    draw_text_at(0.0, 0.0, bx)
+}
+
+/// [`draw_text`] anchored at a box-local, y-UP point — the frame
+/// `GraphicsElem`'s own coordinates use (`graphics.rs`).
+fn draw_text_at(x: f64, y: f64, bx: PureHorzBox) -> GraphicsElem {
     GraphicsElem::Text {
-        pt: (Length::ZERO, Length::ZERO),
+        pt: (Length::pt(x), Length::pt(y)),
         contents: vec![(Length::ZERO, bx)],
         width: Length::pt(40.0),
         height: Length::pt(20.0),

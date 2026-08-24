@@ -1564,6 +1564,7 @@ dependencies = [
  "rustyfi-backend",
  "rustyfi-pdf",
  "thiserror",
+ "ttf-parser",
 ]
 
 [[package]]

@@ -250,22 +250,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         ctx.break_hyphen.set(false);
                         ctx.reset_flow();
                     } else {
-                        // Which of the three a line boundary is —
-                        // `crate::recover::line_join`, shared with the
-                        // Markdown backend because getting it wrong turns
-                        // `code-printer` into `codeprinter` in either format.
-                        match crate::recover::line_join(
-                            ctx.break_hyphen.replace(false),
-                            ends_with_hyphen(&para.text),
-                        ) {
-                            LineJoin::DropHyphen => drop_break_hyphen(&mut para.text),
-                            // An AUTHORED hyphen the breaker chose to break
-                            // after (UAX#14 allows it). The hyphen stays —
-                            // it is the author's — but the two halves must
-                            // not gain a space between them.
-                            LineJoin::KeepHyphen => {}
-                            LineJoin::Space => ctx.note_glue(WORD_SPACE_PT),
-                        }
+                        rejoin_lines(&mut para.text, ctx);
                     }
                 }
             }
@@ -370,6 +355,26 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     drain_footnotes(out, ctx);
 }
 
+/// Apply [`crate::recover::line_join`] to a proportional paragraph's
+/// `Line`-to-`Line` boundary.
+///
+/// The CLASSIFICATION lives in `recover`, shared with the Markdown backend —
+/// the rule has three cases and getting one wrong is a silently wrong word,
+/// so there is one copy of it. What stays here is what the reflow backend
+/// DOES with each case, which is not shared: this one accumulates a glue on
+/// `Ctx`, and Markdown's own caller does something else with the same answer.
+///
+/// Called from `inline::emit_embedded_block` too, which walks a nested
+/// block's lines for itself. (The fixed-pitch case is NOT here: only the
+/// block walker tracks whether a paragraph is set in a monospace face, and
+/// only there does a break belong to the author.)
+pub(crate) fn rejoin_lines(text: &mut String, ctx: &Ctx) {
+    match crate::recover::line_join(ctx.break_hyphen.replace(false), ends_with_hyphen(text)) {
+        LineJoin::DropHyphen => drop_break_hyphen(text),
+        LineJoin::KeepHyphen => {}
+        LineJoin::Space => ctx.note_glue(WORD_SPACE_PT),
+    }
+}
 
 /// Remove the hyphen the LINE BREAKER put at the end of this line, so a word
 /// it split comes back together for the browser to re-break its own way.

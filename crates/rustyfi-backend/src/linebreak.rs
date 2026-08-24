@@ -290,105 +290,141 @@ fn is_cjk(c: char) -> bool {
 /// already non-negative "how far below the baseline" magnitudes (see
 /// hbox.rs), so `depth` is combined via `.max` directly with no sign flip.
 pub fn natural_metrics(boxes: &[HorzBox]) -> (Length, Length, Length) {
-    fn go<'a>(
-        pure: impl IntoIterator<Item = &'a PureHorzBox>,
-        width: &mut Length,
-        height: &mut Length,
-        depth: &mut Length,
-    ) {
-        for bx in pure {
-            match bx {
-                PureHorzBox::InnerString {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    ..
-                } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::OuterEmpty { natural, .. } => *width += *natural,
-                PureHorzBox::OuterFil => {}
-                PureHorzBox::FixedEmpty { width: w } => *width += *w,
-                PureHorzBox::Image { width: w, height: h, .. } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                }
-                PureHorzBox::Discretionary { no_break, .. } => go(no_break, width, height, depth),
-                PureHorzBox::Graphics {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    ..
-                } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::Math {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    ..
-                } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                // Zero width contribution (fil semantics); height/depth
-                // still feed the run's outer metrics.
-                PureHorzBox::GraphicsOuter { height: h, depth: d, .. } => {
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::HookPageBreak { .. } => {}
-                PureHorzBox::Tabular(tab) => {
-                    *width += tab.width;
-                    *height = (*height).max(tab.height);
-                    *depth = (*depth).max(tab.depth);
-                }
-                PureHorzBox::EmbeddedBlock {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    ..
-                } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::Frame {
-                    width: w,
-                    height: h,
-                    depth: d,
-                    ..
-                } => {
-                    *width += *w;
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::FrameMarker { .. } => {}
-                // Zero width (its contents are spliced siblings), but the
-                // frame's padded vertical extent still feeds the outer metrics.
-                PureHorzBox::InlineFrameMarker { height: h, depth: d, .. } => {
-                    *height = (*height).max(*h);
-                    *depth = (*depth).max(*d);
-                }
-                PureHorzBox::Footnote { .. } => {}
-                PureHorzBox::InlineMark(_) => {}
+    pure_natural_metrics(boxes.iter().map(|HorzBox::Pure(p)| p))
+}
+
+/// The per-variant metric table shared by [`natural_metrics`] and
+/// [`pure_natural_metrics`] — lifted out of the former's body so both entry
+/// points read the SAME table (see `pure_natural_metrics` on why the second
+/// one exists).
+fn natural_metrics_go<'a>(
+    pure: impl IntoIterator<Item = &'a PureHorzBox>,
+    width: &mut Length,
+    height: &mut Length,
+    depth: &mut Length,
+) {
+    for bx in pure {
+        match bx {
+            PureHorzBox::InnerString {
+                width: w,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
             }
+            PureHorzBox::OuterEmpty { natural, .. } => *width += *natural,
+            PureHorzBox::OuterFil => {}
+            PureHorzBox::FixedEmpty { width: w } => *width += *w,
+            PureHorzBox::Image {
+                width: w,
+                height: h,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+            }
+            PureHorzBox::Discretionary { no_break, .. } => {
+                natural_metrics_go(no_break, width, height, depth)
+            }
+            PureHorzBox::Graphics {
+                width: w,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            PureHorzBox::Math {
+                width: w,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            // Zero width contribution (fil semantics); height/depth
+            // still feed the run's outer metrics.
+            PureHorzBox::GraphicsOuter {
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            PureHorzBox::HookPageBreak { .. } => {}
+            PureHorzBox::Tabular(tab) => {
+                *width += tab.width;
+                *height = (*height).max(tab.height);
+                *depth = (*depth).max(tab.depth);
+            }
+            PureHorzBox::EmbeddedBlock {
+                width: w,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            PureHorzBox::Frame {
+                width: w,
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *width += *w;
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            PureHorzBox::FrameMarker { .. } => {}
+            // Zero width (its contents are spliced siblings), but the
+            // frame's padded vertical extent still feeds the outer metrics.
+            PureHorzBox::InlineFrameMarker {
+                height: h,
+                depth: d,
+                ..
+            } => {
+                *height = (*height).max(*h);
+                *depth = (*depth).max(*d);
+            }
+            PureHorzBox::Footnote { .. } => {}
+            PureHorzBox::InlineMark(_) => {}
         }
     }
+}
+
+/// [`natural_metrics`] over bare [`PureHorzBox`]es rather than `HorzBox`es.
+///
+/// `HorzBox` has exactly one variant (`Pure`), so the two differ only in the
+/// wrapper — but a caller holding a `&PureHorzBox` cannot reach the wrapped
+/// form without allocating a `Vec` and CLONING the box, which for a
+/// `Tabular` or an `EmbeddedBlock` means deep-copying a whole laid-out
+/// subtree just to read three numbers off it.
+///
+/// The one caller that needs this is the HTML backend's `draw-text`
+/// placement (`rustyfi-html`'s `reflow::inline`): it is handed one nested box
+/// at a time plus the wrapper-local point its baseline goes at, and must
+/// place the box's TOP, so it needs that box's own ascent — per variant,
+/// which is precisely the walk this function already performs.
+pub fn pure_natural_metrics<'a>(
+    boxes: impl IntoIterator<Item = &'a PureHorzBox>,
+) -> (Length, Length, Length) {
+    // The walk itself is `natural_metrics_go`, which `natural_metrics` runs
+    // too — ONE per-variant metric table, so a new `PureHorzBox` variant
+    // cannot be taught to one entry point and not the other.
     let mut width = Length::ZERO;
     let mut height = Length::ZERO;
     let mut depth = Length::ZERO;
-    go(
-        boxes.iter().map(|HorzBox::Pure(p)| p),
-        &mut width,
-        &mut height,
-        &mut depth,
-    );
+    natural_metrics_go(boxes, &mut width, &mut height, &mut depth);
     (width, height, depth)
 }
 

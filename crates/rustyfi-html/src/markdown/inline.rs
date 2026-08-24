@@ -308,19 +308,20 @@ fn open_link(para: &mut Para, deco: &DecoId, ctx: &Ctx) -> bool {
     }
 }
 
-/// What a drawing becomes.
+/// What a drawing becomes: the drawing itself, as an `<svg>`.
 ///
-/// There is no Markdown for a vector drawing, and the three ways out are all
-/// lossy. An inline `<svg>` is stripped by every sanitizing renderer and
-/// unreadable in the raw file. A rasterized `![](…)` would need a rasterizer
-/// this repo does not have — the PDF writer emits paths, not pixels. Dropping
-/// them silently is the worst of the three: a reader of `xpath`'s manual, or
-/// of any slide deck, would see paragraphs referring to figures that are not
-/// there and no indication that anything was lost.
+/// Markdown has no vector-drawing syntax, but every Markdown target of
+/// consequence accepts raw HTML, and the paths are already to hand — the same
+/// `GraphicsElem`s the PDF writer strokes and fills. So the figure survives
+/// instead of leaving a hole, and it survives as VECTOR: no rasterizer is
+/// needed, which matters because this repo does not have one.
 ///
-/// So a drawing leaves a NAMED HOLE. It is deliberately terse — a document
-/// can hold hundreds — and it is a hole a reader can act on, by opening the
-/// PDF or the HTML.
+/// The cost is real and worth stating. A renderer that sanitizes HTML —
+/// GitHub's comment fields, most static-site pipelines — drops the `<svg>`
+/// and leaves nothing in its place, which is strictly worse than the
+/// `[graphic]` hole this replaced. That is the trade: the common case
+/// (a file read locally, in an editor preview, or by any renderer that
+/// passes HTML through) gains the actual picture.
 ///
 /// Below the size threshold nothing is written at all. That is not a
 /// rounding-off: the corpus is full of hairline rules, leader dots and
@@ -349,7 +350,13 @@ fn graphic_placeholder(para: &mut Para, elems: &[GraphicsElem], ctx: &Ctx) {
         return;
     }
     ctx.open_opaque(para);
-    para.push_markup("\\[graphic\\]", "[graphic]");
+    match crate::svg::graphics_block(elems) {
+        // `plain` stays a named hole: it feeds the plain-text side of the
+        // paragraph, which is what content measurement and search read, and
+        // where a wall of path data would be worse than useless.
+        Some(svg) => para.push_markup(svg, "[graphic]"),
+        None => para.push_markup("\\[graphic\\]", "[graphic]"),
+    }
 }
 
 /// Smaller than this in either dimension (pt) and a drawing's INK is a rule,

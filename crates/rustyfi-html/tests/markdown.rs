@@ -14,6 +14,7 @@
 //! (line rejoining, the CJK rule, hyphens, code blocks), then escaping.
 
 use rustyfi_backend::{
+    Closing, GraphicsElem, Path, PathSeg, Subpath,
     AnnotAction, Color, DecoId, DocExtras, FontKey, HorzStringInfo, InlineMarkKind, Length,
     ListMarkKind, MathGlyph, OutlineEntry, PureHorzBox, TabularBox, TabularCellBox, VertBox,
 };
@@ -671,4 +672,91 @@ fn mono_font_store() -> Option<rustyfi_pdf::TtfFontStore> {
         "FontKey(1) must resolve to a face whose family name reads as fixed-pitch",
     );
     Some(store)
+}
+
+/// A drawing is emitted as the drawing, not as a named hole.
+///
+/// Three properties, and all three are load-bearing:
+///
+/// - it is an `<svg>` carrying the real path, so a reader sees the figure;
+/// - it is on ONE line, because a Markdown paragraph is one line and a raw
+///   `<svg>` split across lines has blank lines and `<br>` inserted into the
+///   middle of it by the reader's own parser;
+/// - it carries no `position:absolute`, which the reflow backend's
+///   `svg::emit_graphics` does — in a Markdown file there is no positioned
+///   ancestor, so an absolute drawing lands on top of the prose.
+#[test]
+fn a_drawing_becomes_a_one_line_svg_with_no_positioning() {
+    let square = Path {
+        subpaths: vec![Subpath {
+            start: (Length::pt(0.0), Length::pt(0.0)),
+            segs: vec![
+                PathSeg::Line((Length::pt(30.0), Length::pt(0.0))),
+                PathSeg::Line((Length::pt(30.0), Length::pt(20.0))),
+            ],
+            closing: Closing::Line,
+        }],
+    };
+    let md = render(&[line_of(vec![PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(30.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        elems: vec![GraphicsElem::Fill(Color::Rgb(1.0, 0.0, 0.0), square)],
+    }])]);
+    assert!(md.contains("<svg"), "no <svg> for a drawing:\n{md}");
+    assert!(md.contains("<path"), "the <svg> carries no path:\n{md}");
+    assert!(
+        md.contains("rgb(255,0,0)"),
+        "the drawing lost its colour:\n{md}",
+    );
+    assert!(
+        !md.contains("[graphic]"),
+        "the named hole survived alongside the drawing:\n{md}",
+    );
+    assert!(
+        !md.contains("position:absolute"),
+        "a Markdown file has no positioned ancestor:\n{md}",
+    );
+    let svg = md
+        .lines()
+        .find(|l| l.contains("<svg"))
+        .expect("the <svg> is on a line of its own");
+    assert!(
+        svg.contains("</svg>"),
+        "the <svg> is split across lines, so a Markdown parser will break it:\n{md}",
+    );
+}
+
+/// ...but a hairline is not a drawing. The corpus draws rules, leader dots and
+/// underline strokes as one-off graphics, and an `<svg>` for each would bury
+/// the figures that matter under punctuation.
+#[test]
+fn a_hairline_rule_is_still_dropped_rather_than_drawn() {
+    // A FILLED 200pt x 0.4pt bar, not a zero-height line: the drawing has to
+    // have real ink for the size threshold to be what rejects it. With a
+    // degenerate bbox this test would pass with the threshold removed, which
+    // is the whole thing it exists to catch.
+    let hair = Path {
+        subpaths: vec![Subpath {
+            start: (Length::pt(0.0), Length::pt(0.0)),
+            segs: vec![
+                PathSeg::Line((Length::pt(200.0), Length::pt(0.0))),
+                PathSeg::Line((Length::pt(200.0), Length::pt(0.4))),
+                PathSeg::Line((Length::pt(0.0), Length::pt(0.4))),
+            ],
+            closing: Closing::Line,
+        }],
+    };
+    let md = render(&[line_of(vec![PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(200.0),
+        height: Length::pt(0.4),
+        depth: Length::ZERO,
+        elems: vec![GraphicsElem::Fill(Color::Rgb(0.0, 0.0, 0.0), hair)],
+    }])]);
+    assert!(
+        !md.contains("<svg"),
+        "a 0.4pt rule was drawn as a figure:\n{md}",
+    );
 }

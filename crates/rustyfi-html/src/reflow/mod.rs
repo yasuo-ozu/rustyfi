@@ -450,6 +450,7 @@ pub fn render_html_reflow(
 /// library-facing pair and mean [`crate::MathMode::Outline`], which is both
 /// the default and what they have always done. Threading a mode through all
 /// four would have added a parameter to a dozen call sites to say "unchanged".
+#[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow_with_decos(
     source: Option<&[VertBox]>,
     geometry: &PageGeometry,

@@ -94,10 +94,11 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
             // A script with no base before it (a run that opens with one, or
             // a leftover after a fraction): emitted against an empty group, so
             // `^{2}` is still valid math rather than a bare `^`.
-            Atom::Glyph { script: Some(s), .. } => {
+            Atom::Glyph {
+                script: Some(_), ..
+            } => {
                 let (subs, sups, _, next) = take_scripts(atoms, i);
                 i = next;
-                let _ = s;
                 out.push_str("{}");
                 push_scripts(&mut out, &subs, &sups);
             }
@@ -504,7 +505,7 @@ fn style_wrapper(c: char) -> Option<&'static str> {
             3 | 4 => Some("\\mathcal"),
             5 | 7 => Some("\\mathfrak"),
             6 => Some("\\mathbb"),
-            8 | 9 | 10 | 11 => Some("\\mathsf"),
+            8..=11 => Some("\\mathsf"),
             12 => Some("\\mathtt"),
             _ => None,
         };

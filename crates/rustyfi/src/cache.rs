@@ -490,8 +490,10 @@ mod tests {
         );
         // …and so must the math modes, which change the rendered bytes while
         // leaving every other field of the key identical — see
-        // `OutputFormat::cache_tag`.
-        let mut keys = vec![pdf, html];
+        // `OutputFormat::cache_tag`. `html` above is already
+        // `Html(Outline)`, so the loop starts from `pdf` alone and every
+        // format/mode pair is enumerated exactly once.
+        let mut keys = vec![pdf];
         for math in [
             crate::format::MathMode::Outline,
             crate::format::MathMode::Unicode,

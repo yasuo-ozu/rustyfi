@@ -470,9 +470,12 @@ fn flush_para(
                     let latex =
                         super::text::sole_math_tex(trimmed).expect("just matched");
                     let style = style_attr(&[&margin]);
-                    let _ = write!(
+                    // `writeln!` rather than the `write!(…\n)` its neighbours
+                    // use: identical bytes, and it does not add to this file's
+                    // existing crop of `clippy::write_with_newline`.
+                    let _ = writeln!(
                         out,
-                        "<p class=\"para math-display\"{style}>\\[{latex}\\]</p>\n"
+                        "<p class=\"para math-display\"{style}>\\[{latex}\\]</p>"
                     );
                 }
                 None => {

@@ -124,6 +124,11 @@ body {{\n\
    including why the strut is what makes `top` exact. */\n\
 .dtx {{ position: absolute; line-height: 0; white-space: nowrap; }}\n\
 .dtx > .dtx-strut {{ display: inline-block; width: 0; vertical-align: baseline; }}\n\
+/* Math is drawn from the face's own outlines; these are the characters,\n\
+   kept selectable behind them (`inline.rs`'s `Phantom`). `fill: none` and\n\
+   NOT `visibility: hidden`/`display: none` — those take the text out of the\n\
+   selection too, which is the whole thing being avoided. */\n\
+.math-glyphs .mphantom {{ fill: none; }}\n\
 .embed {{ margin: 0.5em 0; }}\n\
 .iframe {{ display: inline; }}\n\
 .hskip {{ display: inline-block; }}\n\

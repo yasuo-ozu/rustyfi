@@ -1,0 +1,27 @@
+% The three math shapes `html_math_selection.rs` needs in one document, each
+% chosen because it reaches a DIFFERENT branch of the outline/phantom code:
+%
+%   quantifiers  ordinary cmap-driven glyphs — the ones that used to be
+%                `<text>` and are now looked up through the face's own cmap.
+%                This is also the reported symptom: the port reserves 7.992pt
+%                for `∀` where a substituted face draws 12.000, so without
+%                outlines `ε` lands inside the quantifier.
+%   bigop        a MATH-table VARIANT (`MathGlyph::gid`) — already outlined
+%                before this change, and so already uncopyable: the phantom
+%                text is what fixes those.
+%   words        `\text`, i.e. `text-in-math`, which folds a whole run into ONE
+%                `MathGlyph` whose `text` is many characters — the branch that
+%                has to walk the cmap character by character and advance the
+%                pen itself, since one record is no longer one glyph.
+
+@require: stdja-mini
+@require: math
+
+document (|
+  title = {Math selection};
+  author = {yasuo};
+|) '<
+  +p { quantifiers: ${\forall \epsilon \: \exists \delta} }
+  +p { bigop: ${\sum_{k=1}^{n} k} }
+  +p { words: ${x \text!{ if and only if } y} }
+>

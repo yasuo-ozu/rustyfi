@@ -289,6 +289,22 @@ pub(crate) struct Ctx<'a> {
     pub(crate) open_run: RefCell<Option<String>>,
 }
 
+/// What [`Ctx::math_glyph_outline`] resolves one `MathGlyph` to: the face's
+/// `units_per_em` — the unit every `d` below is written in — and the run's
+/// inked glyphs in pen order.
+///
+/// `parts` is a LIST rather than one path because a `MathGlyph`'s `text` is
+/// not always a single character: `primitives::math_boxes_of_inline_boxes`
+/// folds a whole `text-in-math` `InnerString` into one glyph record, so a
+/// `\text{if and only if}` inside an equation arrives here as one `MathGlyph`
+/// holding sixteen characters. Each entry's `f64` is that character's pen
+/// offset from the record's own `dx`, in POINTS (the enclosing `<svg>`'s user
+/// unit), so the caller adds it and needs no unit conversion of its own.
+pub(crate) struct GlyphOutline {
+    pub(crate) upem: f64,
+    pub(crate) parts: Vec<(String, f64)>,
+}
+
 impl Ctx<'_> {
     /// Resolve `font` to a CSS `font-family` VALUE — the real family name
     /// the font file declares, followed by generic fallbacks
@@ -318,22 +334,72 @@ impl Ctx<'_> {
             .is_some_and(|f| crate::fonts::is_monospace_family(&f))
     }
 
-    /// The SVG `d` for a math glyph the document placed by GLYPH ID rather
-    /// than by character (`MathGlyph::gid`), plus the face's
-    /// `units_per_em` — `crate::svg::glyph_outline_d`'s two inputs resolved
-    /// against this render's font store.
+    /// One math glyph's drawn form as the FACE'S OWN OUTLINES, resolved
+    /// against this render's font store: the `units_per_em` the `d` numbers
+    /// are expressed in, and one `(d, dx_pt)` per inked glyph — `dx_pt` an
+    /// offset in POINTS from the `MathGlyph`'s own pen position.
     ///
-    /// `None` for every ordinary cmap-driven glyph (`gid: None`), which the
-    /// caller renders as `<text>` exactly as before, and `None` in base-14
-    /// mode — where `FontMetrics::math_vertical_variant`/`math_script_variant`
-    /// answer `None` too, so no `Some(gid)` glyph can have been produced in
-    /// the first place.
-    pub(crate) fn math_glyph_outline(&self, glyph: &MathGlyph) -> Option<(String, f64)> {
-        let gid = glyph.gid?;
+    /// **Every math glyph takes this route, not just the variant ones.** A
+    /// `<text>` names a face and hopes the reader has it; where they do not,
+    /// the substitute's advances are not the ones the document was laid out
+    /// against and the equation collides with itself. Measured on
+    /// `\forall \epsilon \: \exists \delta` in Latin Modern Math at 12pt, the
+    /// port reserves 7.992pt for `∀` and a substituted face draws 12.000 —
+    /// so `ε` lands inside the quantifier. Every glyph is positioned
+    /// ABSOLUTELY here (`MathGlyph::dx`/`dy`), so there is no flow to absorb
+    /// the difference the way body text has. Drawing the outline makes math
+    /// independent of the reader's fonts entirely, and makes this backend
+    /// agree with the PDF rather than approximately agree.
+    ///
+    /// Two shapes, because `MathGlyph` has two:
+    ///
+    /// - `gid: Some(_)` — a MATH-table variant (a display-size big operator,
+    ///   a stretchy delimiter, one part of a `GlyphAssembly`, an `ssty`
+    ///   script form). The id is drawn directly; no cmap is consulted,
+    ///   because that is exactly the case where `text` does NOT cmap to the
+    ///   glyph the document laid out.
+    /// - `gid: None` — an ordinary run, whose glyphs ARE the ones `text`
+    ///   cmaps to. Each character is looked up through the face's cmap and
+    ///   the pen advances by that glyph's own `hmtx` advance. That
+    ///   reproduces the port's own measurement exactly: `measure_run`
+    ///   (`rustyfi-lang`) is purely additive per character with no kerning or
+    ///   ligatures, and `FontMetrics::advance` is this same
+    ///   `hmtx / units_per_em` ratio.
+    ///
+    /// `None` — leaving the caller on its `<text>` path — in base-14 mode
+    /// (no store, so no face to ask), when the face will not parse, when a
+    /// character has no cmap entry or no `hmtx` advance (the port measured
+    /// that one through a fallback face this function cannot see, so
+    /// advancing by anything here would misplace the rest of the run), and
+    /// when nothing in the run has an outline at all (a lone space).
+    ///
+    /// A character the face maps but draws blank — a space inside a
+    /// `text-in-math` run — contributes no `d` and still advances, so it
+    /// leaves a real gap rather than closing one up.
+    pub(crate) fn math_glyph_outline(&self, glyph: &MathGlyph) -> Option<GlyphOutline> {
         let face = self.fonts?.face(glyph.info.font)?;
         let upem = f64::from(face.units_per_em());
-        let d = crate::svg::glyph_outline_d(&face, gid)?;
-        Some((d, upem))
+        if upem <= 0.0 {
+            return None;
+        }
+        if let Some(gid) = glyph.gid {
+            let d = crate::svg::glyph_outline_d(&face, gid)?;
+            return Some(GlyphOutline {
+                upem,
+                parts: vec![(d, 0.0)],
+            });
+        }
+        let scale = glyph.info.size.0 / upem;
+        let mut parts = Vec::new();
+        let mut pen = 0.0;
+        for c in glyph.text.chars() {
+            let gid = face.glyph_index(c)?;
+            if let Some(d) = crate::svg::glyph_outline_d(&face, gid.0) {
+                parts.push((d, pen));
+            }
+            pen += f64::from(face.glyph_hor_advance(gid)?) * scale;
+        }
+        (!parts.is_empty()).then_some(GlyphOutline { upem, parts })
     }
 
     /// Record that a glue box of `natural_pt` natural width stands here.

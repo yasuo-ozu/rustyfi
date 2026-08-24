@@ -207,12 +207,16 @@ pub(crate) fn math_mathml(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> (Stri
     let atoms = mathrec::recover(glyphs, rules);
     let mut detached = false;
     let body = write_atoms(&atoms, &mut detached);
-    // Every inked path that did NOT become a fraction bar is something drawn
-    // that has no MathML spelling. Counted rather than detected by kind: a
-    // `math-paren` delimiter, a radical sign and an `\overline` are all
-    // `Fill`s, and so is a bar, so the only thing that distinguishes them here
-    // is whether the recovery used it.
-    let approx = if detached || mathrec::inked_paths(rules) > count_fracs(&atoms) {
+    // Every inked path the recovery did NOT consume is something drawn that
+    // has no MathML spelling. Counted rather than detected by kind: a
+    // `math-paren` delimiter, a radical sign, an `\overline` and a fraction
+    // bar are all `Fill`s, so the only thing that distinguishes them here is
+    // whether the recovery used it. [`drawn_paths`] is therefore the ledger
+    // of what WAS used, and it has to move whenever the recovery learns a new
+    // structure — as it just did for delimiters and radicals, which used to
+    // land on the wrong side of this comparison and mark every `\paren` and
+    // every `\sqrt` equation approximate.
+    let approx = if detached || mathrec::inked_paths(rules) > drawn_paths(&atoms) {
         Approx::Approx
     } else {
         Approx::Exact
@@ -220,15 +224,36 @@ pub(crate) fn math_mathml(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> (Stri
     (body, approx)
 }
 
-/// How many of the recovered atoms are fractions, counting a fraction inside a
-/// fraction's half — which cannot happen today ([`crate::mathrec`]'s "one
-/// level deep") but would make the [`Approx`] verdict wrong if it ever did.
-fn count_fracs(atoms: &[Atom<'_>]) -> usize {
+/// How many DRAWN PATHS the recovered atoms account for — the number
+/// [`mathrec::inked_paths`] is compared against.
+///
+/// One per structure the recovery can name, and the count per structure is a
+/// fact about how `math.satyh` draws it rather than a convention:
+///
+/// - a **fraction** is one `Fill`, its bar;
+/// - a **radical** is TWO — `Math::Radical` emits the checkmark sign and the
+///   overbar as separate additions in the same arm, which is the coincidence
+///   [`crate::mathrec`]'s module comment relies on to identify the pair;
+/// - a **delimiter group** is two, one per side. Both were drawn even when a
+///   side is `None`: `pair_delims` only ever forms the structure from a
+///   MATCHED pair of paths, and `None` there means
+///   [`mathrec::DelimKind::Unknown`] — drawn, and unnamed — not absent.
+///
+/// Recursing into the bodies matters for the same reason it did when this
+/// only counted fractions: a `\sqrt` inside a `\paren` is two more paths, and
+/// undercounting them marks an exactly-recovered equation `rustyfi-approx`.
+///
+/// This is what a new [`Atom`] variant carrying drawn ink has to be added to.
+/// Forgetting is not a compile error — the verdict simply becomes wrong in
+/// the safe direction, which is why the reasoning is written down here.
+fn drawn_paths(atoms: &[Atom<'_>]) -> usize {
     atoms
         .iter()
         .map(|a| match a {
-            Atom::Frac { above, below } => 1 + count_fracs(above) + count_fracs(below),
-            _ => 0,
+            Atom::Frac { above, below } => 1 + drawn_paths(above) + drawn_paths(below),
+            Atom::Radical { body } => 2 + drawn_paths(body),
+            Atom::Delim { body, .. } => 2 + drawn_paths(body),
+            Atom::Glyph { .. } | Atom::Space => 0,
         })
         .sum()
 }
@@ -337,6 +362,56 @@ fn write_atoms(atoms: &[Atom<'_>], detached: &mut bool) -> String {
                         row_of(write_atoms(above, detached)),
                         row_of(write_atoms(below, detached)),
                     ),
+                    operator: false,
+                };
+                i += 1;
+                let (subs, sups, limit, next) = take_scripts(atoms, i);
+                i = next;
+                out.push_str(&attach_scripts(&base, subs, sups, limit));
+            }
+            // A `math-paren` group, as a fenced `<mrow>`.
+            //
+            // `stretchy="true"` is written rather than left to the operator
+            // dictionary, because the dictionary only stretches a fence at the
+            // EDGE of an `<mrow>` — and `\abs`'s `|` is `stretchy="false"` by
+            // default there, which would leave a tall body flanked by two
+            // short bars. The document drew both delimiters at the body's own
+            // height, so stretching is what reproduces it.
+            //
+            // A `None` side is [`crate::mathrec::DelimKind::Unknown`]: a path
+            // WAS drawn and matched no signature, so there is no character to
+            // write. The `<mrow>` is still emitted — that is the whole reason
+            // the variant carries a body — so a following script binds to the
+            // group rather than to its last glyph.
+            Atom::Delim { open, close, body } => {
+                let fence = |c: Option<char>| match c {
+                    Some(c) => format!(
+                        "<mo fence=\"true\" stretchy=\"true\">{}</mo>",
+                        crate::escape_html(&c.to_string())
+                    ),
+                    None => String::new(),
+                };
+                let base = Base {
+                    markup: format!(
+                        "<mrow>{}{}{}</mrow>",
+                        fence(open.and_then(mathrec::DelimKind::open_char)),
+                        write_atoms(body, detached),
+                        fence(close.and_then(mathrec::DelimKind::close_char)),
+                    ),
+                    operator: false,
+                };
+                i += 1;
+                let (subs, sups, limit, next) = take_scripts(atoms, i);
+                i = next;
+                out.push_str(&attach_scripts(&base, subs, sups, limit));
+            }
+            // `<msqrt>`, never `<mroot>`: the degree of a `\sqrt[n]` is not in
+            // the box stream at all (see [`Atom::Radical`]), so there is
+            // nothing to put in the second slot and an empty one would render
+            // as a square root with a hole beside it.
+            Atom::Radical { body } => {
+                let base = Base {
+                    markup: format!("<msqrt>{}</msqrt>", write_atoms(body, detached)),
                     operator: false,
                 };
                 i += 1;

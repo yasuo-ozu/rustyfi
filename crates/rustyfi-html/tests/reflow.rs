@@ -2270,22 +2270,27 @@ fn a_nested_block_inside_an_open_inline_frame_stays_balanced() {
     )];
     let html = render_with_links(&vboxes, &links, &[]);
     let body = body_of(&html);
-    // The link is closed before the nested blocks and re-opened after them,
-    // so it appears twice — and, crucially, is not left dangling around
-    // them. Without the depth floor the nested blocks' own paragraph
-    // flushes emitted a third, spurious `</a>` inside themselves.
+    // ONE `<a>`, spanning the whole region — the embedded block is a word of
+    // this sentence (it sits between `linked ` and `tail`, inside a frame
+    // marker pair) and so is emitted inline, which leaves the link intact.
+    // It used to be block-level, and the link was therefore closed before it
+    // and re-opened after: two `<a>`s, correct but worse. What the depth
+    // floor still guards is the FOOTNOTE's body, which really is a nested
+    // `walk_vboxes` run while this link is on the wrapper stack — without it
+    // that body's own paragraph flush emitted a spurious `</a>` inside
+    // itself.
     assert_eq!(
         body.matches("<a class=\"link\"").count(),
-        2,
-        "the link should be closed around the nested blocks and re-opened:\n{body}"
+        1,
+        "an inline embedded block must not split the link around it:\n{body}"
     );
-    assert!(
-        !body
-            .split("<div class=\"embed\">")
-            .nth(1)
-            .unwrap()
-            .starts_with("</a>"),
-        "a nested block must not close its enclosing paragraph's wrapper:\n{body}"
+    let aside = body.split("<aside").nth(1).expect("the footnote body");
+    assert_eq!(
+        (aside.matches("<a ").count(), aside.matches("</a>").count()),
+        (1, 1),
+        "the footnote body should hold exactly its own back-link — an extra \
+         `</a>` there is the enclosing paragraph's wrapper being closed a \
+         second time:\n{body}"
     );
     assert_balanced_tags(&html);
 }
@@ -2920,7 +2925,7 @@ fn an_embedded_block_inside_a_draw_text_keeps_its_text() {
         "the text landed outside the drawing it belongs to:\n{wrapper}"
     );
     assert!(
-        wrapper.contains("class=\"embed-inline\" style=\"width:100pt;\""),
+        wrapper.contains("class=\"embed-inline\" style=\"width:100pt; white-space:nowrap;\""),
         "the block's own measure is not kept, so the paragraph reflows to \
          the full column instead of the 100pt it was built for:\n{wrapper}"
     );
@@ -3075,6 +3080,10 @@ fn a_frames_own_decoration_is_drawn_over_it() {
                 Length::pt(4.0),
                 Length::pt(4.0),
             ),
+            // A BLOCK frame: no baseline to be measured against, which is also
+            // what keeps it out of the inline arm — see
+            // `an_inline_frames_decoration_is_painted_on_its_own_wrapper`.
+            depth: None,
             // A stroked outline, so NOT the plain-panel shortcut.
             elems: vec![rule_line(0.0, 0.0, 100.0, 0.0, 1.0)],
         },
@@ -3114,6 +3123,73 @@ fn a_frames_own_decoration_is_drawn_over_it() {
     assert!(html.contains("padding-right:8pt;"), "{html}");
     assert!(!html.contains("padding-left"), "{html}");
     assert!(html.contains("inside"), "lost the frame's content:\n{html}");
+    assert_balanced_tags(&out);
+}
+
+/// An INLINE frame's decoration lands on the wrapper `<span>` as a background,
+/// not on a `<div>` as a stretched `<svg>` — and the two are told apart by
+/// `FrameDecoration::depth` alone, which is the only thing in the recording
+/// that says a baseline was involved.
+///
+/// The end-to-end statement of this is `rustyfi/tests/html_inline_frame_deco.rs`
+/// (it has to be end to end: the recording side is where the bug was). This is
+/// the unit-level pin on the discriminator, which that test cannot isolate —
+/// it drives the same table with the block entry the block arm expects.
+#[test]
+fn an_inline_frames_decoration_is_painted_on_its_own_wrapper() {
+    let deco = DecoId(21);
+    // 11pt tall, baseline 2pt up from the bottom (the marker's own metrics),
+    // with a rule stroked 1pt BELOW that baseline — `\uwave`'s shape.
+    let decos = vec![(
+        deco,
+        rustyfi_backend::FrameDecoration {
+            width: Length::pt(60.0),
+            height: Length::pt(11.0),
+            pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            depth: Some(Length::pt(2.0)),
+            elems: vec![rule_line(0.0, 1.0, 60.0, 1.0, 0.5)],
+        },
+    )];
+    let vboxes = vec![line_of(vec![
+        iframe_marker(21, false),
+        text_run("wavy"),
+        iframe_marker(21, true),
+    ])];
+    let out = rustyfi_html::render_html_reflow_with_decos(
+        Some(&vboxes),
+        &geometry(),
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        &decos,
+        rustyfi_html::MathMode::SvgOutline,
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    assert!(
+        out.contains(".ideco-0 { background-image:url(\"data:image/svg+xml,"),
+        "the inline decoration reached no stylesheet rule:\n{out}"
+    );
+    assert!(
+        body_of(&out).contains("<span class=\"iframe ideco ideco-0\">wavy</span>"),
+        "the wrapper does not wear its decoration:\n{}",
+        body_of(&out)
+    );
+    // Ink below the baseline: tiled, bottom-anchored. NOT the block arm's
+    // `<svg class="frame-deco">`, which would need a `<div>` to stretch over.
+    assert!(
+        out.contains("background-repeat:repeat-x;")
+            && out.contains("background-position:left bottom;"),
+        "wrong placement class for a rule below the baseline:\n{out}"
+    );
+    // `.frame.framed > svg.frame-deco` is static stylesheet furniture; what
+    // must not exist is an ELEMENT wearing it.
+    assert!(
+        !body_of(&out).contains("frame-deco"),
+        "an inline decoration must not go through the block arm:\n{}",
+        body_of(&out)
+    );
     assert_balanced_tags(&out);
 }
 
@@ -3157,6 +3233,7 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
             width: Length::pt(100.0),
             height: Length::pt(40.0),
             pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            depth: None,
             elems: vec![GraphicsElem::Fill(Color::Gray(0.9), panel)],
         },
     )];
@@ -3184,6 +3261,163 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
     );
 }
 
+/// An embedded block used as a WORD stays in its sentence.
+///
+/// `block.rs` treated every `EmbeddedBlock` as block-level: it flushed the
+/// paragraph, opened a `<div class="embed">` and resumed afterwards. That is
+/// right for the lone-box line a centred figure arrives as
+/// (`embedded_block_becomes_a_nested_div_recursively`, above) and wrong for
+/// `latexcmds`' `\framebox`, which is a FIXED-WIDTH box in the middle of
+/// running text (`\fbox{\makebox(wid){…}}`) — there it took the rest of the
+/// sentence out of the line with it.
+///
+/// The two cases are one line apart in the box stream, so they are asserted
+/// against each other here: same box, once alone on its line and once between
+/// two words.
+#[test]
+fn an_embedded_block_between_words_is_inline_not_a_div() {
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(100.0),
+        height: Length::pt(20.0),
+        depth: Length::ZERO,
+        block: vec![text_line("in the box")],
+        anchor_last: false,
+    };
+    let vboxes = vec![VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, text_run("before")),
+            (Length::pt(40.0), embed),
+            (Length::pt(150.0), text_run("after")),
+        ],
+    }];
+    let out = render(&vboxes);
+    let html = body_of(&out);
+
+    assert!(
+        !html.contains("<div class=\"embed\""),
+        "an embedded block between two words must not become block-level:\n{html}"
+    );
+    assert_eq!(
+        html.matches("<p class=\"para\"").count(),
+        1,
+        "the sentence was split into several paragraphs:\n{html}"
+    );
+    let para = html.lines().find(|l| l.contains("before")).unwrap();
+    assert!(
+        para.contains("after") && para.contains("class=\"embed-inline\""),
+        "`before`, the box and `after` belong to one paragraph:\n{para}"
+    );
+}
+
+/// A ONE-LINE embedded block is `white-space: nowrap`, and inside it a
+/// `Discretionary` writes no soft hyphen.
+///
+/// Both halves are the same fact: the port already fitted this text at this
+/// width, so the browser must not re-break it — and a break opportunity in a
+/// region that cannot break is not merely inert, it splits the word in the
+/// SOURCE. Measured on `figbox`, where a framed caption came out as
+/// `cap&shy;tion` and no search for `caption` found it, while the visible
+/// rendering put `cap-` inside the frame and `tion` below it.
+#[test]
+fn a_one_line_embedded_block_neither_wraps_nor_offers_a_hyphen() {
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(60.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        block: vec![VertBox::Line {
+            height: Length::pt(9.0),
+            depth: Length::pt(2.0),
+            leading: Length::pt(12.0),
+            contents: vec![
+                (Length::ZERO, text_run("left")),
+                (
+                    Length::pt(20.0),
+                    PureHorzBox::Discretionary {
+                        pre_break: vec![text_run("-")],
+                        post_break: vec![],
+                        no_break: vec![],
+                        penalty: 0,
+                    },
+                ),
+                (Length::pt(20.0), text_run("ward")),
+            ],
+        }],
+        anchor_last: false,
+    };
+    // Between two words, so it is the INLINE embedded block under test rather
+    // than the lone-box line that is legitimately a `<div>`.
+    let out = render(&[
+        line_of(vec![text_run("before"), embed, text_run("after")]),
+        text_line("body text, and more of it, so the box is not the whole flow"),
+    ]);
+    let html = body_of(&out);
+
+    assert!(
+        html.contains("white-space:nowrap;"),
+        "a one-line box must not be re-broken at the reader's metrics:\n{html}"
+    );
+    assert!(
+        html.contains("leftward") && !html.contains("left&shy;ward"),
+        "the word is split in the source by a hyphen nothing can use:\n{html}"
+    );
+}
+
+/// The control: a MULTI-line embedded block keeps both.
+///
+/// There the declared width is the document's own wrapping instruction
+/// (`textbox-with-width 100pt`), the browser re-breaking it is the point of
+/// this backend, and the dictionary's break opportunity is real information
+/// that only `&shy;` carries.
+#[test]
+fn a_multi_line_embedded_block_keeps_its_soft_hyphen() {
+    let hyphen_line = VertBox::Line {
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        leading: Length::pt(12.0),
+        contents: vec![
+            (Length::ZERO, text_run("left")),
+            (
+                Length::pt(20.0),
+                PureHorzBox::Discretionary {
+                    pre_break: vec![text_run("-")],
+                    post_break: vec![],
+                    no_break: vec![],
+                    penalty: 0,
+                },
+            ),
+            (Length::pt(20.0), text_run("ward")),
+        ],
+    };
+    let embed = PureHorzBox::EmbeddedBlock {
+        breakable: false,
+        width: Length::pt(60.0),
+        height: Length::pt(9.0),
+        depth: Length::pt(2.0),
+        block: vec![hyphen_line, text_line("second line")],
+        anchor_last: false,
+    };
+    let out = render(&[
+        line_of(vec![text_run("before"), embed, text_run("after")]),
+        text_line("body text, and more of it, so the box is not the whole flow"),
+    ]);
+    let html = body_of(&out);
+
+    assert!(
+        !html.contains("white-space:nowrap;"),
+        "a box the document asked to be wrapped must stay breakable:\n{html}"
+    );
+    assert!(
+        html.contains("left&shy;ward"),
+        "the dictionary's break opportunity is the only thing that tells the \
+         browser where it may hyphenate:\n{html}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // `--mathml`
 // ---------------------------------------------------------------------------
@@ -3208,13 +3442,52 @@ fn ml_glyph(text: &str, dx: f64, dy: f64, size: f64) -> MathGlyph {
 }
 
 fn ml_math(glyphs: Vec<MathGlyph>) -> PureHorzBox {
+    ml_math_with_rules(glyphs, Vec::new())
+}
+
+fn ml_math_with_rules(glyphs: Vec<MathGlyph>, rules: Vec<GraphicsElem>) -> PureHorzBox {
     PureHorzBox::Math {
         width: Length::pt(30.0),
         height: Length::pt(10.0),
         depth: Length::pt(2.0),
         glyphs,
-        rules: Vec::new(),
+        rules,
     }
+}
+
+/// A filled rectangle — ink the recovery cannot name.
+fn ml_inked_rule() -> GraphicsElem {
+    GraphicsElem::Fill(
+        Color::Gray(0.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(0.0)),
+                segs: vec![
+                    PathSeg::Line((Length::pt(10.0), Length::pt(0.0))),
+                    PathSeg::Line((Length::pt(10.0), Length::pt(1.0))),
+                    PathSeg::Line((Length::pt(0.0), Length::pt(1.0))),
+                ],
+                closing: Closing::Line,
+            }],
+        },
+    )
+}
+
+/// The EXTENT MARKER a `Math::Radical` emits beside its two real fills: a
+/// single point with no segments, which `primitives.rs` adds purely so the
+/// headroom above the bar reaches the outer box through `graphics_bbox`. It
+/// paints nothing — PDF's `f` on a zero-length path is a no-op.
+fn ml_extent_marker() -> GraphicsElem {
+    GraphicsElem::Fill(
+        Color::Gray(0.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::pt(0.0), Length::pt(12.0)),
+                segs: Vec::new(),
+                closing: Closing::Open,
+            }],
+        },
+    )
 }
 
 fn render_mathml(vboxes: &[VertBox]) -> String {
@@ -3312,4 +3585,46 @@ fn the_mathml_stylesheet_is_scoped_to_the_mode() {
             "`{rule}` leaked into a render that did not ask for --mathml"
         );
     }
+}
+
+/// `rustyfi-approx` marks a run whose drawing the recovery could not account
+/// for — and an EXTENT MARKER is not such a drawing.
+///
+/// Both directions, because each alone is worthless: a marker that fires on
+/// everything says nothing, and one that never fires says nothing either. The
+/// existing end-to-end coverage in `rustyfi/tests/math_modes.rs` asserts only
+/// the negative, against a fixture that draws no rules at all — which cannot
+/// distinguish "accounted for" from "never counted".
+///
+/// The extent-marker half is the one with history. A `Math::Radical` emits
+/// THREE `Fill`s — the checkmark sign, the overbar, and a single-point subpath
+/// carrying the extra ascender above the bar — and counting that third one as
+/// ink marked every `\sqrt` equation approximate the moment the recovery
+/// learned to read radicals. `mathrec::inked_paths` is named for what it
+/// counts, so the fix belongs there rather than in an off-by-one at the call
+/// site; this pins it.
+#[test]
+fn the_approx_mark_counts_ink_and_not_an_extent_marker() {
+    let glyphs = vec![ml_glyph("x", 0.0, 0.0, 10.0)];
+
+    let unaccounted = render_mathml(&[line(ml_math_with_rules(
+        glyphs.clone(),
+        vec![ml_inked_rule()],
+    ))]);
+    // The CLASS ATTRIBUTE, not the bare name: the stylesheet carries a
+    // `.rustyfi-approx {}` rule in every `--mathml` render, so a substring
+    // search for the name alone passes whatever the marker did.
+    assert!(
+        unaccounted.contains("class=\"math-ml rustyfi-approx\""),
+        "a filled rectangle the recovery cannot name is exactly what the mark \
+         is for, and it did not fire:\n{unaccounted}"
+    );
+
+    let marker_only =
+        render_mathml(&[line(ml_math_with_rules(glyphs, vec![ml_extent_marker()]))]);
+    assert!(
+        !marker_only.contains("class=\"math-ml rustyfi-approx\""),
+        "an extent marker paints nothing, so there is no unrecovered drawing \
+         to warn about:\n{marker_only}"
+    );
 }

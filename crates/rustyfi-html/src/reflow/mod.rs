@@ -242,6 +242,18 @@ pub(crate) struct Ctx<'a> {
     /// authored hyphens: a paragraph wrapping at `code-printer` rendered as
     /// `codeprinter`.
     pub(crate) break_hyphen: Cell<bool>,
+    /// How many enclosing regions the browser may not re-break — today, the
+    /// single-line embedded blocks `inline::emit_embedded_block` writes
+    /// `white-space: nowrap` on. A depth rather than a flag because they nest
+    /// (a `\framebox` inside a figure's caption).
+    ///
+    /// While it is non-zero, a `Discretionary` writes NO soft hyphen. A break
+    /// opportunity inside a region that cannot break is not merely useless: it
+    /// splits the word in the SOURCE, and everything that reads the file
+    /// rather than renders it — find-in-page, a screen reader, a grep — then
+    /// cannot see the word. Measured on `figbox`, where a framed caption came
+    /// out as `cap&shy;tion` and no search for `caption` found it.
+    pub(crate) nobreak: Cell<usize>,
     /// Rules belonging to a table whose own `TabularBox` does not carry them,
     /// as `(width, height, rules)`.
     ///
@@ -289,6 +301,24 @@ pub(crate) struct Ctx<'a> {
     /// `ImageId`s covering two actual pictures. Keying on the id alone found
     /// nothing to share.
     image_canon: HashMap<usize, (usize, usize)>,
+    /// The DISTINCT inline-frame decorations the walk has reached, in
+    /// first-use order: each entry is the CSS declarations that draw one, and
+    /// its position is the `N` in the `ideco-N` class its wrappers wear.
+    ///
+    /// The `shared_images` pattern, for the same reason: a wavy underline over
+    /// one paragraph is tens of kilobytes of SVG path data, and a `style=`
+    /// attribute would carry it in the middle of the prose, once per
+    /// occurrence. Instead the wrapper gets `class="ideco ideco-N"` and the
+    /// drawing goes into the stylesheet once (`css::inline_deco_rules`, which
+    /// like `shared_image_rules` must therefore run AFTER the body walk).
+    ///
+    /// Deduplicated by the DECLARATIONS, not by `DecoId` — content, exactly as
+    /// `image_canon` deduplicates images by their pixels. The same frame value
+    /// placed twice is the easy case; the one that pays is a package that
+    /// decorates every one of its many regions identically
+    /// (`code-printer`'s manual draws 246 rounded panels over 187 distinct
+    /// drawings).
+    pub(crate) inline_decos: RefCell<Vec<String>>,
     /// The `style` of the `<span class="run">` currently left OPEN, if any.
     /// A run whose style matches simply appends its text to it, so a word
     /// the box stream split into chunks — and a Japanese phrase it split
@@ -342,6 +372,33 @@ impl Ctx<'_> {
             if text::wants_space(self.last_char.get(), next, width) {
                 out.push(' ');
             }
+        }
+    }
+
+    /// Resolve the pending glue BEFORE an inline wrapper's opening tag, when
+    /// — and only when — the answer cannot depend on what the wrapper turns
+    /// out to contain.
+    ///
+    /// The word space in front of `A \fbox{framed} B` was landing INSIDE the
+    /// wrapper, because a wrapper opens positionally (`inline.rs`'s
+    /// `InlineFrameMarker`/`Frame` arms) while glue resolves lazily at the
+    /// next run, which is by then one tag deeper. Harmless for a bare
+    /// `<span>`; not harmless once the wrapper carries something the space is
+    /// then part of — a decoration's background box (measured 4.6pt of it, on
+    /// a 39.2pt frame, so the drawn rectangle started at the `A` instead of
+    /// after it), an `<a>`'s underline and hit area, a `::selection`.
+    ///
+    /// It is CONDITIONAL because `text::wants_space` consults the following
+    /// character in exactly one case: two CJK characters with glue between
+    /// them get no space. So when the preceding character is not CJK the
+    /// answer is already fixed and resolving early is not an approximation —
+    /// it is the same call, made outside the tag instead of inside it. When
+    /// it IS CJK the glue is left pending and behaves exactly as before,
+    /// which for the only outcome that writes anything (a CJK/Latin boundary
+    /// falling on a frame edge) leaves one space where it always was.
+    pub(crate) fn resolve_glue_before_wrapper(&self, out: &mut String) {
+        if !self.last_char.get().is_some_and(text::is_cjk) {
+            self.resolve_glue(out, None);
         }
     }
 
@@ -565,12 +622,14 @@ fn render_html_reflow_impl(
         last_char: Cell::new(None),
         mono_run: Cell::new(false),
         break_hyphen: Cell::new(false),
+        nobreak: Cell::new(0),
         tabular_rules: RefCell::new(Vec::new()),
         frame_decos: frame_decos.iter().map(|(id, d)| (*id, d)).collect(),
         footnotes: RefCell::new(Vec::new()),
         footnote_seq: Cell::new(0),
         shared_images: RefCell::new(Vec::new()),
         image_canon,
+        inline_decos: RefCell::new(Vec::new()),
         open_run: RefCell::new(None),
     };
 
@@ -616,6 +675,9 @@ fn render_html_reflow_impl(
     // `@font-face` counterpart — this backend names fonts rather than
     // embedding them; see `fonts::reflow_font_stack`.)
     out.push_str(&css::shared_image_rules(&ctx));
+    // Same "reads what the body walk found" ordering, for the same reason:
+    // which inline frames actually drew a decoration.
+    out.push_str(&css::inline_deco_rules(&ctx));
     out.push_str("</style>\n</head>\n<body>\n");
     out.push_str(&body);
     out.push_str("</body>\n</html>\n");

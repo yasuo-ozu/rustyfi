@@ -158,6 +158,10 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         para.indent = Some(para.indent.map_or(x, |cur: f64| cur.min(x)));
                     }
                 }
+                // Whether an `EmbeddedBlock` on THIS line is the line's whole
+                // point or a word in the middle of it — see
+                // [`lone_embedded_block`].
+                let embed_is_block = lone_embedded_block(contents);
                 for (_, bx) in contents {
                     match bx {
                         // The one inline box that itself carries a nested
@@ -166,7 +170,7 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         // `<div>`, then keep accumulating what (rarely, but
                         // legally) follows on the SAME `Line` into a fresh
                         // paragraph.
-                        PureHorzBox::EmbeddedBlock { block, .. } => {
+                        PureHorzBox::EmbeddedBlock { block, .. } if embed_is_block => {
                             flush_para(out, &mut para, &mut pending_margin, ctx, !list_stack.is_empty());
                             let margin = take_margin(&mut pending_margin);
                             let _ = write!(out, "<div class=\"embed\"{margin}>\n");
@@ -389,6 +393,59 @@ pub(crate) fn rejoin_lines(text: &mut String, ctx: &Ctx) {
 ///
 /// The hyphen may sit just inside a run span that has since closed, so the
 /// closing tag is lifted off and put back.
+/// Is the `EmbeddedBlock` on this line the line's WHOLE POINT, or a word in
+/// the middle of it?
+///
+/// The distinction decides which of the two renderings an `embed-block-top`/
+/// `-bottom` box gets, and getting it wrong is not a cosmetic matter: the
+/// block form flushes the surrounding paragraph and opens a `<div>`, so a box
+/// that was one word of a sentence takes the rest of that sentence out of the
+/// line with it.
+///
+/// - **The line's whole point** — a centred figure, a `textbox-with-width`
+///   standing alone (`single-centering-line`, `+fig-block`): the box is a real
+///   block-level thing that the box stream had no way to express except as a
+///   one-box line, and it becomes `<div class="embed">`.
+/// - **A word in the middle** — `latexcmds`' `\makebox`/`\framebox`, which is
+///   how that package writes "typeset this at a FIXED WIDTH, right here":
+///   `\fbox{\makebox(4cm){…}}` puts the embedded block between an
+///   `inline-frame-breakable`'s two markers with an `A …  B` of ordinary prose
+///   either side. Flushing there ejected the box's text onto a centred line of
+///   its own and left the frame around nothing — measured on the probe in this
+///   module's own test — so it goes through `inline::emit_embedded_block`
+///   instead, as the intrinsically-sized inline-block it is.
+///
+/// "Whole point" is read off the line rather than guessed: exactly one box
+/// that CARRIES anything, and it is the embedded block. Glue, `inline-fil`
+/// (the centring idiom itself), kerns and the zero-width markers are not
+/// content and do not count. An `InlineFrameMarker` anywhere on the line
+/// disqualifies it outright even when the block is otherwise alone: a marker
+/// means an inline wrapper is open across this box, and `<div>` inside an
+/// open `<span>`/`<a>` is not nesting, it is a paragraph break with the
+/// wrapper reopened after it.
+fn lone_embedded_block(contents: &[(rustyfi_backend::Length, PureHorzBox)]) -> bool {
+    let mut carriers = 0usize;
+    let mut embeds = 0usize;
+    for (_, bx) in contents {
+        match bx {
+            PureHorzBox::InlineFrameMarker { .. } => return false,
+            PureHorzBox::EmbeddedBlock { .. } => {
+                carriers += 1;
+                embeds += 1;
+            }
+            PureHorzBox::OuterEmpty { .. }
+            | PureHorzBox::OuterFil
+            | PureHorzBox::FixedEmpty { .. }
+            | PureHorzBox::Discretionary { .. }
+            | PureHorzBox::HookPageBreak { .. }
+            | PureHorzBox::FrameMarker { .. }
+            | PureHorzBox::InlineMark(_) => {}
+            _ => carriers += 1,
+        }
+    }
+    carriers == 1 && embeds == 1
+}
+
 /// Whether the line just closed ends with a hyphen — looking through a run
 /// span that has since closed, as [`drop_break_hyphen`] does.
 fn ends_with_hyphen(text: &str) -> bool {

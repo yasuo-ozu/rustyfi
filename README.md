@@ -362,13 +362,80 @@ and justified prose ends only its last line that way.
   most local previewers; GitHub's image proxy refuses them, so there an image
   degrades to its alt text rather than to a broken path.
 
+### An aligned equation is not a table
+
+The `math` package builds `+align` — its multi-line equation block — out of a
+`tabular`, so an aligned equation and a spreadsheet reach the backend in the
+same box. Rendered literally, a two-row `+align` came out as a GFM pipe table
+whose **column heading was an equation**: GFM's delimiter row always follows
+row one, so the first line of the alignment was promoted to a header.
+
+An aligned equation is recognized by its construction rather than by
+resemblance — it draws no rules, every cell's only ink is an equation, and its
+columns run right, left, right, … (the `inline-fil` placement `+align` uses,
+and exactly the column pattern LaTeX's `aligned` is defined as). A grid that
+draws its own lines, one with text in any cell, or one whose cells are
+*centred* — a matrix — is a table and stays one.
+
+What is written instead depends on what the mode can say:
+
+- **`--katex`** writes one `$$\begin{aligned} … \end{aligned}$$`. The cell
+  boundary is the `&` and the row boundary is the `\\`, so the document's own
+  alignment survives exactly, including the second and later column pairs of a
+  multi-column `+align`;
+- **`--svg-math` / `--svg-outline-math`** write one block per row, with the
+  row's cells joined — a row is one equation split at the alignment point —
+  each centred like any other display equation (below). The column alignment
+  *between* rows is lost: keeping it would mean re-deriving the solved grid
+  geometry into a composed drawing, to buy an alignment that only exists for a
+  reader whose renderer keeps the `<svg>` at all;
+- **`--unicode-math`** keeps the grid. It writes characters, and a two-column
+  text table is a defensible way to show an alignment in plain text — but the
+  grid now gets an **empty header row**, so no equation is promoted to a
+  heading. GFM has no headerless table, and an empty header is the only way to
+  say it.
+
+The block structure does not depend on whether `download-fonts.sh` has been
+run: with no font store a drawing mode degrades to characters, but that is a
+degradation of one equation's rendering, not of the document's shape.
+
+### A displayed equation is centred
+
+In the drawing modes a display equation — one that is the whole of its
+paragraph, which is what "displayed" MEANS in the box stream — is wrapped in
+`<div align="center">`.
+
+This is the one exception to "alignment is dropped", and it is a consequence of
+that rule rather than a hole in it. A drawn equation is **already raw HTML**:
+the `<svg>` is in the file whatever this decides, so a wrapper around it costs
+nothing in portability — a renderer that strips the `<div>` has necessarily
+stripped the drawing too. Prose has no such standing, and centring a paragraph
+would mean putting HTML into a file that had none. The alignment is also one
+the document really asked for, and the HTML backend already honours it
+(`data-align="center"`); dropping it here made the two backends disagree about
+the same recovered fact.
+
+`align`, not `style`, deliberately: GitHub sanitizes rendered Markdown through
+`html-pipeline`'s `SanitizationFilter`, whose allowlist carries `align` for any
+element and carries `style` for none, so `<div style="text-align:center">`
+arrives as a bare `<div>`. The attribute is deprecated in HTML5 and every
+browser still implements it; the sanitizer is the binding constraint.
+
+The other two modes are untouched. `--katex` writes `$$…$$`, which a KaTeX
+reader centres itself (`.katex-display { … text-align: center; }`) and which
+GitHub reads as math only while the `$$` block stands alone — a wrapper would
+turn the equation into literal text there. `--unicode-math` is the plain-text
+mode and stays text.
+
 ### What does not survive
 
 Everything Markdown has no way to say is **dropped, not approximated**:
 
 - **frames, decorations and borders** — a blockquote is not a frame;
 - **alignment** — `\align-center` is a pair of `inline-fil`s and there is no
-  alignment syntax; nothing about the text depends on it;
+  alignment syntax; nothing about the text depends on it. The one exception is
+  a DRAWN display equation, which is already raw HTML and so can be centred for
+  free — see [A displayed equation is centred](#a-displayed-equation-is-centred);
 - **page breaks, running heads and folios** — already absent from the
   pre-page-break stream, and meaningless once reflowed;
 - **colour, font and size** — no styling syntax outside emphasis and code;
@@ -614,11 +681,15 @@ to be self-contained, that is the right trade and it is the default.
 $ rustyfi --format markdown --unicode-math doc.saty
 ```
 
-The glyphs sorted by their own x offsets and written out, with two pieces of
-two-dimensional structure recovered: **scripts** become Unicode
-superscript/subscript characters where one exists (`x²`, `∑ₐᵇ`) and `^q`/`_q`
-where none does, and **fractions** are split at the bar — which survives as a
-wide flat fill — into `(a+b)/(c+d)`.
+The glyphs sorted by their own x offsets and written out, with the
+two-dimensional structure recovered as far as Unicode can say it: **scripts**
+become superscript/subscript characters where one exists (`x²`, `∑ₐᵇ`) and
+`^q`/`_q` where none does; **fractions** are split at the bar — which survives
+as a wide flat fill — into `(a+b)/(c+d)`, nesting included; and **delimiters**
+and **radicals**, which are drawn as paths and have no character in the run at
+all, come back as `(x+y)²`, `⌊x⌋`, `‖v‖` and `√(a+b)` — see
+[what `--katex` recovers from the drawn paths](#what---katex-recovers-from-the-drawn-paths),
+which is the same recovery.
 
 This is the only form that is **text**: it survives a sanitizing renderer, it
 reads in a terminal, `grep` finds it, and it needs nothing of the reader at
@@ -639,39 +710,61 @@ without configuration, so emitting it into a web page would show a literal
 dollar sign on a reader's default setup. An equation that is the whole of its
 paragraph is written in the display form.
 
-It is a **re-derivation, not a round trip.** What comes back: fractions,
-scripts and limits grouped correctly (`\sum\limits_{k=1}^{n}`), around 180
-symbols by name, accents as their commands, prose inside an equation as
-`\text{…}`, and the alphabet of a styled letter — `ℝ` really does come back as
-`\mathbb{R}`, because SATySFi writes the style into the codepoint.
+It is a **re-derivation, not a round trip.** What comes back: fractions —
+nested ones included — delimiters, radicals, scripts and limits grouped
+correctly (`\sum\limits_{k=1}^{n}`), around 180 symbols by name, accents as
+their commands, prose inside an equation as `\text{…}`, and the alphabet of a
+styled letter — `ℝ` really does come back as `\mathbb{R}`, because SATySFi
+writes the style into the codepoint.
+
+### What `--katex` recovers from the drawn paths
+
+`\paren`, `\sqbracket`, `\brace`, `\floor`, `\ceil`, `\abs`, `\norm`,
+`\angle-bracket` and `\sqrt` have **no character anywhere in the box stream** —
+`math-paren` and `math-radical` draw them as `Fill` and `Stroke` paths. They
+are recovered from the SHAPE of the path: a delimiter is told from a rule by
+being tall and narrow, its family by whether the outline curves, where its arms
+are and whether its outer edge has a cusp, and its handedness by which side of
+its own bounding box it is thick at at mid-height. The two halves of a pair
+find each other by their vertical extent, which `math-paren` gives them
+identically. A radical is exact rather than inferred: its sign and its overbar
+share a left edge and a top edge to the last bit, because the layout builds
+both out of the same two sums.
+
+So `${\paren{a+b}^2}` comes back as `\left( a+b \right)^{2}`, and
+`${x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}}` as the quadratic formula. A shape
+that matches none of the signatures — a third-party package's own
+`math-paren` argument — still GROUPS its body, as `{…}`: no delimiter is
+invented, and the script after it still binds to the whole group, which is the
+part that was actually wrong.
 
 ### What `--katex` cannot recover
 
 Every item here is information the box stream does not carry, not a gap in the
-writer. **The first three are structural losses that change what the equation
-says**, and are the reason this mode is opt-in rather than a default:
+writer:
 
 | construct | what you get instead | why |
 |---|---|---|
-| `\paren{a+b}`, `\left(…\right)` | **the contents, with the delimiters gone** — `(x+y)^2` becomes `x+y^{2}` | `math-paren` draws a delimiter as a `Fill` path, not a glyph, so there is no character to recover |
-| `\sqrt{x}` inside a fraction | the radicand, and the denominator mis-split | the radical sign is likewise a path; its bar is read as a fraction bar |
-| a script inside a fraction | the wrong vertical sense about half the time — `\frac{1}{x^2}` → `\frac{1}{x_{2}}` | up/down is read from absolute `dy`, and a fraction half sits on a displaced baseline |
-| `\lim_{x\to 0}` | the operator and its limit interleaved | a centred limit over a multi-letter operator sorts into the middle of it. `\sum`/`\prod`/`\int` are correct |
-| `x^{2^{3}}` | `x^{23}` | nested scripts flatten |
-| `a/(b/c)` | `(a/b)/c` | a nested fraction inverts |
-| matrices, `\begin{aligned}` | the cells, in x order | the arrangement is carried by position, and no bar delimits it |
+| a matrix, or rows aligned INSIDE one `${…}` | the cells, in x order | the arrangement is carried by position, and no bar delimits it. (`+align` is a different thing — a real `tabular`, and it *is* recovered; see [An aligned equation is not a table](#an-aligned-equation-is-not-a-table)) |
+| `\sqrt[n]{x}` | a plain `\sqrt{x}` | the layout carries the degree and deliberately does not draw it, so it is not in the box stream at all |
+| `\lim`, `\sin`, `\max` | the letters, in math italic — the LIMIT on one is recovered, the operator's name is not, unless the two appear together | a `MathOp` run reaches the box stream as plain ASCII letter records, the same as a product of variables. Where a centred limit proves the run is an operator and the letters spell one, `\lim\limits_{x\to0}` does come back |
+| a `\setsep` separator | dropped; the two parts run together | its bar is drawn by the same shape an `\abs` uses, so pairing it would close the wrong group |
+| `x^{2^{3}}` | `x^{23}` | a script of a script is another small raised glyph, and nothing marks where one script's group ends |
+| a fraction nested in BOTH halves of another, at equal width | the two inner halves may swap | `\frac{\frac{a}{b}}{\frac{c}{d}}` puts `b` and `c` at the same `dy` and the same `dx`; there is nothing left to tell them apart |
 | `\text{…}` | recovered only when the run holds a space | the layout splits a run at each glue, so a `\text` of separate words arrives as separate records |
 | `\,` `\;` `\quad` | approximated | all of them are "a gap over the threshold" by then |
 | colour | dropped | not measurable back |
 
 Anything whose name is not in the symbol table falls through as the character
-itself, escaped where LaTeX reserves it — never a guess, never nothing. Three
+itself, escaped where LaTeX reserves it — never a guess, never nothing. Four
 things it deliberately does *not* do, each found by running it over the corpus
 rather than over fixtures: it does not re-emit the spacing LaTeX inserts
 itself (`x + 1` is emitted as `x+1`, which typesets as `x + 1`), it does not
 let a control word swallow the next letter (`\partial` + `t` would concatenate
-into an undefined command), and it does not let two inline formulas run their
-delimiters together into a stray `$$`.
+into an undefined command), it does not let two inline formulas run their
+delimiters together into a stray `$$`, and it does not read a script as a
+LIMIT merely because its midpoint happens to coincide with a run of base
+glyphs — `${x^2+y^2+z^2-xy-yz-zx}` is exactly that coincidence.
 
 ### `--mathml`: structure the browser lays out
 

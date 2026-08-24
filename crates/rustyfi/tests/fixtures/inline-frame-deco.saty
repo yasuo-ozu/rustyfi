@@ -1,0 +1,60 @@
+% Fixture: an INLINE frame that DRAWS — the `railway` `\uwave` shape, reduced
+% to the parts that matter, plus one of each other placement class.
+%
+% `\uwave` (`layout-tests/corpus/railway/src/wavyline.satyh:111`) is an
+% `inline-frame-breakable` whose four deco slots all stroke a path in the
+% frame's own bottom padding; the wave itself is `Rail` machinery this fixture
+% has no business pulling in, so `\ruled` strokes a straight line at the same
+% place. What is under test is that an inline frame's decoration is RECORDED
+% and REPLAYED at all, not what shape it is.
+%
+% The three commands are the three placement classes
+% `reflow::structure::inline_frame_decoration` distinguishes, and they are here
+% together so a change that collapses them is visible:
+%
+%   \ruled   ink entirely BELOW the baseline, in the bottom pad  -> underline
+%   \panel   ink STRADDLING the baseline, covering the box       -> panel
+%   \boxed   the same, through the NON-breakable inline frame    -> panel
+%
+% Deliberately no `@require: gr` and no bundled face: the decorations are pure
+% geometry, so this renders identically against the built-in base-14 fonts and
+% needs nothing `download-fonts.sh` fetches.
+
+@require: stdja-mini
+
+let rule-path x y w =
+  terminate-path (line-to (x +' w, y) (start-path (x, y)))
+
+let deco-ruled (x, y) w h d =
+  [ stroke 0.5pt (RGB(0.85, 0.1, 0.1)) (rule-path x (y -' 1pt) w) ]
+
+let box-path x y w h d =
+  close-with-line
+    (line-to (x, y +' h)
+       (line-to (x +' w, y +' h)
+          (line-to (x +' w, y -' d)
+             (start-path (x, y -' d)))))
+
+let deco-panel (x, y) w h d =
+  [ fill (RGB(0.95, 0.85, 0.4)) (box-path x y w h d) ]
+
+let-inline ctx \ruled it =
+  inline-frame-breakable (0pt, 0pt, 0pt, 2.5pt)
+    (deco-ruled, deco-ruled, deco-ruled, deco-ruled) (read-inline ctx it)
+
+let-inline ctx \panel it =
+  inline-frame-breakable (1pt, 1pt, 1pt, 1pt)
+    (deco-panel, deco-panel, deco-panel, deco-panel) (read-inline ctx it)
+
+let-inline ctx \boxed it =
+  inline-frame-outer (1pt, 1pt, 1pt, 1pt) deco-panel (read-inline ctx it)
+
+in
+document (|
+  title = {Inline frame decorations};
+  author = {yasuo};
+|) '<
+  +p { Before \ruled{underlined phrase} after. }
+  +p { Before \panel{highlighted phrase} after. }
+  +p { Before \boxed{boxed phrase} after. }
+>

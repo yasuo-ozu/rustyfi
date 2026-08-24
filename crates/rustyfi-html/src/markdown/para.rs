@@ -325,7 +325,14 @@ impl Para {
                 // leading position, so it needs no `escape::line_start`.
                 format!("{} {}", "#".repeat(depth), one_line)
             }
-            None => escape::line_start(&one_line),
+            None => {
+                let line = escape::line_start(&one_line);
+                if self.display_svg(in_cell) {
+                    centred(&line)
+                } else {
+                    line
+                }
+            }
         };
         Some(Rendered { text, code: false })
     }
@@ -424,13 +431,29 @@ impl Para {
         any.then_some((body, approx))
     }
 
-    /// Is this paragraph one drawn equation and nothing else — i.e. may its
-    /// `<svg>` be pretty-printed?
+    /// Is this paragraph nothing but DRAWN equations — i.e. was the equation
+    /// displayed rather than set inside a sentence?
     ///
-    /// Same question as [`Para::display_math`] asks for LaTeX, and the same
-    /// answer for a cell: a drawing inside a `|` row must stay on one line,
-    /// because a table cell is not its own HTML block and a newline inside one
-    /// ends the row.
+    /// Exactly the question [`Para::display_math`] asks for LaTeX, and it now
+    /// gives exactly the same answer: **several math pieces still count as one
+    /// displayed equation.** A formula is not one box — `latexcmds`'
+    /// Schrödinger equation reaches this backend as four, and a row of the
+    /// `math` package's `+align` as one per cell — and `display_math` has
+    /// always folded those into a single display block. This used to demand
+    /// `svgs == 1`, so the same equation was displayed as LaTeX and inline as
+    /// a drawing.
+    ///
+    /// Two things follow from a `true`, and both need the paragraph to be a
+    /// block of its own rather than a cell:
+    ///
+    /// - the drawings are CENTRED, in a `<div align="center">` written by
+    ///   [`Para::render`] — see there for why the deprecated attribute and not
+    ///   `style`;
+    /// - the `<svg>` may take its pretty-printed form (`crate::mathsvg::Wrap`).
+    ///
+    /// `in_cell` therefore declines outright, for the reason it declines in
+    /// [`Para::display_math`]: a `|` row is not an HTML block, a `<div>` inside
+    /// one breaks the table, and a newline inside one ends the row.
     fn display_svg(&self, in_cell: bool) -> bool {
         if in_cell {
             return false;
@@ -445,7 +468,7 @@ impl Para {
                 _ => {}
             }
         }
-        svgs == 1
+        svgs >= 1
     }
 
     /// The paragraph as one flowing line of prose.
@@ -803,6 +826,43 @@ fn link_url(url: &str) -> String {
 /// Collapse the runs of spaces a rejoined paragraph accumulates — a line
 /// boundary and the glue on either side of it each contribute one — into
 /// single spaces, and drop them at the edges.
+/// A displayed equation's drawings, centred.
+///
+/// **Markdown has no alignment, and that is still true** — every other
+/// alignment in the document is dropped, and this is not a hole in that rule
+/// but a consequence of it. A drawn equation is ALREADY raw HTML: the `<svg>`
+/// is in the file whatever this decides, so a wrapper around it costs nothing
+/// in portability. A renderer that strips the `<div>` has necessarily stripped
+/// the drawing too, and one that keeps the drawing keeps the wrapper. Prose
+/// has no such standing — centring a paragraph would mean putting HTML into a
+/// file that had none.
+///
+/// It is also an alignment the document really did ASK for, and the HTML
+/// backend already honours it (`reflow`'s `data-align="center"` plus its
+/// stylesheet). Dropping it here made the two backends disagree about the same
+/// recovered fact.
+///
+/// **`align` rather than `style`, deliberately.** GitHub sanitizes rendered
+/// Markdown through `html-pipeline`'s `SanitizationFilter`, whose allowlist
+/// carries `"align"` in its `all` (any-element) attribute list and does NOT
+/// carry `style` anywhere — so `<div style="text-align:center">` arrives as a
+/// bare `<div>`. The attribute is deprecated in HTML5 and every browser still
+/// implements it; the sanitizer is the binding constraint, not the spec.
+///
+/// Only the DRAWING modes come here. `--katex` writes `$$…$$`, which a KaTeX
+/// reader centres itself (`katex.css`'s `.katex-display { … text-align:
+/// center; }`) and which GitHub only recognises as math when the `$$` block
+/// stands on its own — wrapping it would turn the equation back into
+/// literal text there. `--unicode-math` writes characters and must stay text.
+fn centred(body: &str) -> String {
+    // Three lines, no blank line between them: CommonMark opens an HTML block
+    // at a line beginning `<div` and closes it at the next BLANK line, so the
+    // whole thing is one raw-HTML block and the drawing inside it is passed
+    // through untouched. Inside a list `block.rs`'s writer indents all three
+    // together, which keeps them in the item.
+    format!("<div align=\"center\">\n{body}\n</div>")
+}
+
 fn collapse_spaces(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_space = false;

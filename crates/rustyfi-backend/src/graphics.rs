@@ -197,15 +197,19 @@ pub fn linear_transform_path(mat: (f64, f64, f64, f64), path: &Path) -> Path {
     map_path(path, |p| linear_transform_point(mat, p))
 }
 
-/// One block frame's own decoration, captured at its natural size so a
-/// backend with no page grid can still draw it.
+/// One frame's own decoration, captured at its natural size so a backend with
+/// no page grid can still draw it.
 ///
 /// The graphics are BOX-LOCAL (origin at the frame's bottom-left, y up) and
 /// span `width` x `height`, which is what lets a reflowable renderer scale
-/// them to whatever width the reader's window gives the frame. `fire_hooks`
-/// records one per `DecoId` the first time that frame fires as a SINGLE
-/// fragment (`decoS`); a frame split across pages has no whole-frame drawing
-/// and records nothing.
+/// them to whatever width the reader's window gives the frame.
+///
+/// BLOCK frames (`depth == None`): `fire_hooks` records one per `DecoId` the
+/// first time that frame fires as a SINGLE fragment (`decoS`); a frame split
+/// across pages has no whole-frame drawing and records nothing.
+///
+/// INLINE frames (`depth == Some(_)`) record the FIRST fragment instead, and
+/// that difference is deliberate — see [`FrameDecoration::depth`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameDecoration {
     pub width: crate::Length,
@@ -218,7 +222,41 @@ pub struct FrameDecoration {
     /// needs only `right`, which nothing else records: the content is simply
     /// laid out narrower, and once the frame is redrawn at the reader's own
     /// width a right-aligned line lands on its border.
+    ///
+    /// For an INLINE frame it is the two VERTICAL ones that matter and the
+    /// two horizontal ones that do not: `append_horz_padding` splices `left`
+    /// and `right` into the box stream as real kerns, which the flow already
+    /// carries, while `top` and `bottom` are folded into `height`/`depth` and
+    /// have no representation in the flow at all. A CSS inline box's
+    /// background is drawn over the FONT's content area — the reader's
+    /// ascent and descent, nothing to do with the document's box — so
+    /// without these two the drawing is squashed into it: measured at 12pt,
+    /// `\shadowbox`'s 22.7pt frame into 12.75pt, which turns a drop shadow
+    /// into a bar through the text. `reflow::structure`'s
+    /// `inline_frame_decoration` restores them as real CSS padding.
     pub pads: (crate::Length, crate::Length, crate::Length, crate::Length),
+    /// How much of `height` lies BELOW the text baseline, for an INLINE frame
+    /// (`inline-frame-outer`/`-inner`/`-breakable`); `None` for a block frame,
+    /// which sits in the vertical flow and has no baseline to be measured
+    /// against.
+    ///
+    /// This is the whole difference between the two, and a renderer needs it:
+    /// a block frame's drawing is placed against the frame's own box, while an
+    /// inline frame's is placed against the LINE — `railway`'s `\uwave` strokes
+    /// its wave 1pt below the baseline, inside a 2.5pt bottom pad, and without
+    /// knowing where in `height` that baseline sits there is no way to tell
+    /// that drawing (an underline) from one that straddles the text (a
+    /// highlight panel) or sits above it (an overline).
+    ///
+    /// It also marks which recording rule produced the entry. An inline frame
+    /// splits at LINE boundaries, not page boundaries, and upstream applies the
+    /// full `paddingT`/`paddingB` to EVERY fragment (`lineBreak.ml:74`'s
+    /// `append_vert_padding`) — so unlike a block frame's `decoH`/`decoM`/
+    /// `decoT`, each inline fragment is a complete decoration in its own right
+    /// and the head is representative of the whole. Recording the first
+    /// fragment therefore leaves a split region drawable, where the block
+    /// rule's "single fragment only" would leave it blank.
+    pub depth: Option<crate::Length>,
     pub elems: Vec<GraphicsElem>,
 }
 

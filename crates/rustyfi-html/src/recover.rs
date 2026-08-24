@@ -30,6 +30,9 @@
 //!   recovered from each cell's `x`.
 //! - [`Borders`] — and no grid LINES either; which boundaries a table
 //!   actually rules is recovered from the shapes in `TabularBox::rules`.
+//! - [`is_aligned_equation`] — and not every `TabularBox` is a TABLE. The
+//!   `math` package builds `+align` out of one, so an aligned equation and a
+//!   spreadsheet arrive in the same box.
 //! - [`MonoFiles::is_monospace`] — the one signal that says a `Line`
 //!   boundary is the AUTHOR's rather than the breaker's (a `+code` block
 //!   and a wrapped paragraph are structurally identical otherwise).
@@ -481,6 +484,174 @@ pub fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
     rows
 }
 
+/// Is this `TabularBox` an ALIGNED EQUATION rather than tabular data?
+///
+/// `+align` — the `math` package's multi-line equation block — is built out of
+/// a `tabular` (`lib-rustyfi/dist/packages/math.satyh:541-574`, upstream
+/// `math.satyh`'s own `% temporary`), so an equation and a spreadsheet reach a
+/// backend in the same box. That matters because the two want opposite
+/// renderings: a grid is the whole point of one and an artefact of the other.
+///
+/// **The signal is the construction, not a resemblance.** Three clauses, each
+/// a fact about how `+align` builds its grid, and each one on its own able to
+/// keep a real table out:
+///
+/// 1. **It draws no rules.** `+align` passes `(fun _ _ -> [])` as the rule
+///    callback. A grid that draws its own lines is asserting that it IS a
+///    grid, whatever is in the cells.
+/// 2. **Every cell's only ink is math** ([`cell_ink`]). This is the clause
+///    that excludes the real tables: `easytable`'s cells hold text, and its
+///    content half draws no rules either (they live in the phantom twin), so
+///    clause 1 alone would not have.
+/// 3. **The columns alternate RIGHT, LEFT, RIGHT, …** ([`cell_align`]), which
+///    is `+align`'s `if index mod 2 == 0 then inline-fil ++ ib else ib ++
+///    inline-fil` read back out of the box stream. It is also exactly the
+///    column pattern LaTeX's `aligned` means, which is what makes the
+///    Markdown backend's `\begin{aligned}` a translation rather than a guess.
+///
+/// Clause 3 is what separates an ALIGNMENT from a MATRIX. A matrix built the
+/// same way (`satysfi-base`'s `math-ext.satyh:1585`, `azmath`'s
+/// `matrices.satyh`) is also a rule-less grid of math-only cells, but its
+/// cells are CENTRED — a fil on both sides — and its meaning is carried by
+/// delimiters drawn outside the `tabular`, where this cannot see them.
+/// Rendering one as `aligned` would silently restyle it, so a matrix declines
+/// here and keeps whatever the caller does with an ordinary table. That is a
+/// known, deliberate boundary rather than an oversight.
+///
+/// An EMPTY cell is allowed anywhere and constrains nothing: a ragged
+/// `+align` row is padded, and a padded slot has neither ink nor alignment to
+/// check. At least one cell must hold math, so the rules-only phantom grid
+/// `easytable` overlays on every table is not claimed.
+pub(crate) fn is_aligned_equation(tab: &TabularBox) -> bool {
+    if !tab.rules.is_empty() {
+        return false;
+    }
+    let mut any_math = false;
+    for row in table_rows(tab) {
+        for (col, cell) in row.iter().enumerate() {
+            match cell_ink(&cell.contents) {
+                CellInk::Other => return false,
+                // A padded slot: no ink, and so no alignment either.
+                CellInk::None => continue,
+                CellInk::Math => any_math = true,
+            }
+            let wanted = if col % 2 == 0 {
+                CellAlign::Right
+            } else {
+                CellAlign::Left
+            };
+            if cell_align(&cell.contents) != wanted {
+                return false;
+            }
+        }
+    }
+    any_math
+}
+
+/// What a cell holds that a reader would SEE — the question
+/// [`is_aligned_equation`] asks of every cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellInk {
+    /// Glue, fils, skips and markers only.
+    None,
+    /// At least one `PureHorzBox::Math`, and nothing else that shows.
+    Math,
+    /// Anything a reader would see that is not an equation.
+    Other,
+}
+
+/// [`CellInk`] for one cell's contents, recursing through `Frame` (a link or a
+/// decoration wrapped around the equation contributes no ink of its own).
+///
+/// Everything not explicitly inert counts as `Other`, which is the safe
+/// direction: a misread cell leaves the box a TABLE, which is what it already
+/// was. In particular a `Graphics` box is `Other` even when it holds nothing
+/// but `draw-text` — a `+align` cell never has one, and recognising the
+/// wrapper shape here would mean a second copy of `markdown::inline`'s
+/// `is_pure_text` living in a module that emits no markup.
+fn cell_ink(contents: &[(rustyfi_backend::Length, PureHorzBox)]) -> CellInk {
+    let mut ink = CellInk::None;
+    for (_, bx) in contents {
+        match box_ink(bx) {
+            CellInk::Other => return CellInk::Other,
+            CellInk::Math => ink = CellInk::Math,
+            CellInk::None => {}
+        }
+    }
+    ink
+}
+
+/// [`cell_ink`] for one box. See there for why the default is `Other`.
+fn box_ink(bx: &PureHorzBox) -> CellInk {
+    match bx {
+        PureHorzBox::Math { .. } => CellInk::Math,
+        PureHorzBox::InnerString { text, .. } => {
+            if text.trim().is_empty() {
+                CellInk::None
+            } else {
+                CellInk::Other
+            }
+        }
+        PureHorzBox::Frame { contents, .. } => cell_ink(contents),
+        PureHorzBox::OuterEmpty { .. }
+        | PureHorzBox::OuterFil
+        | PureHorzBox::FixedEmpty { .. }
+        | PureHorzBox::Discretionary { .. }
+        | PureHorzBox::InlineMark(_)
+        | PureHorzBox::InlineFrameMarker { .. }
+        | PureHorzBox::HookPageBreak { .. }
+        | PureHorzBox::FrameMarker { .. } => CellInk::None,
+        _ => CellInk::Other,
+    }
+}
+
+/// How a `tabular` cell's content is aligned in its column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellAlign {
+    /// An `inline-fil` after the content and none before: the content is
+    /// pushed to the column's LEFT edge.
+    Left,
+    /// The mirror — a fil before and none after.
+    Right,
+    /// A fil on both sides.
+    Centre,
+    /// Neither, so the content simply fills the cell.
+    Fill,
+}
+
+/// Read a cell's alignment off where its `inline-fil`s sit.
+///
+/// A `tabular` cell has no alignment field: `NormalCell` takes padding and an
+/// inline box, and every package that aligns a cell does it by putting an
+/// `inline-fil` on the side the content should move AWAY from. So the fils
+/// relative to the inked boxes ARE the alignment, and reading them back is
+/// exact rather than inferred from where the cell was placed.
+///
+/// Zero-width `inline-skip`s (the cell padding `+align` writes on both sides)
+/// are not ink and do not move the boundary.
+fn cell_align(contents: &[(rustyfi_backend::Length, PureHorzBox)]) -> CellAlign {
+    let mut inked = contents
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, bx))| box_ink(bx) != CellInk::None)
+        .map(|(i, _)| i);
+    let Some(first) = inked.next() else {
+        return CellAlign::Fill;
+    };
+    let last = inked.next_back().unwrap_or(first);
+    let fil_at = |range: std::ops::Range<usize>| {
+        contents[range]
+            .iter()
+            .any(|(_, bx)| matches!(bx, PureHorzBox::OuterFil))
+    };
+    match (fil_at(0..first), fil_at(last + 1..contents.len())) {
+        (true, true) => CellAlign::Centre,
+        (true, false) => CellAlign::Right,
+        (false, true) => CellAlign::Left,
+        (false, false) => CellAlign::Fill,
+    }
+}
+
 /// Which grid lines a table actually draws, recovered from
 /// `TabularBox::rules`.
 ///
@@ -695,5 +866,54 @@ mod tests {
         // Deeper than the format allows collapses rather than overflowing.
         assert_eq!(heading_depth(9), 6);
         assert_eq!(heading_depth(-3), 1);
+    }
+
+    /// A `tabular` cell has no alignment FIELD — every package aligns a cell
+    /// by putting an `inline-fil` on the side the content moves away from
+    /// (`lib-rustyfi/dist/packages/table.satyh:22-29` writes `l`, `r` and `c`
+    /// as exactly these three shapes). So reading the fils back is the
+    /// alignment, and the padding skips around them do not move it.
+    #[test]
+    fn a_cells_alignment_is_read_off_its_fils_and_not_off_the_padding() {
+        let pad = || {
+            (
+                rustyfi_backend::Length::ZERO,
+                PureHorzBox::FixedEmpty {
+                    width: rustyfi_backend::Length::ZERO,
+                },
+            )
+        };
+        let fil = || (rustyfi_backend::Length::ZERO, PureHorzBox::OuterFil);
+        let ink = || {
+            (
+                rustyfi_backend::Length::ZERO,
+                PureHorzBox::Math {
+                    width: rustyfi_backend::Length::ZERO,
+                    height: rustyfi_backend::Length::ZERO,
+                    depth: rustyfi_backend::Length::ZERO,
+                    glyphs: Vec::new(),
+                    rules: Vec::new(),
+                },
+            )
+        };
+        assert_eq!(
+            cell_align(&[pad(), fil(), ink(), pad()]),
+            CellAlign::Right,
+            "`r`: a fil before the content pushes it right",
+        );
+        assert_eq!(
+            cell_align(&[pad(), ink(), fil(), pad()]),
+            CellAlign::Left,
+            "`l`: a fil after it pushes it left",
+        );
+        assert_eq!(
+            cell_align(&[pad(), fil(), ink(), fil(), pad()]),
+            CellAlign::Centre,
+            "`c`: a fil on both sides — a MATRIX cell, never an alignment's",
+        );
+        assert_eq!(cell_align(&[pad(), ink(), pad()]), CellAlign::Fill);
+        // No ink at all: a padded slot in a ragged row, which constrains
+        // nothing.
+        assert_eq!(cell_align(&[pad(), fil()]), CellAlign::Fill);
     }
 }

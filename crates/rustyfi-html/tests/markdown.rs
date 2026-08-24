@@ -849,6 +849,435 @@ fn a_paragraph_of_nothing_but_equations_is_one_display_block() {
     assert_eq!(md.matches("$$").count(), 2, "one block, not three:\n{md}");
 }
 
+/// A DISPLAYED equation is centred in the drawing modes.
+///
+/// The document asked for it — a display equation is a `line-break` between
+/// two `inline-fil`s — and the HTML backend already honours it
+/// (`data-align="center"`). Markdown dropped it, on the general rule that
+/// Markdown has no alignment; but a drawn equation is ALREADY raw HTML, so a
+/// wrapper around it costs nothing a renderer that keeps the `<svg>` would
+/// notice. See `para.rs`'s `centred`, including why the attribute is `align`
+/// and not `style`.
+///
+/// Needs the bundled faces: with no font store both drawing modes degrade to
+/// characters, and characters are not wrapped.
+#[test]
+fn a_displayed_equation_is_centred_in_the_drawing_modes() {
+    let Some(store) = mono_font_store() else {
+        return;
+    };
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+    ] {
+        let md = rustyfi_html::render_markdown_ttf_with(
+            Some(&[
+                text_line("Before."),
+                VertBox::Skip(Length::pt(12.0)),
+                x_squared_plus_one(),
+                VertBox::Skip(Length::pt(12.0)),
+                line_of(vec![
+                    text_run("see"),
+                    glue(4.0),
+                    PureHorzBox::Math {
+                        width: Length::pt(10.0),
+                        height: Length::pt(10.0),
+                        depth: Length::pt(2.0),
+                        glyphs: vec![math_glyph("y", 0.0, 0.0, 10.0)],
+                        rules: Vec::new(),
+                    },
+                ]),
+            ]),
+            &store,
+            &[],
+            &DocExtras::default(),
+            &[],
+            &[],
+            mode,
+        )
+        .expect("markdown rendering must succeed");
+        // The wrapper opens its own line, so the whole thing is ONE CommonMark
+        // HTML block and the drawing inside it is passed through raw.
+        assert!(
+            md.contains("<div align=\"center\">\n<svg"),
+            "{mode:?} did not centre the display equation:\n{md}"
+        );
+        assert!(md.contains("\n</div>"), "{mode:?}: {md}");
+        // Exactly one: prose is NOT centred, and neither is the equation set
+        // inside a sentence.
+        assert_eq!(
+            md.matches("<div align=").count(),
+            1,
+            "{mode:?} centred something that was not a displayed equation:\n{md}"
+        );
+        assert!(md.contains("Before."), "{mode:?}: {md}");
+        assert!(md.contains("see <svg"), "{mode:?}: {md}");
+    }
+}
+
+/// The two non-drawing modes are left exactly as they were, and each for its
+/// own reason.
+///
+/// `--katex` writes `$$…$$`, which a KaTeX reader centres itself
+/// (`katex.css`'s `.katex-display { … text-align: center; }`) and which GitHub
+/// only reads as math while the `$$` block stands alone — a `<div>` around it
+/// would turn the equation into literal text. `--unicode-math` is the
+/// plain-text mode: putting HTML in it would defeat the one property it exists
+/// for.
+#[test]
+fn katex_and_unicode_display_equations_are_not_wrapped() {
+    for mode in [
+        rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::Unicode,
+    ] {
+        let md = render_math(&[x_squared_plus_one()], mode);
+        assert!(!md.contains("<div"), "{mode:?}: {md}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `+align`: a `TabularBox` that is an equation, not a table
+// ---------------------------------------------------------------------------
+//
+// The `math` package builds `+align` out of a `tabular`
+// (`lib-rustyfi/dist/packages/math.satyh:541-574`), so an aligned equation and
+// a spreadsheet arrive at this backend in the same box. The tests below are in
+// two halves and the SECOND half is the important one: three shapes that must
+// keep rendering as tables, so that "not a table" can never quietly become
+// "no table anywhere".
+
+/// One `+align` cell, built the way `math.satyh` builds it: the zero-width
+/// padding skips, and an `inline-fil` on the side the content moves AWAY from
+/// — leading in an even column (right-aligned), trailing in an odd one
+/// (left-aligned).
+fn align_cell(x: f64, y: f64, col: usize, text: &str) -> TabularCellBox {
+    let even = col.is_multiple_of(2);
+    math_cell(x, y, text, even, !even)
+}
+
+/// The same, with the two fils chosen explicitly — `(true, true)` is a CENTRED
+/// cell, which is what a matrix is built out of.
+fn math_cell(x: f64, y: f64, text: &str, fil_before: bool, fil_after: bool) -> TabularCellBox {
+    let mut contents = vec![(Length::ZERO, PureHorzBox::FixedEmpty { width: Length::ZERO })];
+    if fil_before {
+        contents.push((Length::ZERO, PureHorzBox::OuterFil));
+    }
+    contents.push((
+        Length::ZERO,
+        PureHorzBox::Math {
+            width: Length::pt(5.0 * text.chars().count() as f64),
+            height: Length::pt(10.0),
+            depth: Length::pt(2.0),
+            // Advanced by exactly one glyph width, so the glyphs abut and
+            // `math.rs`'s inter-atom spacing rule adds nothing — what is under
+            // test here is the GRID, and a stray space in the recovered text
+            // would only obscure it.
+            glyphs: text
+                .chars()
+                .enumerate()
+                .map(|(i, c)| math_glyph(&c.to_string(), 5.0 * i as f64, 0.0, 10.0))
+                .collect(),
+            rules: Vec::new(),
+        },
+    ));
+    if fil_after {
+        contents.push((Length::ZERO, PureHorzBox::OuterFil));
+    }
+    contents.push((Length::ZERO, PureHorzBox::FixedEmpty { width: Length::ZERO }));
+    TabularCellBox {
+        x: Length::pt(x),
+        baseline_y: Length::pt(y),
+        contents,
+    }
+}
+
+/// A two-row, two-column `+align`, exactly as `math.satyh` emits it: no rules,
+/// every cell one equation, columns right/left.
+fn aligned_equation() -> VertBox {
+    let tab = TabularBox {
+        width: Length::pt(120.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        cells: vec![
+            align_cell(0.0, 30.0, 0, "x+y"),
+            align_cell(60.0, 30.0, 1, "=ab"),
+            align_cell(0.0, 10.0, 0, "x-y"),
+            align_cell(60.0, 10.0, 1, "=cd"),
+        ],
+        rules: Vec::new(),
+    };
+    line_of(vec![
+        PureHorzBox::OuterFil,
+        PureHorzBox::Tabular(tab),
+        PureHorzBox::OuterFil,
+    ])
+}
+
+/// **The defect.** `+align` came out as a GFM pipe table in every mode, and
+/// the delimiter row landed after the FIRST row — so a two-row alignment
+/// rendered as a ONE-row table whose column heading was an equation.
+///
+/// In the modes that draw or typeset the equation there must be no table at
+/// all: those modes have already decided the alignment is the equation's
+/// business, and a grid around it is an artefact of how `math.satyh` happens
+/// to build the block.
+#[test]
+fn an_aligned_equation_is_not_a_table_in_the_drawing_modes() {
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+        rustyfi_html::MathMode::Katex,
+    ] {
+        let md = render_math(&[aligned_equation()], mode);
+        assert!(
+            !md.contains('|'),
+            "{mode:?} still wrote a pipe table:\n{md}"
+        );
+        assert!(
+            !md.contains("---"),
+            "{mode:?} still wrote a delimiter row:\n{md}"
+        );
+        // Both halves of both equations survive whatever the mode wrote them
+        // as — "not a table" must not have become "not there".
+        for part in ["x", "y", "a", "b", "c", "d"] {
+            assert!(md.contains(part), "{mode:?} lost `{part}`:\n{md}");
+        }
+    }
+}
+
+/// `--katex` writes a real `\begin{aligned}`, which is not a guess: a cell
+/// boundary in `+align` IS an alignment point, and the classifier has already
+/// established that the columns run right/left — the pattern `aligned` is
+/// defined as.
+///
+/// Asserted as SHAPE, never as transcription. What `crate::latex` writes for a
+/// given run of glyphs is that module's business and improves over time; what
+/// this test is for is that the grid becomes an environment, that the cell
+/// boundary becomes the `&`, and that the row boundary becomes the `\\`.
+#[test]
+fn katex_writes_an_aligned_environment_with_the_cell_boundary_as_the_ampersand() {
+    let md = render_math(&[aligned_equation()], rustyfi_html::MathMode::Katex);
+    let md = md.trim();
+    // ONE display block for the whole alignment, not one per row: the rows of
+    // an `align` are one environment, and `\\` is what separates them.
+    assert_eq!(md.matches("$$").count(), 2, "{md}");
+    let body = md
+        .strip_prefix("$$\\begin{aligned} ")
+        .and_then(|b| b.strip_suffix(" \\end{aligned}$$"))
+        .unwrap_or_else(|| panic!("not one `aligned` environment:\n{md}"));
+    let rows: Vec<&str> = body.split(" \\\\ ").collect();
+    assert_eq!(rows.len(), 2, "one `\\\\` per `+align` row:\n{md}");
+    for row in rows {
+        let halves: Vec<&str> = row.split(" & ").collect();
+        assert_eq!(halves.len(), 2, "one `&` per cell boundary:\n{md}");
+        assert!(
+            halves.iter().all(|h| !h.trim().is_empty()),
+            "neither half of a row is empty:\n{md}"
+        );
+    }
+}
+
+/// A drawing mode writes one BLOCK PER ROW, and the row's two cells are joined
+/// into it — a row of `+align` is one equation split at the alignment point,
+/// so `${x + y}` and `${= a^2}` belong in the same block.
+///
+/// Needs the bundled faces: with no font store both drawing modes degrade to
+/// characters (`a_render_with_no_font_store_writes_characters_rather_than_an_empty_drawing`),
+/// and this is the test that the DRAWING really comes out per row. Skips
+/// loudly rather than failing on a checkout that has not run
+/// `download-fonts.sh` — which is CI's own `build · clippy · test`.
+#[test]
+fn a_drawn_aligned_equation_is_one_block_per_row() {
+    let Some(store) = mono_font_store() else {
+        return;
+    };
+    let md = rustyfi_html::render_markdown_ttf_with(
+        Some(&[aligned_equation()]),
+        &store,
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        rustyfi_html::MathMode::SvgText,
+    )
+    .expect("markdown rendering must succeed");
+    assert!(!md.contains('|'), "{md}");
+    let blocks: Vec<&str> = md.trim().split("\n\n").collect();
+    assert_eq!(blocks.len(), 2, "one block per row, got:\n{md}");
+    for block in &blocks {
+        assert_eq!(
+            block.matches("<svg").count(),
+            2,
+            "each row keeps both of its cells:\n{md}"
+        );
+        // An aligned equation is display math too, so each row is centred on
+        // the same terms as any other displayed equation.
+        assert!(
+            block.starts_with("<div align=\"center\">\n") && block.ends_with("\n</div>"),
+            "each row is a centred block:\n{md}"
+        );
+    }
+}
+
+/// **The control that matters more than the fix.** A real table — text in the
+/// cells — is still a GFM pipe table, with its first row as the header, in
+/// every math mode. Nothing about the `+align` recovery may reach it.
+#[test]
+fn a_real_table_is_still_a_table_in_every_math_mode() {
+    let cell = |x: f64, y: f64, text: &str| TabularCellBox {
+        x: Length::pt(x),
+        baseline_y: Length::pt(y),
+        contents: vec![(Length::ZERO, text_run(text))],
+    };
+    let tab = TabularBox {
+        width: Length::pt(120.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        cells: vec![
+            cell(0.0, 30.0, "h1"),
+            cell(60.0, 30.0, "h2"),
+            cell(0.0, 10.0, "a"),
+            cell(60.0, 10.0, "b"),
+        ],
+        // No rules — `easytable`'s content half has none either, so this also
+        // pins that the rule-less clause alone never claims a table.
+        rules: Vec::new(),
+    };
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+        rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::Unicode,
+    ] {
+        let md = render_math(
+            &[line_of(vec![PureHorzBox::Tabular(tab.clone())])],
+            mode,
+        );
+        assert_eq!(
+            md.trim(),
+            "| h1 | h2 |\n| --- | --- |\n| a | b |",
+            "{mode:?}: {md}"
+        );
+    }
+}
+
+/// A grid of CENTRED equations is a MATRIX, not an alignment, and stays a
+/// table.
+///
+/// The boundary is deliberate and it is where the signal stops being exact: a
+/// matrix's meaning is carried by delimiters drawn outside the `tabular`,
+/// where this classifier cannot see them, and `\begin{aligned}` would silently
+/// restyle it. `satysfi-base`'s `math-ext.satyh:1585` and `azmath`'s
+/// `matrices.satyh` both build one this way.
+#[test]
+fn a_grid_of_centred_equations_is_a_matrix_and_stays_a_table() {
+    let tab = TabularBox {
+        width: Length::pt(120.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        cells: vec![
+            math_cell(0.0, 30.0, "a", true, true),
+            math_cell(60.0, 30.0, "b", true, true),
+            math_cell(0.0, 10.0, "c", true, true),
+            math_cell(60.0, 10.0, "d", true, true),
+        ],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        &[line_of(vec![PureHorzBox::Tabular(tab)])],
+        rustyfi_html::MathMode::Katex,
+    );
+    // Shape, not transcription: three lines, the delimiter after the FIRST —
+    // the ordinary table rendering, untouched by any of this.
+    let lines: Vec<&str> = md.trim().lines().collect();
+    assert_eq!(lines.len(), 3, "still a header, a delimiter and a row:\n{md}");
+    assert!(lines[0].starts_with("| $"), "{md}");
+    assert_eq!(lines[1], "| --- | --- |", "{md}");
+    assert!(lines[2].starts_with("| $"), "{md}");
+    assert!(!md.contains("aligned"), "{md}");
+}
+
+/// A grid that DRAWS its own lines is asserting that it is a grid, whatever is
+/// in the cells — so an otherwise `+align`-shaped tabular with rules stays a
+/// table. `+align` passes `(fun _ _ -> [])`.
+#[test]
+fn a_ruled_grid_of_equations_stays_a_table() {
+    let rule = GraphicsElem::Fill(
+        Color::Gray(0.0),
+        Path {
+            subpaths: vec![Subpath {
+                start: (Length::ZERO, Length::ZERO),
+                segs: vec![PathSeg::Line((Length::pt(120.0), Length::ZERO))],
+                closing: Closing::Line,
+            }],
+        },
+    );
+    let tab = TabularBox {
+        width: Length::pt(120.0),
+        height: Length::pt(40.0),
+        depth: Length::ZERO,
+        cells: vec![
+            align_cell(0.0, 30.0, 0, "x"),
+            align_cell(60.0, 30.0, 1, "=y"),
+        ],
+        rules: vec![rule],
+    };
+    let md = render_math(
+        &[line_of(vec![PureHorzBox::Tabular(tab)])],
+        rustyfi_html::MathMode::Katex,
+    );
+    assert!(md.contains('|'), "a ruled grid must stay a table:\n{md}");
+}
+
+/// `--unicode-math` is exempt from the diversion — it writes characters, and a
+/// two-column text table is a defensible way to SHOW an alignment in plain
+/// text — but the header-row promotion is a bug in any mode, so the grid gets
+/// an EMPTY header row and no equation is promoted to a column heading.
+///
+/// GFM has no headerless table (the delimiter row is mandatory and always
+/// follows row one), so an empty header is the only way to say it.
+#[test]
+fn unicode_math_keeps_the_grid_but_promotes_no_equation_to_a_header() {
+    let md = render_math(&[aligned_equation()], rustyfi_html::MathMode::Unicode);
+    let lines: Vec<&str> = md.trim().lines().collect();
+    assert_eq!(
+        lines.len(),
+        4,
+        "an empty header, the delimiter, and BOTH equations as data rows:\n{md}"
+    );
+    assert_eq!(lines[0], "|  |  |", "the header row is empty:\n{md}");
+    assert_eq!(lines[1], "| --- | --- |", "{md}");
+    // Shape, not transcription: what the cells SAY is `markdown::math`'s
+    // business. What this pins is that neither row is the header and that both
+    // cells of each survived.
+    for line in &lines[2..] {
+        assert!(!line.contains("---"), "no second delimiter row:\n{md}");
+        let cells: Vec<&str> = line.trim_matches('|').split('|').collect();
+        assert_eq!(cells.len(), 2, "{md}");
+        assert!(cells.iter().all(|c| !c.trim().is_empty()), "{md}");
+    }
+}
+
+/// The block structure must not depend on whether `download-fonts.sh` has been
+/// run. With no font store a drawing mode degrades to characters, but that is
+/// a degradation of one EQUATION's rendering, not of the document's shape — so
+/// `+align` is still diverted, on the flag the user passed rather than on what
+/// could be drawn.
+#[test]
+fn a_font_less_drawing_mode_still_diverts_the_alignment() {
+    let md = render_math(&[aligned_equation()], rustyfi_html::MathMode::SvgText);
+    assert!(!md.contains('|'), "{md}");
+    let blocks: Vec<&str> = md.trim().split("\n\n").collect();
+    assert_eq!(blocks.len(), 2, "one block per row:\n{md}");
+    // Each row still carries BOTH of its cells — `b` and `d` are the second
+    // cell of each row, and the letters are all any writer of characters can
+    // drop or keep.
+    assert!(blocks[0].contains('b'), "{md}");
+    assert!(blocks[1].contains('d'), "{md}");
+    // Characters, so nothing to centre: the wrapper is for drawings.
+    assert!(!md.contains("<div"), "{md}");
+}
+
 // ---------------------------------------------------------------------------
 // Escaping
 // ---------------------------------------------------------------------------

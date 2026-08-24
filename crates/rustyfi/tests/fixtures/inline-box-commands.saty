@@ -1,0 +1,70 @@
+% Fixture: the three `latexcmds` box shapes that an HTML backend gets wrong in
+% three DIFFERENT ways, reduced to primitives so no corpus package is needed.
+%
+%   \fboxlike    `inline-frame-breakable` with a padded rectangle deco —
+%                `latexcmds`' `\fbox`/`\shadowbox`. The DECORATION is recorded
+%                and drawn (PR #24); what is under test here is its GEOMETRY,
+%                which CSS measures against the font's own content area and so
+%                squashes unless the frame's vertical pads come with it.
+%
+%   \frameboxlike  the same frame around an `embed-block-top` at a FIXED
+%                WIDTH — `latexcmds`' `\framebox`, which is literally
+%                `\fbox{\makebox(wid){…}}`. The embedded block is the thing:
+%                treated as block-level it flushes the paragraph it is a word
+%                of, so the text leaves the line entirely.
+%
+%   \rotateboxlike  an `inline-graphics` whose `draw-text` carries a rotation
+%                — `latexcmds`' `\rotatebox`, `figbox`'s `rotate`. The matrix
+%                is on `GraphicsElem::Text::transform`, which the PDF writer
+%                pushes as a `cm` and the HTML writer used to drop.
+%
+% Deliberately no bundled face: nothing here asserts a measurement, only which
+% element carries what, so this renders the same against the built-in base-14
+% fonts as against `download-fonts.sh`'s.
+
+@require: stdja-mini
+
+let box-path x y w h d =
+  close-with-line
+    (line-to (x, y +' h)
+       (line-to (x +' w, y +' h)
+          (line-to (x +' w, y -' d)
+             (start-path (x, y -' d)))))
+
+let deco-frame (x, y) w h d =
+  [ stroke 0.5pt (RGB(0.1, 0.1, 0.1)) (box-path x y w h d) ]
+
+let-inline ctx \fboxlike it =
+  inline-frame-breakable (3pt, 3pt, 3pt, 3pt)
+    (deco-frame, deco-frame, deco-frame, deco-frame) (read-inline ctx it)
+
+let-inline ctx \frameboxlike wid it =
+  let blockf ctx = line-break true true ctx
+    (inline-fil ++ read-inline ctx it ++ inline-fil) in
+  inline-frame-breakable (3pt, 3pt, 3pt, 3pt)
+    (deco-frame, deco-frame, deco-frame, deco-frame)
+    (embed-block-top ctx wid blockf)
+
+% `Gr.rotate-graphics` without `@require: gr`: shift the centre to the origin,
+% apply the rotation matrix, shift back — which is all that function is.
+let rotate-graphics (cx, cy) theta g =
+  g |> shift-graphics (0pt -' cx, 0pt -' cy)
+    |> linear-transform-graphics (cos theta) (0. -. (sin theta)) (sin theta) (cos theta)
+    |> shift-graphics (cx, cy)
+
+let-inline ctx \rotateboxlike it =
+  let ib = read-inline ctx it in
+  let (w, h, d) = get-natural-metrics ib in
+  inline-graphics w h d (fun (x, y) -> [
+    draw-text (x, y) ib |> rotate-graphics (x, y) 0.25
+  ])
+
+in
+document (|
+  title = {Inline box commands};
+  author = {yasuo};
+|) '<
+  +p { A \fboxlike{framed} B }
+  +p { A \frameboxlike(120pt){fixed width box} B }
+  +p { A \rotateboxlike{rotated} B }
+>

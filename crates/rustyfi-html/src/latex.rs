@@ -12,13 +12,26 @@
 //!
 //! | construct | what happens | why |
 //! |--|--|--|
-//! | `\sqrt{x}` | the radicand, unwrapped | the radical SIGN is a `rules` path, not a glyph; there is no `√` in the run to key on and no way to tell the radicand from the text beside it |
 //! | matrices, `\begin{aligned}` | the cells, in `dx` order | row/column arrangement is carried by position alone and no bar delimits it |
-//! | a fraction inside a fraction | flattened into the outer one | [`crate::mathrec`]'s "one level deep" |
+//! | `\sqrt[n]{x}` | the radicand under a plain `\sqrt` | `layout_math_atom` carries the degree in the `Math` value and deliberately does not DRAW it, so there is nothing in the box stream to read |
+//! | a `\setsep` separator | dropped; the two parts run together | its bar is drawn by the same closure shape an `\abs` uses, so pairing it would close the wrong group |
 //! | `\text{…}` | its characters, in math mode | `math_boxes_of_inline_boxes` folds the run into one glyph record and keeps no mark that it was upright text, so re-wrapping it in `\text` would be a guess |
 //! | `\left(…\right)` | the delimiter characters | a grown delimiter arrives as one `MathGlyph` per assembly PART; only its size is lost, and the character is right |
+//! | `\lim`, `\sin`, `\max` | the letters, in math italic | a `MathOp` run reaches the box stream as plain ASCII letter records, indistinguishable from a product of variables; the LIMIT on one is recovered, the operator's NAME is not |
+//! | `x^{2^{3}}` | `x^{23}` | a script of a script is another small raised glyph, and nothing marks where one script's group ends |
 //! | bold/script/fraktur | recovered (see [`style_wrapper`]) | Unicode's Mathematical Alphanumeric Symbols encode it, so this one IS recoverable |
 //! | colour, explicit spacing | dropped / approximated | a `\,` and a `\;` are both "a gap wider than the threshold" by the time this runs |
+//!
+//! The `\begin{aligned}` row is about ONE math box, where the arrangement is
+//! carried by glyph positions and nothing delimits it. The `math` package's
+//! `+align` is not one box — it is a real `tabular` whose cells are still
+//! cells — so the Markdown backend does write `\begin{aligned}` for that, out
+//! of the grid rather than out of positions. See
+//! `markdown::table::render_aligned_equation`.
+//!
+//! Delimiters, radicals and nested fractions used to be on that list and are
+//! not any more; [`crate::mathrec`]'s doc comment says how each is read back
+//! out of the paths, and why a dropped delimiter was worth the machinery.
 //!
 //! **Nothing is emitted that would render differently from the PDF without
 //! saying so.** Where the structure is genuinely unavailable the characters go
@@ -39,7 +52,7 @@
 
 use rustyfi_backend::MathGlyph;
 
-use crate::mathrec::{self, Atom, Script};
+use crate::mathrec::{self, Atom, DelimKind, Script};
 
 /// One `PureHorzBox::Math` as a LaTeX math-mode BODY — no `$`, no `\(`, see
 /// this module's doc comment. Empty when the run holds nothing this layer can
@@ -76,8 +89,15 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
                 i += 1;
             }
             Atom::Glyph { g, script: None } => {
-                let base = glyph_latex(g);
-                i += 1;
+                // A LOG-LIKE operator is several glyph records — `\lim` is
+                // `l`, `i`, `m` — so it is matched over a run before the
+                // per-record path takes the first letter. See
+                // [`log_like_operator`] for why the match is safe.
+                let (base, span) = match log_like_operator(atoms, i) {
+                    Some((cmd, span)) => (cmd.to_string(), span),
+                    None => (glyph_latex(g), 1),
+                };
+                i += span;
                 let (subs, sups, limits, next) = take_scripts(atoms, i);
                 i = next;
                 // `\limits` is legal ONLY after an operator, and KaTeX errors
@@ -113,9 +133,77 @@ fn write_atoms(atoms: &[Atom<'_>]) -> String {
                 i = next;
                 push_scripts(&mut out, &subs, &sups);
             }
+            Atom::Delim { open, close, body } => {
+                out.push_str(&delim_group(*open, *close, &write_atoms(body)));
+                i += 1;
+                let (subs, sups, _, next) = take_scripts(atoms, i);
+                i = next;
+                push_scripts(&mut out, &subs, &sups);
+            }
+            Atom::Radical { body } => {
+                out.push_str(&format!("\\sqrt{{{}}}", write_atoms(body)));
+                i += 1;
+                let (subs, sups, _, next) = take_scripts(atoms, i);
+                i = next;
+                push_scripts(&mut out, &subs, &sups);
+            }
         }
     }
     out
+}
+
+/// A recovered `math-paren` group as LaTeX.
+///
+/// `\left…\right` rather than the bare characters, because that is what the
+/// PDF shows: `make_paren_run` sizes each delimiter to the body's own ink
+/// (`math.satyh`'s `half-length`), so a group around a fraction really does
+/// get taller parentheses. For a one-line body the two render identically, so
+/// nothing is lost where the body is small.
+///
+/// A side with no delimiter takes `\right.` / `\left.`, LaTeX's own null
+/// delimiter — which is exactly what `\cases`' `empty-paren` right side is. A
+/// group with NEITHER side named (a shape no signature matched) is written as
+/// a plain `{…}`: it draws nothing, which is honest, and it still binds a
+/// following script to the whole group, which is the part that was wrong.
+fn delim_group(open: Option<DelimKind>, close: Option<DelimKind>, body: &str) -> String {
+    if open.is_none() && close.is_none() {
+        return format!("{{{body}}}");
+    }
+    format!(
+        "\\left{} {body} \\right{}",
+        open.map_or(".", delim_latex),
+        close.map_or(".", |k| delim_latex_close(k))
+    )
+}
+
+/// The opening spelling of each delimiter, in the subset KaTeX accepts —
+/// `\lVert` rather than `\|` because KaTeX sizes the former under `\left`.
+fn delim_latex(k: DelimKind) -> &'static str {
+    match k {
+        DelimKind::Paren => "(",
+        DelimKind::Bracket => "[",
+        DelimKind::Brace => "\\{",
+        DelimKind::Floor => "\\lfloor",
+        DelimKind::Ceil => "\\lceil",
+        DelimKind::Abs => "|",
+        DelimKind::Norm => "\\lVert",
+        DelimKind::Angle => "\\langle",
+        DelimKind::Unknown => ".",
+    }
+}
+
+fn delim_latex_close(k: DelimKind) -> &'static str {
+    match k {
+        DelimKind::Paren => ")",
+        DelimKind::Bracket => "]",
+        DelimKind::Brace => "\\}",
+        DelimKind::Floor => "\\rfloor",
+        DelimKind::Ceil => "\\rceil",
+        DelimKind::Abs => "|",
+        DelimKind::Norm => "\\rVert",
+        DelimKind::Angle => "\\rangle",
+        DelimKind::Unknown => ".",
+    }
 }
 
 /// Consume the maximal run of script atoms starting at `i`, returning the
@@ -265,10 +353,10 @@ fn push_scripts(out: &mut String, subs: &str, sups: &str) {
 /// Deliberately a fixed list rather than "starts with a backslash": `\limits`
 /// after a non-operator is a hard error in KaTeX ("Limit controls must follow
 /// a math operator"), so an unrecognised command must not get one. The list is
-/// LaTeX's own `\mathop`-class large operators, which are exactly the commands
-/// [`symbol_command`] can produce that take limits.
+/// LaTeX's own `\mathop` class — the large operators [`symbol_command`] can
+/// produce, plus the log-like names [`log_like_operator`] can.
 fn is_big_operator(base: &str) -> bool {
-    const OPS: [&str; 15] = [
+    const OPS: [&str; 25] = [
         "\\sum",
         "\\prod",
         "\\coprod",
@@ -284,8 +372,80 @@ fn is_big_operator(base: &str) -> bool {
         "\\bigwedge",
         "\\bigoplus",
         "\\bigotimes",
+        "\\lim",
+        "\\limsup",
+        "\\liminf",
+        "\\max",
+        "\\min",
+        "\\sup",
+        "\\inf",
+        "\\det",
+        "\\gcd",
+        "\\Pr",
     ];
     OPS.contains(&base)
+}
+
+/// The log-like operators, which `math.satyh`'s `vop` builds and which arrive
+/// as one glyph record PER LETTER.
+///
+/// Matching a run of letters against a name list sounds like a guess, and on
+/// its own it would be: `${lim}` — three variables multiplied — reaches the
+/// box stream as the same three records, because a `MathOp` run is plain
+/// ASCII in `MathGlyph::text` exactly like an ordinary variable (the upright
+/// face is chosen at the glyph id, not at the codepoint). What makes it safe
+/// is the second condition: the run must carry a CENTRED script. Only
+/// `math-pull-in-scripts`/`math-upper`/`math-lower` centre one, and `vop` is
+/// the only thing in `math.satyh` that applies them to a multi-letter name.
+/// Three multiplied variables cannot acquire a limit centred on all three.
+///
+/// Returns the command and how many atoms it consumed. `\sin` and its
+/// unlimited relatives are NOT recoverable and are not tried: with no limit
+/// there is no second condition, and `${sin}` would become `\sin`.
+fn log_like_operator(atoms: &[Atom<'_>], i: usize) -> Option<(&'static str, usize)> {
+    const NAMES: [&str; 10] = [
+        "limsup", "liminf", "lim", "max", "min", "sup", "inf", "det", "gcd", "Pr",
+    ];
+    let letter = |k: usize| match atoms.get(k) {
+        Some(Atom::Glyph { g, script: None }) => {
+            let mut cs = g.text.chars();
+            match (cs.next(), cs.next()) {
+                (Some(c), None) if c.is_ascii_alphabetic() => Some(c),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let centred = |k: usize| {
+        matches!(
+            atoms.get(k),
+            Some(Atom::Glyph {
+                script: Some(Script { limit: true, .. }),
+                ..
+            })
+        )
+    };
+    for name in NAMES {
+        let n = name.chars().count();
+        if name.chars().enumerate().all(|(k, c)| letter(i + k) == Some(c)) && centred(i + n) {
+            // The list is ordered longest-first where one name prefixes
+            // another, so `limsup` is never read as `lim` followed by `sup`.
+            let cmd = match name {
+                "limsup" => "\\limsup",
+                "liminf" => "\\liminf",
+                "lim" => "\\lim",
+                "max" => "\\max",
+                "min" => "\\min",
+                "sup" => "\\sup",
+                "inf" => "\\inf",
+                "det" => "\\det",
+                "gcd" => "\\gcd",
+                _ => "\\Pr",
+            };
+            return Some((cmd, n));
+        }
+    }
+    None
 }
 
 /// One glyph record's characters as LaTeX.
@@ -847,7 +1007,7 @@ fn escape(c: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mathrec::tests::glyph;
+    use crate::mathrec::tests::{bar, glyph, paren, radical, wide};
     use rustyfi_backend::{Closing, Color, GraphicsElem, Length, Path, PathSeg, Subpath};
 
     fn latex(glyphs: &[MathGlyph]) -> String {
@@ -1085,5 +1245,97 @@ mod tests {
         assert!(!out.contains("{}"), "the limits came off the operator: {out}");
         // Set BESIDE the operator rather than centred on it, so no `\limits`.
         assert!(!out.contains("\\limits"), "{out}");
+    }
+
+    /// `\left…\right`, and the script binding that is the whole point of it:
+    /// `${\paren{a+b}^2}` written as `a+b^{2}` is a false statement, not a
+    /// rough rendering of a true one.
+    #[test]
+    fn a_recovered_group_takes_its_script_as_a_whole() {
+        let gs = [
+            glyph("a", 5.0, 0.0, 10.0),
+            glyph("+", 11.0, 0.0, 10.0),
+            glyph("b", 17.0, 0.0, 10.0),
+            glyph("2", 27.0, 5.0, 7.0),
+        ];
+        let rules = [
+            paren(1.0, 4.0, -4.0, 9.0, true),
+            paren(23.0, 26.0, -4.0, 9.0, false),
+        ];
+        assert_eq!(
+            math_latex(&gs, &rules),
+            "\\left( a+b \\right)^{2}",
+            "the script must bind to the group, not to the last term"
+        );
+    }
+
+    /// A group whose delimiter shape matched no signature still GROUPS. `{…}`
+    /// draws nothing, which is honest about what could not be read, and binds
+    /// the script correctly, which is what was actually wrong.
+    #[test]
+    fn an_unrecognised_delimiter_still_groups_its_body() {
+        assert_eq!(delim_group(None, None, "a+b"), "{a+b}");
+        // One side missing is LaTeX's own null delimiter — `\cases`' right
+        // side really is `empty-paren`.
+        assert_eq!(
+            delim_group(Some(DelimKind::Brace), None, "x"),
+            "\\left\\{ x \\right."
+        );
+    }
+
+    /// The quadratic formula, which is the shape the radical fix was found
+    /// on: the overbar used to be read as a narrower fraction bar and took
+    /// the denominator with it (`x=\frac{-b\pm}{2}ba^{2}-4ac`).
+    #[test]
+    fn a_radical_in_a_numerator_leaves_the_denominator_alone() {
+        let gs = [
+            glyph("-", 0.0, 8.0, 10.0),
+            glyph("b", 6.0, 8.0, 10.0),
+            glyph("\u{00B1}", 12.0, 8.0, 10.0),
+            glyph("c", 24.0, 8.0, 10.0),
+            glyph("2", 8.0, -8.0, 10.0),
+            glyph("a", 14.0, -8.0, 10.0),
+        ];
+        let mut rules = vec![bar(0.0, 30.0, 3.0)];
+        rules.extend(radical(18.0, 23.0, 30.0, 16.0, 4.0));
+        assert_eq!(math_latex(&gs, &rules), "\\frac{-b\\pm\\sqrt{c}}{2a}");
+    }
+
+    /// `\frac{a}{\frac{b}{c}}` is `a/(b/c)`; flattened to `\frac{ab}{c}` it is
+    /// a different number.
+    #[test]
+    fn a_nested_fraction_nests() {
+        let gs = [
+            glyph("a", 0.0, 4.0, 10.0),
+            glyph("b", 0.0, 0.0, 10.0),
+            glyph("c", 0.0, -8.0, 10.0),
+        ];
+        let rules = [bar(0.0, 6.0, 3.0), bar(0.0, 6.0, -1.0)];
+        assert_eq!(math_latex(&gs, &rules), "\\frac{a}{\\frac{b}{c}}");
+    }
+
+    /// A log-like operator is recovered from its LETTERS plus the fact that
+    /// something is centred on all of them. Without that, `${\lim_{x\to 0}}`
+    /// came out as `l_{x}i_{\to}m_{0}` — three variables, each with its own
+    /// subscript.
+    #[test]
+    fn a_log_like_operator_and_its_limit_come_back_together() {
+        let mut gs = vec![
+            wide("l", 0.0, 0.0, 12.0, 2.664),
+            wide("i", 2.664, 0.0, 12.0, 2.664),
+            wide("m", 5.328, 0.0, 12.0, 9.996),
+        ];
+        for (t, dx, w) in [("x", 1.127, 4.2), ("\u{2192}", 5.327, 4.2), ("0", 9.527, 4.67)] {
+            gs.push(wide(t, dx, -3.0, 8.4, w));
+        }
+        assert_eq!(math_latex(&gs, &[]), "\\lim\\limits_{x\\to0}");
+        // The name alone is NOT enough: three multiplied variables spelling
+        // `lim` carry no centred script and must stay three variables.
+        let plain = [
+            glyph("l", 0.0, 0.0, 12.0),
+            glyph("i", 6.0, 0.0, 12.0),
+            glyph("m", 12.0, 0.0, 12.0),
+        ];
+        assert_eq!(math_latex(&plain, &[]), "lim");
     }
 }

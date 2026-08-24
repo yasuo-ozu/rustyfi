@@ -156,9 +156,18 @@ impl Para {
     }
 
     /// Is this paragraph a code block? The rule is
-    /// [`rustyfi_html::recover::is_code_paragraph`], shared with the Markdown
-    /// backend because it is a question about the box stream rather than
-    /// about either output vocabulary.
+    /// [`rustyfi_html::recover::is_code_paragraph`] — a question about the box
+    /// stream rather than about any output vocabulary, which is why it lives
+    /// there and not here.
+    ///
+    /// **It is not yet shared with the Markdown backend, whatever the
+    /// placement suggests.** `markdown/para.rs`'s `Para::is_code` still spells
+    /// the same expression out inline, under a copy of the same twenty-line
+    /// rationale; the `recover` function is this backend's caller only. That
+    /// is a duplication to be collapsed, not a sharing already achieved, and
+    /// it is left alone here for one reason: `markdown/para.rs` has other work
+    /// in flight in it. See `rustyfi_html::recover`'s module doc, which lists
+    /// every helper in that state.
     pub(super) fn is_code(&self) -> bool {
         recover::is_code_paragraph(self.mono, self.has_mono, self.lines, self.fil_lines)
     }

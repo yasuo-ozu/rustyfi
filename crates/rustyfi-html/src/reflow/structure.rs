@@ -183,13 +183,13 @@ impl crate::recover::Borders {
                 );
             }
         };
-        edge("top", self.horizontal.get(r).copied().flatten());
-        edge("left", self.vertical.get(c).copied().flatten());
-        if r + 1 == self.horizontal.len() - 1 {
-            edge("bottom", self.horizontal[r + 1]);
+        edge("top", self.horizontal(r));
+        edge("left", self.vertical(c));
+        if r + 1 == self.rows() {
+            edge("bottom", self.horizontal(r + 1));
         }
         if c + 1 == row_len {
-            edge("right", self.vertical.get(c + 1).copied().flatten());
+            edge("right", self.vertical(c + 1));
         }
         if decls.is_empty() {
             String::new()

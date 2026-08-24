@@ -7,7 +7,12 @@
 //! again and writes it for another typesetter. The recovery itself must
 //! therefore be ONE implementation, not three — every rule collected here
 //! was got wrong at least once before it was got right, and a forked copy
-//! would rot silently the next time one of them is corrected:
+//! would rot silently the next time one of them is corrected.
+//!
+//! **That is achieved for the rules below, and NOT yet for everything in this
+//! module** — see "Still forked" at the end, which names each exception. Read
+//! this list as what the module is FOR, not as an inventory of what it has
+//! already finished collecting.
 //!
 //! - [`wants_space`] — glue is not a space. The box stream puts glue between
 //!   every pair of CJK characters, so "glue means space" renders Japanese as
@@ -16,7 +21,7 @@
 //!   decision, so it is undone; but the hyphen at the end of the line may be
 //!   the AUTHOR's, and deleting it turns `code-printer` into `codeprinter`.
 //!   `InlineMarkKind::BreakHyphen` is what tells the two apart.
-//! - [`find_heading_level`] — a heading is found by correlating
+//! - [`find_heading`] — a heading is found by correlating
 //!   `extras.outline` to a destination frame through `dest_name`, a
 //!   STRUCTURAL id match. `reflow/structure.rs`'s doc comment explains why a
 //!   font-size guess was refused, and why `InlineFrameMarker` (not just
@@ -33,6 +38,40 @@
 //! stream and lets its caller decide what to write, which is exactly the line
 //! between "the same document structure" and "two different serializations of
 //! it".
+//!
+//! ## Still forked — a known debt, listed so it cannot be mistaken for done
+//!
+//! The commit that hoisted the box-stream helpers here ("hoist the box-stream
+//! rules the LaTeX backend was the third copy of") wrote a fresh copy into
+//! this module and **left the existing copies where they were**. So for the
+//! items below, this module is not the shared implementation: it is the
+//! LaTeX backend's copy, which happens to live in the HTML crate. Every one
+//! of them has ZERO callers in `rustyfi-html` itself.
+//!
+//! | item | definitions in the tree |
+//! |--|--|
+//! | [`is_pure_text`] | 3 — here, `markdown/inline.rs`, `reflow/inline.rs` |
+//! | [`pre_break_carries_text`] | 3 — the same three |
+//! | [`glue_width`] | 3 — the same three |
+//! | [`HSKIP_MIN_PT`] | 3 — the same three |
+//! | [`GRAPHIC_MIN_PT`] | 2 — here and `markdown/inline.rs` |
+//! | [`gap_spaces`] | 2 — here and `markdown/para.rs`, doc comment and unit test copied verbatim too |
+//! | [`is_code_paragraph`] | 2 — here and `markdown/para.rs`'s `Para::is_code`, spelled out inline |
+//! | [`ink_bbox`] | 2 — here and inlined into `svg.rs`'s `graphics_block` |
+//!
+//! **Two of those are TUNED THRESHOLDS, which is what makes this worth
+//! writing down rather than filing away.** [`HSKIP_MIN_PT`] and
+//! [`GRAPHIC_MIN_PT`] are numbers somebody measured against the corpus; the
+//! copies agree today, and nothing makes them agree tomorrow. Drift there
+//! does not produce an error — it produces three output formats that disagree
+//! about what counts as a figure, in a document nobody is looking at.
+//!
+//! The fix is one line per site and is deliberately NOT done here: the sites
+//! are `markdown/inline.rs`, `reflow/inline.rs`, `markdown/para.rs` and
+//! `svg.rs`, all four of which have other work in flight in them, and the
+//! commit that introduced the duplication is not the commit that should
+//! resolve it. Delete the local copy, call the one here, and cross the row
+//! off.
 
 use std::collections::HashMap;
 
@@ -323,7 +362,7 @@ pub fn is_code_paragraph(all_mono: bool, has_mono: bool, lines: usize, fil_lines
 
 /// `dest_name -> level` from `extras.outline` (`register-outline`'s already
 /// `Interp::dest_name`-resolved entries) — the lookup table
-/// [`find_heading_level`] consults.
+/// [`find_heading`] consults.
 pub fn outline_levels(outline: &[OutlineEntry]) -> HashMap<String, i64> {
     outline
         .iter()
@@ -342,7 +381,13 @@ pub fn heading_depth(level: i64) -> u8 {
 }
 
 /// [`find_heading`], for a caller that wants only the level.
-pub fn find_heading_level(
+///
+/// `pub(crate)` where its sibling is `pub`, and that asymmetry is the point:
+/// `rustyfi-latex` needs the destination NAME as well (a `\hypertarget` a
+/// `\ref` reaches by `\hyperlink`), so it calls [`find_heading`]; the two
+/// in-crate backends want only the level. Widening this one as well would
+/// publish API on the strength of a doc-comment mention rather than a caller.
+pub(crate) fn find_heading_level(
     bx: &PureHorzBox,
     dests: &HashMap<DecoId, &str>,
     outline_by_dest: &HashMap<String, i64>,
@@ -452,20 +497,32 @@ pub fn table_rows(tab: &TabularBox) -> Vec<Vec<&TabularCellBox>> {
 /// cell origins says which boundary it is. Rules the geometry cannot place
 /// (a diagonal, a decorative flourish) are simply not reproduced; they draw
 /// nothing rather than something wrong.
+/// **The two vectors are private, and deliberately so.** Both consumers ask
+/// only "is there a rule at boundary `i`", through the accessors below; the
+/// `Vec<Option<Rule>>`-with-a-trailing-entry layout is an implementation
+/// detail that a table with row or column SPANS would have to change, and
+/// publishing it would make that change breaking for no one's benefit.
 pub struct Borders {
     /// `horizontal[r]` is the rule ABOVE row `r`; the extra last entry is the
     /// rule below the final row.
-    pub horizontal: Vec<Option<Rule>>,
+    horizontal: Vec<Option<Rule>>,
     /// `vertical[c]` is the rule LEFT of column `c`; the extra last entry is
     /// the rule right of the final column.
-    pub vertical: Vec<Option<Rule>>,
+    vertical: Vec<Option<Rule>>,
 }
 
 /// One recovered grid line: how thick, and in what colour.
+///
+/// `pub` because [`Borders::horizontal`]/[`Borders::vertical`] hand it out,
+/// with `pub(crate)` fields because nothing outside this crate reads them:
+/// the HTML backend writes `border-…: {width}pt solid {color}`, and LaTeX's
+/// `\hline` has one width for the whole table and no colour without
+/// `colortbl`, so `rustyfi-latex` only ever asks whether the `Option` is
+/// `Some`. Should it grow a `colortbl` mode, widen these then.
 #[derive(Clone, Copy)]
 pub struct Rule {
-    pub width: f64,
-    pub color: Color,
+    pub(crate) width: f64,
+    pub(crate) color: Color,
 }
 
 /// A rule thinner than this (pt) is invisible in a browser anyway; a
@@ -473,6 +530,32 @@ pub struct Rule {
 pub const RULE_EPS_PT: f64 = 0.05;
 
 impl Borders {
+    /// The rule at horizontal boundary `i`, counting from the top: `0` is
+    /// above the first row and [`Borders::rows`] is below the last. Out of
+    /// range is `None`, which is also what "no rule here" is — a caller
+    /// asking about a boundary that does not exist wants the same answer.
+    pub fn horizontal(&self, i: usize) -> Option<Rule> {
+        self.horizontal.get(i).copied().flatten()
+    }
+
+    /// The rule at vertical boundary `i`, counting from the left: `0` is left
+    /// of the first column and [`Borders::cols`] is right of the last.
+    pub fn vertical(&self, i: usize) -> Option<Rule> {
+        self.vertical.get(i).copied().flatten()
+    }
+
+    /// How many rows the grid was solved for — so `horizontal(rows())` is the
+    /// bottom rule.
+    pub fn rows(&self) -> usize {
+        self.horizontal.len().saturating_sub(1)
+    }
+
+    /// How many columns the grid was solved for — so `vertical(cols())` is
+    /// the right-hand rule.
+    pub fn cols(&self) -> usize {
+        self.vertical.len().saturating_sub(1)
+    }
+
     pub fn solve(rows: &[Vec<&TabularCellBox>], rules: &[GraphicsElem]) -> Self {
         let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
         let mut borders = Borders {

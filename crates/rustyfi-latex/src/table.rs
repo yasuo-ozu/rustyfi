@@ -150,7 +150,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
     let mut out = String::new();
     let _ = writeln!(out, "\\begin{{tabular}}{{{}}}", colspec(&borders, width));
     for (r, row) in text.iter().enumerate() {
-        if borders.horizontal.get(r).copied().flatten().is_some() {
+        if borders.horizontal(r).is_some() {
             out.push_str("\\hline\n");
         }
         for c in 0..width {
@@ -165,7 +165,7 @@ pub(super) fn render_table(tab: &TabularBox, ctx: &Ctx) -> Option<String> {
         // `\end`).
         out.push_str(" \\\\\n");
     }
-    if borders.horizontal.last().copied().flatten().is_some() {
+    if borders.horizontal(borders.rows()).is_some() {
         out.push_str("\\hline\n");
     }
     out.push_str("\\end{tabular}");
@@ -221,12 +221,12 @@ fn is_inkless(bx: &PureHorzBox) -> bool {
 fn colspec(borders: &recover::Borders, width: usize) -> String {
     let mut spec = String::with_capacity(width * 2 + 1);
     for c in 0..width {
-        if borders.vertical.get(c).copied().flatten().is_some() {
+        if borders.vertical(c).is_some() {
             spec.push('|');
         }
         spec.push('l');
     }
-    if borders.vertical.get(width).copied().flatten().is_some() {
+    if borders.vertical(width).is_some() {
         spec.push('|');
     }
     spec

@@ -32,6 +32,13 @@
 //! format only) is not one anybody would come looking for here. Everything
 //! else in this crate is still private.
 //!
+//! That is achieved for the rules [`recover`] enumerates, and NOT for eight
+//! box-stream helpers this crate still defines twice or three times over —
+//! see "Still forked" at the end of [`recover`]'s module doc, which names
+//! each one and where its copies are. The debt is `rustyfi-html`-internal
+//! (`rustyfi-latex` calls the hoisted copy); it is written down there rather
+//! than paid off here because all four sites have other work in flight.
+//!
 //! **The crate is still misnamed, and it is a smaller lie than it was.** It
 //! was the HTML backend; it is the HTML and Markdown backends plus the
 //! recovery all three share. Lifting [`recover`]/[`latex`]/`mathrec` into a

@@ -333,6 +333,26 @@ impl PageGeometry {
     /// fields are vestigial here — each page's real text area lives in its
     /// `PlacedLine` coordinates, set per page by the content scheme
     /// (`chop_page`'s caller).
+    ///
+    /// **The reflowed backends are NOT vestigial readers of them, and they
+    /// disagree about it.** This is every real compile's constructor, so
+    /// `text_width` reaching a backend is the whole SHEET, not a text
+    /// measure — a document's margins live in its `page-break` callback and
+    /// never get here.
+    ///
+    /// - `rustyfi_html::reflow`'s `css::stylesheet` takes `text_width` at
+    ///   face value for the body `max-width`, so generated HTML carries
+    ///   `max-width: 595.2755905511812pt` (A4 PAPER width) and `720pt` for a
+    ///   `slydifi` landscape sheet. It is a readability default rather than a
+    ///   layout replay, so it merely reads wide.
+    /// - `rustyfi_latex::text_area` distrusts the field and measures the
+    ///   widest line in the flow instead, because a `.tex` declares real
+    ///   `geometry` margins and edge-to-edge text is not a document.
+    ///
+    /// Both are named here on purpose. If this constructor ever learns the
+    /// document's true text area, the first silently changes its output and
+    /// the second silently keeps a workaround it no longer needs — and
+    /// neither backend's own comment can tell you that from where it sits.
     pub fn for_paper(paper_width: Length, paper_height: Length) -> PageGeometry {
         PageGeometry {
             paper_width,

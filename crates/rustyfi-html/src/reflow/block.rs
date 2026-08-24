@@ -244,17 +244,8 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
                         para.text.push_str("<br>\n");
                         ctx.break_hyphen.set(false);
                         ctx.reset_flow();
-                    } else if ctx.break_hyphen.replace(false) {
-                        // The breaker hyphenated here. Drop its hyphen and
-                        // rejoin the word — no space either.
-                        drop_break_hyphen(&mut para.text);
-                    } else if ends_with_hyphen(&para.text) {
-                        // An AUTHORED hyphen the breaker chose to break after
-                        // (UAX#14 allows it). The hyphen stays — it is the
-                        // author's — but the two halves of `code-printer` must
-                        // not gain a space between them.
                     } else {
-                        ctx.note_glue(WORD_SPACE_PT);
+                        rejoin_lines(&mut para.text, ctx);
                     }
                 }
             }
@@ -364,7 +355,30 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
 /// immaterial — it only has to be above `text::wants_space`'s zero-width
 /// threshold, since the decision it feeds is "is this a CJK pair" rather
 /// than "how wide".
-const WORD_SPACE_PT: f64 = 3.0;
+pub(crate) const WORD_SPACE_PT: f64 = 3.0;
+
+/// What a `Line`-to-`Line` boundary WITHIN one paragraph becomes, for
+/// proportional text: the browser is going to re-break the paragraph its own
+/// way, so the port's break must not survive as one.
+///
+/// Shared with `inline::emit_embedded_block`, which walks a nested block's
+/// lines for itself — the rule has three cases and getting one of them wrong
+/// is a silently wrong word, so there is one copy of it. (The fixed-pitch
+/// case is NOT here: only the block walker tracks whether a paragraph is set
+/// in a monospace face, and only there does a break belong to the author.)
+pub(crate) fn rejoin_lines(text: &mut String, ctx: &Ctx) {
+    if ctx.break_hyphen.replace(false) {
+        // The breaker hyphenated here. Drop its hyphen and rejoin the word —
+        // no space either.
+        drop_break_hyphen(text);
+    } else if ends_with_hyphen(text) {
+        // An AUTHORED hyphen the breaker chose to break after (UAX#14 allows
+        // it). The hyphen stays — it is the author's — but the two halves of
+        // `code-printer` must not gain a space between them.
+    } else {
+        ctx.note_glue(WORD_SPACE_PT);
+    }
+}
 
 /// Remove the hyphen the LINE BREAKER put at the end of this line, so a word
 /// it split comes back together for the browser to re-break its own way.

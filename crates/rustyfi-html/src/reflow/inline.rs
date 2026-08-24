@@ -50,9 +50,10 @@ use std::fmt::Write as _;
 
 use rustyfi_backend::{
     AnnotAction, Color, GraphicsElem, HorzStringInfo, InlineMarkKind, MathGlyph, PureHorzBox,
+    VertBox,
 };
 
-use super::Ctx;
+use super::{Ctx, GlyphOutline};
 use crate::image;
 
 /// Append `bx`'s reflow rendering to `out`. Never touches `out`'s
@@ -375,19 +376,101 @@ pub(crate) fn emit_inline(out: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
             let _ = write!(out, "<span class=\"fnref\" id=\"fnref-{n}\"></span>");
         }
 
-        // `EmbeddedBlock` is handled one level up, in `block.rs`'s own
-        // per-`Line`-contents loop (it needs to CLOSE the open paragraph,
-        // which this function's `&mut String` signature has no way to do)
-        // — unreachable in practice, kept as an explicit inert arm rather
-        // than a silent catch-all so a future new `PureHorzBox` variant
-        // still forces a compile error here instead of silently falling
-        // through.
-        PureHorzBox::EmbeddedBlock { .. } => {}
+        // An `EmbeddedBlock` reached from INSIDE inline content — see
+        // [`emit_embedded_block`] for what it is doing there and why this arm
+        // was empty (and wrong) until it was measured.
+        PureHorzBox::EmbeddedBlock { width, block, .. } => {
+            emit_embedded_block(out, width.0, block, ctx)
+        }
 
         // No reflow meaning (zero-width markers/hooks; matches the PDF
         // writer's own wildcard treatment of these two).
         PureHorzBox::HookPageBreak { .. } | PureHorzBox::FrameMarker { .. } => {}
     }
+}
+
+/// An `embed-block-top`/`-bottom` box reached from INSIDE inline content, as
+/// an intrinsically-sized inline-block holding its own text.
+///
+/// **This arm used to be empty, and the comment saying so claimed it was
+/// "unreachable in practice". That was false**, and it silently deleted
+/// content. `block.rs`'s own per-`Line` loop does handle the common case —
+/// an `EmbeddedBlock` sitting directly on a line, where it can flush the open
+/// paragraph and emit a real `<div class="embed">` — but that is not the only
+/// way one arrives. A package that composes a block into a DRAWING reaches
+/// this function instead, through `svg::emit_graphics`' `draw-text` callback:
+/// `figbox`'s `frame`/`bgcolor`/`shift`/`rotate`/`scale`/`graffiti` each wrap
+/// their argument in `inline-graphics (fun (x, y) -> [draw-text (x, y) ib])`,
+/// so `textbox-with-width 100pt {…} |> frame 1pt Color.black` — a framed
+/// paragraph, the single most ordinary thing that package does — put an
+/// `EmbeddedBlock` here and the text vanished, leaving an empty rectangle the
+/// right size. A `Frame`'s `contents` and a nested table cell reach it the
+/// same way.
+///
+/// **Why it renders as an inline-block of INLINE content rather than reusing
+/// `block::walk_vboxes`.** Everything this function writes ends up inside the
+/// enclosing `<p class="para">`, and an HTML parser closes an open `<p>` at
+/// the first block-level start tag it meets — so emitting the `<p>`s that
+/// `walk_vboxes` produces would not nest them, it would TERMINATE the
+/// paragraph they are inside and spill the rest of it out. So each of the
+/// block's lines is emitted as inline content, and only a real paragraph
+/// boundary (a `Skip`/`ParagTop`/`FramePad`, or a frame edge) becomes a
+/// `<br>`; a line-to-line boundary inside one paragraph becomes ordinary
+/// glue, exactly as `block.rs` treats it, because the browser is going to
+/// re-break the text itself.
+///
+/// **The width is the document's and is kept**, since that is the whole
+/// content of the construction — `textbox-with-width 100pt` means "break this
+/// paragraph at 100pt". `max-width:100%` keeps it from overflowing a narrow
+/// reader. The baseline needs no declaration: an inline-block's own baseline
+/// is that of its LAST line box, which is exactly `embed-block-bottom`'s
+/// `anchor_last`. `embed-block-top` anchors on its FIRST line instead and CSS
+/// has no spelling for that; it is left on the same rule, which differs only
+/// for a multi-line top-anchored block and is a great deal closer than the
+/// nothing this emitted before.
+fn emit_embedded_block(out: &mut String, width: f64, block: &[VertBox], ctx: &Ctx) {
+    open_opaque(out, ctx);
+    let _ = write!(
+        out,
+        "<span class=\"embed-inline\" style=\"width:{width}pt;\">"
+    );
+    let mut wrote_line = false;
+    let mut want_break = false;
+    for vb in block {
+        match vb {
+            VertBox::Line { contents, .. } => {
+                if want_break && wrote_line {
+                    close_run(out, ctx);
+                    out.push_str("<br>");
+                    ctx.reset_flow();
+                }
+                want_break = false;
+                for (_, bx) in contents {
+                    emit_inline(out, bx, ctx);
+                }
+                wrote_line = true;
+                // Between two lines of ONE paragraph: the browser re-breaks,
+                // so the port's break becomes glue — or nothing at all where
+                // the breaker hyphenated a word. `block.rs`'s own line loop
+                // makes the identical call.
+                super::block::rejoin_lines(out, ctx);
+            }
+            // A real paragraph boundary inside the embedded block.
+            VertBox::Skip(_)
+            | VertBox::ParagTop(_)
+            | VertBox::FramePad(_)
+            | VertBox::ClearPage
+            | VertBox::FrameStart(_)
+            | VertBox::FrameEnd(_) => want_break = true,
+            // Markers with no inline rendering — a list inside an embedded
+            // block inside a drawing keeps its item text and loses only its
+            // bullet, which is the same trade `bullet_suppress` already makes.
+            _ => {}
+        }
+    }
+    close_run(out, ctx);
+    ctx.reset_flow();
+    out.push_str("</span>");
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) survives as a real
@@ -966,14 +1049,21 @@ fn emit_math_svg(
         "<svg class=\"math-glyphs\" style=\"position:absolute; left:0; top:0; overflow:visible;\" \
          width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">",
     );
-    for g in glyphs {
+    let mut phantom = Phantom::default();
+    for (i, g) in glyphs.iter().enumerate() {
         let x = g.dx.0;
         let y = height - g.dy.0 - g.info.rising.0;
-        // A glyph the document placed by GLYPH ID is drawn from its own
-        // outline, because no `<text>` can address it — see
-        // [`emit_math_glyph_path`].
-        if let Some((d, upem)) = ctx.math_glyph_outline(g) {
-            emit_math_glyph_path(&mut drawing, &d, upem, g, x, y);
+        // Every glyph is drawn from the face's own outline where one can be
+        // had, so the equation does not depend on the reader having the face
+        // — see [`emit_math_glyph_path`] and `Ctx::math_glyph_outline`. The
+        // characters themselves survive as invisible, selectable text
+        // ([`Phantom`]); without it a `<path>` would be uncopyable,
+        // unsearchable and unreadable to a screen reader.
+        if let Some(outline) = ctx.math_glyph_outline(g) {
+            emit_math_glyph_path(&mut drawing, &outline, g, x, y);
+            if let Some(text) = phantom_text(glyphs, i) {
+                phantom.push(text, g, x, y);
+            }
             continue;
         }
         let mut style = format!("font-size:{};", math_font_size_uu(g.info.size.0));
@@ -989,6 +1079,7 @@ fn emit_math_svg(
             crate::escape_html(&g.text),
         );
     }
+    phantom.finish(&mut drawing);
     drawing.push_str("</svg>\n");
     let mut nested = String::new();
     if !rules.is_empty() {
@@ -1021,20 +1112,30 @@ fn emit_math_svg(
     out.push_str("</span>\n");
 }
 
-/// One `MathGlyph` whose drawn form is a GLYPH ID rather than a character,
-/// as an SVG `<path>` of the face's own outline — placed at the same
-/// `(x, y)` the `<text>` branch would have used, which is the glyph's ORIGIN
-/// (pen position), not its top-left.
+/// One `MathGlyph`'s ink, as SVG `<path>`s of the face's own outlines —
+/// placed at the same `(x, y)` the `<text>` branch would have used, which is
+/// the glyph's ORIGIN (pen position), not its top-left.
 ///
-/// **What was wrong.** `MathGlyph::gid` is `Some` exactly when the glyph the
-/// document laid out is not the one its `text` cmaps to: an OpenType MATH
-/// `MathVariants` record — a display-size big operator (`push_big_char_glyph`),
-/// a stretchy delimiter or one part of a `GlyphAssembly` (`push_delimiter_
-/// glyph`) — or an `ssty` script form (`push_char_glyph`). The PDF writer
-/// emits the id straight into the content stream (`cid.rs`'s
-/// `encode_glyph_run`); an SVG `<text>` can only address the CHARACTER, so
-/// this backend drew the base glyph and there was no spelling of `∑` that
-/// would have produced the display one.
+/// **Why EVERY math glyph goes this way**, not only the variant ones.
+/// A `<text>` names a face and hopes; a reader without it gets a substitute
+/// whose advances are not the ones the equation was laid out against. Math is
+/// the one place in this backend where that is fatal rather than untidy,
+/// because every glyph is positioned ABSOLUTELY (`MathGlyph::dx`/`dy`) and
+/// there is no flow to absorb the difference. Measured on the reported
+/// symptom, `\forall \epsilon \: \exists \delta` at 12pt: the port reserves
+/// 7.992pt for `∀` and lays `ε` down at that offset, while a substituted face
+/// draws the quantifier 12.000pt wide, so the two overlap. The full argument
+/// and the fallback conditions are on `Ctx::math_glyph_outline`.
+///
+/// **What was wrong before that.** `MathGlyph::gid` is `Some` exactly when the
+/// glyph the document laid out is not the one its `text` cmaps to: an
+/// OpenType MATH `MathVariants` record — a display-size big operator
+/// (`push_big_char_glyph`), a stretchy delimiter or one part of a
+/// `GlyphAssembly` (`push_delimiter_glyph`) — or an `ssty` script form
+/// (`push_char_glyph`). The PDF writer emits the id straight into the content
+/// stream (`cid.rs`'s `encode_glyph_run`); an SVG `<text>` can only address
+/// the CHARACTER, so this backend drew the base glyph and there was no
+/// spelling of `∑` that would have produced the display one.
 ///
 /// **It was two symptoms of one bug, and this fixes both.** The size was the
 /// visible half; the misplacement was the consequence. Measured on the
@@ -1074,29 +1175,182 @@ fn emit_math_svg(
 /// does NOT apply to `<text>` (it would mirror the letters) is exactly right
 /// for a filled path, which is orientation-independent.
 ///
+/// A record holding several characters emits one `<path>` per inked one, each
+/// translated by the pen offset `Ctx::math_glyph_outline` accumulated for it
+/// — already in points, so it simply adds to `x`.
+///
 /// **No `fill-rule`**, unlike every other path this backend writes. Glyph
 /// outlines are defined under NONZERO winding — SVG's default — and CFF faces
 /// in particular use overlapping contours that even-odd would punch holes in.
 /// `svg.rs`'s `Fill`/`Clip` arms say `evenodd` because they are reproducing
 /// PDF's `f*`; this is reproducing a font.
-fn emit_math_glyph_path(
-    out: &mut String,
-    d: &str,
-    upem: f64,
-    g: &MathGlyph,
-    x: f64,
-    y: f64,
-) {
-    let s = g.info.size.0 / upem;
+fn emit_math_glyph_path(out: &mut String, outline: &GlyphOutline, g: &MathGlyph, x: f64, y: f64) {
+    let s = g.info.size.0 / outline.upem;
     let mut attrs = String::new();
     if g.info.color != Color::Gray(0.0) {
         attrs.push_str(&format!(" fill=\"{}\"", crate::svg::css_color(g.info.color)));
     }
-    let _ = writeln!(
-        out,
-        "<path d=\"{d}\" transform=\"translate({x} {y}) scale({s} {})\"{attrs}/>",
-        -s,
-    );
+    for (d, pen) in &outline.parts {
+        let _ = writeln!(
+            out,
+            "<path d=\"{d}\" transform=\"translate({} {y}) scale({s} {})\"{attrs}/>",
+            x + pen,
+            -s,
+        );
+    }
+}
+
+/// The characters `glyphs[i]` should contribute to the document's TEXT, or
+/// `None` when it should contribute none.
+///
+/// Almost always the record's own `text`. The exception is a stretchy
+/// delimiter grown from a `GlyphAssembly`: `push_delimiter_glyph` emits one
+/// `MathGlyph` per PART — a top, some extenders, a bottom — and gives every
+/// one of them the same `text` and the same `dx`, since they are stacked in a
+/// single column. Copying that verbatim would put `(((((` in the clipboard
+/// where the page shows one tall bracket. So a record whose `text` and `dx`
+/// both repeat its predecessor's is a continuation part and stays silent;
+/// the first part already carries the character.
+///
+/// Nothing else in the corpus produces two glyph records at an identical `dx`
+/// with identical text — that would be one character painted on top of
+/// another, which is a layout bug rather than a construction.
+fn phantom_text(glyphs: &[MathGlyph], i: usize) -> Option<&str> {
+    let g = &glyphs[i];
+    if g.text.is_empty() {
+        return None;
+    }
+    if let Some(prev) = i.checked_sub(1).map(|p| &glyphs[p]) {
+        if prev.text == g.text && prev.dx == g.dx {
+            return None;
+        }
+    }
+    Some(&g.text)
+}
+
+/// The invisible, SELECTABLE text that rides with a run of outlined glyphs,
+/// carrying the characters the `<path>`s beside them draw.
+///
+/// **This is not a nicety.** A `<path>` is a shape: it cannot be selected,
+/// copied, found with the browser's in-page search, or announced by a screen
+/// reader. Outlining every math glyph without this would silently destroy all
+/// four for every equation in the document — trading one real fidelity bug
+/// for four accessibility ones. The technique is the one PDF viewers use for
+/// a scanned page with an OCR layer: paint the picture, and put the text
+/// behind it where the machinery that reads text can still find it.
+///
+/// **`fill: none` (`css.rs`'s `.math-glyphs .mphantom`), and specifically NOT
+/// `visibility: hidden` or `display: none`.** The latter two remove the
+/// element from the accessibility tree and from the selection along with the
+/// paint, which is exactly the thing being avoided; `fill: none` removes only
+/// the paint. Verified in headless chromium rather than assumed — see
+/// `crates/rustyfi/tests/html_math_selection.rs`, which drives a real browser
+/// over a real render.
+///
+/// **It steals no hit-testing from the paths.** SVG's default
+/// `pointer-events: visiblePainted` tests the FILL only where a fill is
+/// actually painted, and none is — so `elementFromPoint` over an equation
+/// returns the wrapper, not this. Selection is unaffected by that, because it
+/// walks text nodes rather than hit-testing paint. It changes no layout
+/// either: SVG text contributes nothing to the flow.
+///
+/// **ONE `<text>` per run, one `<tspan>` per glyph**, rather than a `<text>`
+/// each. Chrome serialises a selection that spans several `<text>` elements
+/// with a newline between every one, so a reader copying `∀ε : ∃δ` got each
+/// character on its own line; `<tspan>`s inside a single `<text>` are inline
+/// and copy as `∀𝜀:∃𝛿`. It is also where the wrapper's `class` and the run's
+/// shared `font-size` are paid for once instead of per glyph.
+///
+/// No whitespace is written between the `<tspan>`s or inside the `<text>`:
+/// under SVG's default `xml:space` a newline there collapses to a real space
+/// and would show up in the copied text.
+///
+/// **Document order is reading order**, because [`emit_math_svg`]'s loop
+/// walks `glyphs` in the order the math layout produced them — a base before
+/// its scripts, a numerator before its denominator — and this preserves that
+/// order.
+///
+/// The only property carried is `font-size`, and only where a glyph departs
+/// from the run's first: it sizes the selection highlight the browser paints
+/// over an invisible glyph. The FAMILY is deliberately not repeated — this
+/// text is never drawn, so naming a face would buy nothing and cost ~110
+/// bytes on every glyph in the document.
+#[derive(Default)]
+struct Phantom {
+    /// The `<tspan>`s so far, concatenated with no separator but the
+    /// occasional deliberate space (see [`Phantom::push`]).
+    spans: String,
+    /// The first glyph's size, hoisted onto the enclosing `<text>`.
+    size: Option<f64>,
+    /// The previous glyph's right edge (`dx + width`) and baseline `y`, which
+    /// is what decides whether a space belongs between it and the next.
+    prev: Option<(f64, f64)>,
+}
+
+/// Two phantom glyphs are on the SAME ROW when their baselines agree to
+/// within this many points — a threshold rather than equality because the
+/// baselines are arithmetic on `Length`s, not copies of one value.
+const PHANTOM_ROW_EPS: f64 = 0.5;
+
+/// A horizontal gap of at least this fraction of the font size becomes a
+/// space in the copied text. A word space is 0.25–0.33 em in the faces this
+/// port bundles and the widest math space (`\;`, 5/18 em) is 0.28, so this
+/// takes both and leaves italic correction and the sub-0.1 em inter-atom
+/// kerns alone.
+const PHANTOM_SPACE_EM: f64 = 0.2;
+
+impl Phantom {
+    /// Add one glyph record's characters, at the pen position the `<path>`
+    /// beside it uses.
+    ///
+    /// **Why a gap can become a space.** Nothing else can put one there:
+    /// `primitives::math_boxes_of_inline_boxes` turns the glue inside a
+    /// `text-in-math` body into bare ADVANCE and keeps no character for it,
+    /// so `${x \text!{ if and only if } y}` reaches this backend as four
+    /// glyph records reading `if`, `and`, `only`, `if` and nothing between
+    /// them. Concatenating those verbatim copies as `ifandonlyif`. The gap is
+    /// the only surviving evidence that a space was set, and reading it back
+    /// is what a PDF text extractor does with the same absolutely-placed
+    /// glyphs — `place_math` writes one `Tj` per glyph at its own point, and
+    /// poppler reconstructs the spaces the same way.
+    ///
+    /// **Same row only, and only forwards.** A script or a big operator's
+    /// limit sits on its own baseline and at an `x` that may run BACKWARDS
+    /// relative to the glyph before it (`∑` at 0, its subscript at 0.46, its
+    /// superscript back at 5.70), so a gap across rows means nothing about
+    /// reading order and must not manufacture a space.
+    fn push(&mut self, text: &str, g: &MathGlyph, x: f64, y: f64) {
+        let size = g.info.size.0;
+        if let Some((prev_right, prev_y)) = self.prev {
+            if (prev_y - y).abs() < PHANTOM_ROW_EPS && x - prev_right >= size * PHANTOM_SPACE_EM {
+                self.spans.push(' ');
+            }
+        }
+        self.prev = Some((x + g.width.0, y));
+        let attr = match self.size {
+            None => {
+                self.size = Some(size);
+                String::new()
+            }
+            Some(run) if (run - size).abs() < 1e-9 => String::new(),
+            Some(_) => format!(" style=\"font-size:{};\"", math_font_size_uu(size)),
+        };
+        let _ = write!(
+            self.spans,
+            "<tspan x=\"{x}\" y=\"{y}\"{attr}>{}</tspan>",
+            crate::escape_html(text),
+        );
+    }
+
+    fn finish(self, out: &mut String) {
+        let Some(size) = self.size else { return };
+        let _ = writeln!(
+            out,
+            "<text class=\"mphantom\" style=\"font-size:{};\">{}</text>",
+            math_font_size_uu(size),
+            self.spans,
+        );
+    }
 }
 
 /// A math glyph's `pt` font size, spelled for the inside of

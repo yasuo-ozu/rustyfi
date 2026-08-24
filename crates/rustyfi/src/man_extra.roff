@@ -117,7 +117,14 @@ node left to serialize. Every rendering below is therefore a recovery from
 geometry, and which one suits depends on where the file will be read. The four
 are mutually exclusive; all four are an error with
 .BR "\-\-format pdf" ,
-which typesets the equation itself.
+which typesets the equation itself, and with
+.BR "\-\-format latex" ,
+which always writes the LaTeX
+.B \-\-katex
+asks for \(em a
+.I .tex
+reaches a math typesetter by definition, so every other rendering would only
+lose structure it can keep.
 .TP
 .B \-\-svg\-outline\-math
 Each glyph as an SVG outline path from the document's own face, with the
@@ -183,6 +190,17 @@ browser, and see where the time goes:
 $ rustyfi doc.saty \-\-format html
 $ rustyfi doc.saty \-\-format markdown \-\-katex
 $ rustyfi doc.saty \-\-timing
+.EE
+.RE
+.PP
+Hand it to another typesetter instead. The generated preamble names the engine
+it needs \(em any of the three where the document has no CJK in it, lualatex
+where it has:
+.PP
+.RS 4
+.EX
+$ rustyfi doc.saty \-\-format latex \-o doc.tex
+$ lualatex doc.tex
 .EE
 .RE
 .SH SEE ALSO

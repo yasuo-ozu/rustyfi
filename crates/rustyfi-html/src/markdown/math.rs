@@ -52,21 +52,17 @@
 
 use rustyfi_backend::{GraphicsElem, MathGlyph};
 
-use crate::mathrec::{self, Atom};
+use crate::mathrec::{self, Atom, DelimKind};
 
 /// One `PureHorzBox::Math` as reading-order text. See this module's doc
 /// comment for what that means and what it costs. Empty when the box draws
 /// nothing this layer can name.
 pub(super) fn math_text(glyphs: &[MathGlyph], rules: &[GraphicsElem]) -> String {
-    write_atoms(&mathrec::recover(glyphs, rules), true)
+    write_atoms(&mathrec::recover(glyphs, rules))
 }
 
 /// Fold recovered atoms into text.
-///
-/// `wrap_fracs` is false inside a fraction's own half, where a nested bar has
-/// already been dissolved away by the recovery and there is nothing left to
-/// parenthesize — see [`crate::mathrec`]'s "one level deep".
-fn write_atoms(atoms: &[Atom<'_>], wrap_fracs: bool) -> String {
+fn write_atoms(atoms: &[Atom<'_>]) -> String {
     let mut out = String::new();
     for atom in atoms {
         match atom {
@@ -83,20 +79,61 @@ fn write_atoms(atoms: &[Atom<'_>], wrap_fracs: bool) -> String {
                 None => out.push_str(&g.text),
             },
             Atom::Frac { above, below } => {
-                let (a, b) = (write_atoms(above, false), write_atoms(below, false));
-                if wrap_fracs {
-                    out.push_str(&wrap(&a));
-                    out.push('/');
-                    out.push_str(&wrap(&b));
-                } else {
-                    out.push_str(&a);
-                    out.push('/');
-                    out.push_str(&b);
+                out.push_str(&wrap(&write_atoms(above)));
+                out.push('/');
+                out.push_str(&wrap(&write_atoms(below)));
+            }
+            // Unicode has every one of these delimiters as a character, so a
+            // recovered group really does come back as itself. A group whose
+            // shape matched no signature writes its body BARE rather than
+            // guessing at a pair of brackets — the same choice `--katex`
+            // makes, and the same one this module makes everywhere else.
+            Atom::Delim { open, close, body } => {
+                if let Some(c) = open.and_then(delim_open) {
+                    out.push(c);
                 }
+                out.push_str(&write_atoms(body));
+                if let Some(c) = close.and_then(delim_close) {
+                    out.push(c);
+                }
+            }
+            // `√` needs its radicand bracketed for the same reason a fraction
+            // half does: `√a+b` reads as `(√a)+b`.
+            Atom::Radical { body } => {
+                out.push('\u{221A}');
+                out.push_str(&wrap(&write_atoms(body)));
             }
         }
     }
     out
+}
+
+fn delim_open(k: DelimKind) -> Option<char> {
+    Some(match k {
+        DelimKind::Paren => '(',
+        DelimKind::Bracket => '[',
+        DelimKind::Brace => '{',
+        DelimKind::Floor => '\u{230A}',
+        DelimKind::Ceil => '\u{2308}',
+        DelimKind::Abs => '|',
+        DelimKind::Norm => '\u{2016}',
+        DelimKind::Angle => '\u{27E8}',
+        DelimKind::Unknown => return None,
+    })
+}
+
+fn delim_close(k: DelimKind) -> Option<char> {
+    Some(match k {
+        DelimKind::Paren => ')',
+        DelimKind::Bracket => ']',
+        DelimKind::Brace => '}',
+        DelimKind::Floor => '\u{230B}',
+        DelimKind::Ceil => '\u{2309}',
+        DelimKind::Abs => '|',
+        DelimKind::Norm => '\u{2016}',
+        DelimKind::Angle => '\u{27E9}',
+        DelimKind::Unknown => return None,
+    })
 }
 
 /// Parenthesize a fraction half unless it is a single token, so `1/2` stays
@@ -284,5 +321,56 @@ mod tests {
             glyph("c", 8.0, -4.0, 10.0),
         ];
         assert_eq!(math_text(&gs, &[bar]), "(a+b)/c");
+    }
+
+    /// Unicode has every delimiter `math-paren` draws, so a group recovered
+    /// from the paths really does come back as itself — and a script after it
+    /// then reads as the group's, which `a+b²` does not.
+    #[test]
+    fn a_recovered_group_comes_back_as_its_characters() {
+        use crate::mathrec::tests::{absbar, paren};
+        let gs = vec![
+            glyph("a", 5.0, 0.0, 10.0),
+            glyph("+", 11.0, 0.0, 10.0),
+            glyph("b", 17.0, 0.0, 10.0),
+            glyph("2", 27.0, 5.0, 7.0),
+        ];
+        let rules = vec![
+            paren(1.0, 4.0, -4.0, 9.0, true),
+            paren(23.0, 26.0, -4.0, 9.0, false),
+        ];
+        assert_eq!(math_text(&gs, &rules), "(a+b)²");
+        let one = vec![glyph("x", 6.0, 0.0, 10.0)];
+        let bars = vec![absbar(2.0, -4.0, 9.0), absbar(13.0, -4.0, 9.0)];
+        assert_eq!(math_text(&one, &bars), "|x|");
+    }
+
+    /// `√` is a character even though the radical SIGN is a path, and the
+    /// radicand needs the same bracketing a fraction half does: `√a+b` reads
+    /// as `(√a)+b`.
+    #[test]
+    fn a_radical_comes_back_as_the_root_sign() {
+        use crate::mathrec::tests::radical;
+        let gs = vec![
+            glyph("a", 6.0, 0.0, 10.0),
+            glyph("+", 11.0, 0.0, 10.0),
+            glyph("b", 16.0, 0.0, 10.0),
+        ];
+        let rules = radical(0.0, 5.0, 22.0, 9.0, 3.0);
+        assert_eq!(math_text(&gs, &rules), "√(a+b)");
+    }
+
+    /// A fraction inside a fraction is written as one, and the halves are
+    /// bracketed so `a/(b/c)` cannot be misread as `(a/b)/c`.
+    #[test]
+    fn a_nested_fraction_is_bracketed() {
+        use crate::mathrec::tests::bar;
+        let gs = vec![
+            glyph("a", 0.0, 4.0, 10.0),
+            glyph("b", 0.0, 0.0, 10.0),
+            glyph("c", 0.0, -8.0, 10.0),
+        ];
+        let rules = vec![bar(0.0, 6.0, 3.0), bar(0.0, 6.0, -1.0)];
+        assert_eq!(math_text(&gs, &rules), "a/(b/c)");
     }
 }

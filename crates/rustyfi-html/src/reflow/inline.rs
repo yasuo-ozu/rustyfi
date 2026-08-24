@@ -1,7 +1,15 @@
 //! `PureHorzBox` → inline HTML ("Inline level"), appending into an
-//! already-open paragraph's (or inline frame's) text buffer — never
-//! absolutely positioned, never carrying an x/y of its own; the browser
-//! lays every span out in normal inline flow.
+//! already-open paragraph's (or inline frame's) text buffer: the browser
+//! lays every span out in normal inline flow, and no run, paragraph, frame
+//! or table here carries an x/y of its own.
+//!
+//! The ONE construct that does is `draw-text` at a point other than its own
+//! box's origin — `\overset`/`\underset` and the big operators that carry
+//! limits, whose whole content is "put this row above that one", which flow
+//! cannot say. [`emit_placed_text`] places those, INSIDE the
+//! relatively-positioned math/graphics wrapper they belong to and never
+//! against the page; [`all_nested_text_at_anchor`] is the line between that
+//! case and the wrapper-shaped one, which still flows.
 //!
 //! Slice 1 renders `InnerString` (styled + escaped text), the three glue
 //! variants (collapsed to a plain space — the browser re-breaks, so the
@@ -592,11 +600,11 @@ fn open_opaque(out: &mut String, ctx: &Ctx) {
 /// `nested` (for `GraphicsElem::Text`/`draw-text`, the one arm that steps
 /// outside the local coordinate frame — see `svg.rs`'s own doc comment)
 /// re-enters THIS module's [`emit_inline`] rather than any page-absolute box
-/// emitter, since reflow has no page coordinates to place
-/// nested content at; the `_x`/`_y` callback args are therefore unused here
-/// (a `draw-text` run's nested boxes render inline, at their natural flow
-/// position within the wrapper, not at their SVG-local point — a documented
-/// approximation for this rare construction).
+/// emitter, since reflow has no PAGE coordinates. It does have
+/// WRAPPER-LOCAL ones, though — that is exactly what the callback's `x`/`y`
+/// are — and whether they are used is [`all_nested_text_at_anchor`]'s call:
+/// a run at the box's own origin stays in flow (same place, still
+/// reflowable), a run anywhere else is placed by [`emit_placed_text`].
 fn emit_graphics_box(
     out: &mut String,
     width: f64,
@@ -608,13 +616,19 @@ fn emit_graphics_box(
     if elems.is_empty() {
         return;
     }
+    let placed = !all_nested_text_at_anchor(elems);
     // A graphics box whose every element is a `draw-text` DRAWS nothing: the
     // `<svg>` comes out with an empty `<g>` and all the content goes to
     // `nested`. Emitting the wrapper anyway reserved the box's full size a
     // second time, on top of the content's own — `easytable` wraps each table
     // in exactly this shape, and every table in a document arrived under a
     // table-sized rectangle of blank space.
-    if elems.iter().all(is_pure_text) {
+    //
+    // Only when the content is at the box's own origin, though. When it is
+    // placed there is no second reservation to avoid (placed content is out
+    // of flow and contributes no size at all) and the wrapper is REQUIRED:
+    // it is the `position:relative` box the placement is relative to.
+    if !placed && elems.iter().all(is_pure_text) {
         // The overlaid halves of one table are visible together only here —
         // see `Ctx::tabular_rules`. Collect any rules-only tabular's rules
         // before emitting, and drop them again after, so the pairing can
@@ -641,13 +655,19 @@ fn emit_graphics_box(
         depth,
         0.0,
         height,
-        &mut |_svg, cbx, _x, _y| emit_nested_text(&mut nested, cbx, ctx),
+        &mut |_svg, cbx, x, y| {
+            if placed {
+                emit_placed_text(&mut nested, cbx, x, y, ctx)
+            } else {
+                emit_nested_text(&mut nested, cbx, ctx)
+            }
+        },
     );
     let _ = writeln!(
         out,
         "<span class=\"gfx\" style=\"position:relative; display:inline-block; \
          {} vertical-align:{}pt;\">",
-        wrapper_size(width, total_h, !nested.is_empty()),
+        wrapper_size(width, total_h, !placed && !nested.is_empty()),
         -depth,
     );
     out.push_str(&drawing);
@@ -758,17 +778,117 @@ fn emit_text_only(out: &mut String, elems: &[GraphicsElem], ctx: &Ctx) {
 /// all — the browser's parser closes the `<svg>` at the first one and the
 /// rest of the drawing escapes into the document.
 ///
-/// The consequence is that a `draw-text` run's text sits AFTER its drawing
-/// rather than at its point within it. That is the documented approximation
-/// this backend already made for the construct (there are no page
-/// coordinates to place it at); it is now merely well-formed.
+/// This is the arm for a run whose point IS the wrapper's own anchor
+/// ([`all_nested_text_at_anchor`]), where "after the drawing, in flow" and
+/// "at the point" are the same place — so the content keeps reflowing, which
+/// is the whole premise of this backend. A run at any other point goes
+/// through [`emit_placed_text`] instead.
 ///
-/// It does stay INSIDE the wrapper `<span>`, and that is what makes the
+/// It stays INSIDE the wrapper `<span>`, and that is what makes the
 /// wrapper's own size a MINIMUM rather than a fixed reservation — see
 /// [`wrapper_size`], which is where the consequence is worked out.
 fn emit_nested_text(nested: &mut String, bx: &PureHorzBox, ctx: &Ctx) {
     emit_inline(nested, bx, ctx);
     close_run(nested, ctx);
+}
+
+/// The same nested box, PLACED at the wrapper-local `(x, y)` that
+/// `svg::emit_graphics` computed for it — `x` its left edge, `y` its
+/// BASELINE, both measured from the wrapper's top-left corner.
+///
+/// **Why this exists.** `draw-text` is how a package draws one piece of
+/// content at a point relative to another: `\overset`/`\underset` and every
+/// big-operator-with-limits in `latexcmds` are an `inline-graphics` holding
+/// two or three of them, one per stacked row. Rendered in flow they came out
+/// side by side in source order — `\underset{m}{Y}` as `Y m`,
+/// `\normal-overset{TOP}{BASE}` as `BASETOP` — because flow has no way to
+/// express "above". The coordinates were being computed and discarded.
+///
+/// **Why it is a second `position:absolute`, and why that is contained.**
+/// The wrapper is `position:relative`, so this positions within ONE inline
+/// box and never against the page; it is the same licence the wrapper's own
+/// `<svg>` children already have (see [`emit_graphics_box`]), extended from
+/// the drawing to the drawing's text. `css.rs`'s `.dtx` rule carries the
+/// `position`, so the invariant test can still count absolute rules; only
+/// the two per-box numbers are written inline.
+///
+/// **The strut, which is the part that is not obvious.** `top` positions a
+/// box's TOP, and what we know is where its BASELINE goes, so `top` must be
+/// `y` minus the box's own ascent — and the browser's idea of the ascent of
+/// whatever `emit_inline` writes (font ascender + half-leading) is neither
+/// the port's `height` nor knowable here. So the container does not rely on
+/// it: `line-height: 0` reduces every inline box inside to a zero-height
+/// contribution centred on its content area, and a zero-width inline-block
+/// strut of exactly `ascent` then defines the line box's top edge on its own
+/// (an empty inline-block sits with its BOTTOM on the baseline). The
+/// container's top edge therefore lands exactly `ascent` above the baseline
+/// whatever font the reader has, which is what makes `top = y - ascent`
+/// exact. The ascent is the box's own — `pure_natural_metrics`, the same
+/// per-variant table the line breaker measures with, not the enclosing run's
+/// (a `\overset`'s two rows have different heights and share no ascent).
+fn emit_placed_text(nested: &mut String, bx: &PureHorzBox, x: f64, y: f64, ctx: &Ctx) {
+    let (_, height, _) = rustyfi_backend::pure_natural_metrics(std::iter::once(bx));
+    let ascent = height.0;
+    let top = y - ascent;
+    let _ = write!(
+        nested,
+        "<span class=\"dtx\" style=\"left:{x}pt; top:{top}pt;\">\
+         <span class=\"dtx-strut\" style=\"height:{ascent}pt;\"></span>",
+    );
+    // No whitespace between the strut and the content: they are inline-level
+    // siblings, and a text node between them would render as a real space.
+    emit_inline(nested, bx, ctx);
+    close_run(nested, ctx);
+    nested.push_str("</span>\n");
+}
+
+/// Whether every `draw-text` run in `elems` is anchored at the graphics
+/// box's OWN origin — `pt == (0, 0)`, the point `svg::emit_graphics` maps to
+/// the wrapper's top-left/baseline anchor.
+///
+/// This is the whole test for "is this box POSITIONING its contents, or
+/// merely WRAPPING them". A wrapper is how a package makes an inline box out
+/// of content it has already laid out — `easytable` overlays a table and its
+/// rules with two `draw-text (x, y)` at the callback's own point, `figbox`
+/// and `enumitem` wrap a single one — and for those, in-flow is both
+/// correct and reflowable, so nothing changes. A run at any other point is
+/// the document placing content deliberately, and is honoured
+/// ([`emit_placed_text`]).
+///
+/// ALL-OR-NOTHING per graphics box, deliberately: the runs of one
+/// construction share a coordinate frame, and mixing an in-flow row (whose
+/// baseline the browser picks) with a placed one (whose baseline is the
+/// document's) puts the two rows in different frames. `\normal-overset` is
+/// exactly this shape — its base row's x-offset is zero whenever the base is
+/// the wider of the two, so a per-run choice would flow the base and place
+/// the accent above where the base is not.
+///
+/// Only the run's ANCHOR `pt` is tested, never the per-box `dx` beside it.
+/// `pt` is the point the DOCUMENT chose; `dx` is where the run's own line
+/// breaker put each box WITHIN the run, left to right from that point — which
+/// is exactly what inline flow reproduces for free. Counting a non-zero `dx`
+/// as "off-anchor" pulled `enumitem`'s bullets out of flow, since a bullet
+/// label is one `draw-text pt` whose run happens to be a `hskip` followed by
+/// the mark; the placement was equivalent, but it traded a reflowing bullet
+/// for a pinned one and gained nothing.
+///
+/// `Group`/`Clip` recurse because `svg::emit_graphics`' own walker passes its
+/// `tx`/`ty` through them unchanged, so a run inside one is in the same
+/// frame as a run outside it.
+fn all_nested_text_at_anchor(elems: &[GraphicsElem]) -> bool {
+    /// `draw-text` points are built by arithmetic on the callback's own
+    /// `(x, y)` — `x +' (w -' w-main) *' 0.5` is exactly zero when the two
+    /// widths are equal, but only to within the rounding of the subtraction
+    /// that produced them. A tolerance far below a rendered pixel keeps
+    /// "the author wrote the anchor" from turning on the last bit.
+    const EPS: f64 = 1e-9;
+    elems.iter().all(|elem| match elem {
+        GraphicsElem::Text { pt, .. } => pt.0 .0.abs() < EPS && pt.1 .0.abs() < EPS,
+        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => {
+            all_nested_text_at_anchor(inner)
+        }
+        _ => true,
+    })
 }
 
 /// Slice 2 (design doc §4 "Math"): MathML is not recoverable (structure is
@@ -812,14 +932,24 @@ fn emit_math_svg(
     if glyphs.is_empty() && rules.is_empty() {
         return;
     }
+    // Whether this run's `draw-text` rules are POSITIONING their contents or
+    // merely wrapping them — see [`all_nested_text_at_anchor`]. A big
+    // operator's limits reach this function rather than
+    // [`emit_graphics_box`]: `text-in-math` folds the operator's own
+    // `inline-graphics` into the enclosing math run's `rules`, which also
+    // shifts its `pt` by wherever the operator sits in the run, so even a
+    // single `draw-text (x, y)` is off-anchor once it is not the run's first
+    // atom.
+    let placed = !all_nested_text_at_anchor(rules);
     // A math box that draws NOTHING of its own — no glyphs, and every rule
     // a `draw-text` — must not emit the wrapper, for exactly the reason
     // [`emit_graphics_box`] does not: the wrapper would reserve the box's
     // full size a SECOND time, on top of the nested content's own. Both
     // `\paren`-style decorations `latexcmds` builds out of `draw-text` are
     // this shape, and each arrived under a blank rectangle as tall as the
-    // equation.
-    if glyphs.is_empty() && rules.iter().all(is_pure_text) {
+    // equation. Placed content is out of flow, so there is no second
+    // reservation then and the wrapper is what the placement is relative to.
+    if !placed && glyphs.is_empty() && rules.iter().all(is_pure_text) {
         let mut nested = String::new();
         emit_text_only(&mut nested, rules, ctx);
         out.push_str(&nested);
@@ -863,14 +993,20 @@ fn emit_math_svg(
             depth,
             0.0,
             height,
-            &mut |_svg, cbx, _x, _y| emit_nested_text(&mut nested, cbx, ctx),
+            &mut |_svg, cbx, x, y| {
+                if placed {
+                    emit_placed_text(&mut nested, cbx, x, y, ctx)
+                } else {
+                    emit_nested_text(&mut nested, cbx, ctx)
+                }
+            },
         );
     }
     let _ = writeln!(
         out,
         "<span class=\"math\" style=\"position:relative; display:inline-block; \
          {} vertical-align:{}pt;\">",
-        wrapper_size(width, total_h, !nested.is_empty()),
+        wrapper_size(width, total_h, !placed && !nested.is_empty()),
         -depth,
     );
     out.push_str(&drawing);

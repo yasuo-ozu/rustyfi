@@ -626,11 +626,17 @@ fn goto_name_link_and_matching_destination_frame_wire_together() {
     );
 }
 
-/// The invariant that defines this backend: NOTHING
-/// in reflow output is absolutely positioned. `left:` is never emitted at
-/// all; every occurrence of the substring `top:` must be part of
-/// `margin-top:` (a legitimate flow property), never a bare CSS `top`
-/// positioning declaration.
+/// The invariant that defines this backend: no RUN, PARAGRAPH, FRAME or
+/// TABLE is placed at a coordinate — the reader's browser lays the document
+/// out, so `left:` is never emitted for flowing content and every occurrence
+/// of the substring `top:` is part of `margin-top:` or another flow-safe
+/// longhand, never a bare CSS `top`.
+///
+/// The two exceptions are both DRAWING-scoped and both live in the
+/// stylesheet, where the assertion below counts them: see the comment on
+/// that count. This fixture is deliberately made of plain lines and a frame,
+/// with no math or graphics box in it, so its BODY exercises the strict form
+/// of the rule.
 #[test]
 fn reflow_output_never_uses_absolute_positioning() {
     let vboxes = vec![
@@ -649,24 +655,36 @@ fn reflow_output_never_uses_absolute_positioning() {
         !body.contains("position:absolute") && !body.contains("position: absolute"),
         "reflow content must never use position:absolute:\n{body}"
     );
-    // The STYLESHEET has exactly one absolute rule, and it is a DRAWING
-    // layer, not page positioning: a framed block's decoration is stretched
-    // over its own relatively-positioned box (`css.rs`'s `svg.frame-deco`,
-    // the same licence the inline `svg`/math wrappers already have — see
-    // this module's doc comment). Pinned by count so a second one cannot
-    // arrive unnoticed.
+    // The STYLESHEET has exactly TWO absolute rules, and NEITHER is page
+    // positioning — both are scoped to one relatively-positioned inline or
+    // block box, the same licence the inline `svg`/math wrappers already
+    // have (see this module's doc comment):
+    //
+    // - `svg.frame-deco`, a framed block's decoration stretched over its own
+    //   box;
+    // - `.dtx`, one row of a `draw-text` construction placed inside its own
+    //   math/graphics wrapper. It was ONE until `\overset`/`\underset` and
+    //   every big operator carrying limits were found rendering their rows
+    //   side by side in source order — `\underset{m}{Y}` as `Y m` — because
+    //   flow has no way to say "above" and the wrapper-local coordinates the
+    //   SVG walker computes for each row were being discarded. See
+    //   `inline.rs`'s `emit_placed_text`, and `all_nested_text_at_anchor`
+    //   for the (unchanged) case where flow IS the right answer.
+    //
+    // Pinned by count so a THIRD one cannot arrive unnoticed.
     let sheet = html.split("<style>").nth(1).expect("a stylesheet");
     let sheet = sheet.split("</style>").next().unwrap();
     assert_eq!(
-        sheet.matches("position: absolute").count()
-            + sheet.matches("position:absolute").count(),
-        1,
+        sheet.matches("position: absolute").count() + sheet.matches("position:absolute").count(),
+        2,
         "unexpected absolute positioning in the stylesheet:\n{sheet}"
     );
-    assert!(
-        sheet.contains("svg.frame-deco"),
-        "the one absolute rule should be the decoration layer:\n{sheet}"
-    );
+    for rule in ["svg.frame-deco", ".dtx {"] {
+        assert!(
+            sheet.contains(rule),
+            "the absolute rules should be `{rule}` and the other one:\n{sheet}"
+        );
+    }
     // `top:`/`left:` are allowed only as the tail of a flow-safe longhand
     // (`margin-top`, `border-top`, `padding-left`, … — used by the static
     // `.clearpage`/`aside.footnote`/`nav.toc` stylesheet rules, `css.rs`),
@@ -2263,6 +2281,128 @@ fn a_text_only_math_box_emits_no_sized_wrapper() {
     );
 }
 
+/// A `draw-text` run anchored anywhere BUT the box's own origin is the
+/// document PLACING content, and the placement is honoured
+/// (`inline.rs`'s `emit_placed_text`).
+///
+/// This is how every stacked math construction in the corpus is built:
+/// `latexcmds`' `\overset`/`\underset`/`\normal-overset` and each big
+/// operator carrying limits is one `inline-graphics` holding two or three
+/// `draw-text`s, one per row, differing only in their point. Rendered in
+/// flow they came out side by side in source order — `\underset{m}{Y}` as
+/// `Y m`, `\normal-overset{TOP}{BASE}` as `BASETOP` — while the SVG walker
+/// was computing the right wrapper-local coordinates for each row and the
+/// backend discarded them.
+///
+/// The three things that have to hold, and each of which was wrong:
+/// 1. every row is placed, not appended;
+/// 2. the ACCENT row lands above the BASE row (the bug was that "above" had
+///    no expression in flow at all, so it became "after");
+/// 3. `top` is the row's BASELINE minus that row's OWN ascent — the strut
+///    carries the ascent, which is what makes `top` independent of whatever
+///    font the reader's browser resolves the text to.
+#[test]
+fn an_off_anchor_draw_text_row_is_placed_above_the_row_it_accents() {
+    // `\normal-overset`-shaped: a base row on the box's baseline and an
+    // accent row 13pt above it, in a 24pt-tall box. `text_run` is 9pt tall.
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(80.0),
+        height: Length::pt(24.0),
+        depth: Length::pt(2.0),
+        elems: vec![
+            draw_text_at(0.0, 0.0, text_run("BASE")),
+            draw_text_at(4.0, 13.0, text_run("ACCENT")),
+        ],
+    };
+    let out = render(&[line(gfx)]);
+    let html = body_of(&out);
+
+    // (1) Both rows placed, inside the wrapper that scopes the placement.
+    let wrapper = span_body(html, "<span class=\"gfx\"")
+        .unwrap_or_else(|| panic!("no graphics wrapper emitted:\n{html}"));
+    assert_eq!(
+        wrapper.matches("class=\"dtx\"").count(),
+        2,
+        "both `draw-text` rows must be placed:\n{wrapper}"
+    );
+
+    // (3) `top = baseline - ascent`, per row. The base row's baseline is the
+    // box's own (24pt down from the wrapper's top), the accent row's is 13pt
+    // above that; both runs are 9pt tall.
+    assert!(
+        wrapper.contains("<span class=\"dtx\" style=\"left:0pt; top:15pt;\">"),
+        "the base row is at (0, 24-9):\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("<span class=\"dtx\" style=\"left:4pt; top:2pt;\">"),
+        "the accent row is at (4, 24-13-9):\n{wrapper}"
+    );
+    assert!(
+        wrapper.contains("<span class=\"dtx-strut\" style=\"height:9pt;\"></span>"),
+        "each placed row needs its own ascent as a strut, or `top` depends \
+         on the reader's font metrics:\n{wrapper}"
+    );
+
+    // (2) And so the accent really is ABOVE, not after: source order still
+    // puts BASE first, which is exactly why flow got this wrong.
+    let base = wrapper.find("BASE").expect("lost the base row");
+    let accent = wrapper.find("ACCENT").expect("lost the accent row");
+    assert!(
+        base < accent,
+        "source order should be unchanged:\n{wrapper}"
+    );
+    assert!(
+        wrapper.find("top:2pt").unwrap() > wrapper.find("top:15pt").unwrap(),
+        "the LATER row in source order is the one placed higher:\n{wrapper}"
+    );
+
+    // Still nowhere inside the `<svg>` — an HTML child there closes it and
+    // ejects the rest of the drawing (`svg.rs`).
+    for body in svg_bodies(html) {
+        assert!(
+            !body.contains("class=\"dtx\""),
+            "placed row inside an <svg>:\n{body}"
+        );
+    }
+}
+
+/// The control for the test above, and the reason it is keyed on the POINT
+/// rather than on "is this a `draw-text`": a run at the box's OWN origin is
+/// a package WRAPPING content it has already laid out, not positioning it —
+/// `easytable` overlays a table and its rules with two `draw-text (x, y)` at
+/// the callback's own point, `figbox` and `enumitem` wrap a single one. For
+/// those, in flow is both where the content belongs and the only rendering
+/// that still reflows, so nothing about them may change.
+#[test]
+fn a_draw_text_run_at_the_boxs_own_origin_stays_in_flow() {
+    let gfx = PureHorzBox::Graphics {
+        origin_independent: false,
+        width: Length::pt(80.0),
+        height: Length::pt(24.0),
+        depth: Length::pt(2.0),
+        elems: vec![
+            draw_text_at(0.0, 0.0, text_run("RULES")),
+            draw_text_at(0.0, 0.0, text_run("TABLE")),
+        ],
+    };
+    let out = render(&[line(gfx)]);
+    let html = body_of(&out);
+    assert!(
+        !html.contains("class=\"dtx\""),
+        "an at-origin run must not be placed — it would stop reflowing:\n{html}"
+    );
+    for marker in ["RULES", "TABLE"] {
+        assert!(html.contains(marker), "lost {marker}:\n{html}");
+    }
+    // …and, this being a box that draws nothing else, with no sized wrapper
+    // around it at all (`a_text_only_graphics_box_emits_no_sized_wrapper`).
+    assert!(
+        !html.contains("class=\"gfx\""),
+        "an all-at-origin text-only box must emit no wrapper:\n{html}"
+    );
+}
+
 /// The contents of the first `<span …>` in `html` whose opening tag starts
 /// with `open`, matching nested `<span>`s so an inner wrapper does not end
 /// the outer one early.
@@ -2292,8 +2432,14 @@ fn span_body<'a>(html: &'a str, open: &str) -> Option<&'a str> {
 }
 
 fn draw_text(bx: PureHorzBox) -> GraphicsElem {
+    draw_text_at(0.0, 0.0, bx)
+}
+
+/// [`draw_text`] anchored at a box-local, y-UP point — the frame
+/// `GraphicsElem`'s own coordinates use (`graphics.rs`).
+fn draw_text_at(x: f64, y: f64, bx: PureHorzBox) -> GraphicsElem {
     GraphicsElem::Text {
-        pt: (Length::ZERO, Length::ZERO),
+        pt: (Length::pt(x), Length::pt(y)),
         contents: vec![(Length::ZERO, bx)],
         width: Length::pt(40.0),
         height: Length::pt(20.0),

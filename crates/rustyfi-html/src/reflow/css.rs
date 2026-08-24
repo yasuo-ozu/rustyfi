@@ -1,6 +1,12 @@
 //! The reflow document's base stylesheet (Slice 1: "Base document CSS (max-width
 //! column, line-height, font stack, dark/light neutral)"). Everything here is
-//! FLOW layout — no `position: absolute`/`top`/`left` anywhere.
+//! FLOW layout, with exactly TWO absolute rules — `svg.frame-deco` and
+//! `.dtx`, each commented at its own definition below. Neither positions
+//! anything against the page: both are scoped to a box that has already been
+//! placed by flow and made `position: relative`, one to paint a frame's
+//! decoration over it and one to stack the rows of a `draw-text`
+//! construction inside it. `reflow_output_never_uses_absolute_positioning`
+//! pins the count, so a third cannot arrive quietly.
 //!
 //! S4 adds `ul.list`/`ol.list` spacing rules for the real
 //! `<ul>`/`<ol>`/`<li>` `block.rs`'s `VertBox::ListMark` arm now emits —
@@ -108,6 +114,16 @@ body {{\n\
   overflow: visible;\n\
   pointer-events: none;\n\
 }}\n\
+/* A `draw-text` run PLACED inside its own math/graphics wrapper\n\
+   (`inline.rs`'s `emit_placed_text`): the second — and, by design, last —\n\
+   absolute rule in this stylesheet. Like `svg.frame-deco` above it, it is\n\
+   scoped to one relatively-positioned inline box and never to the page:\n\
+   the wrapper it sits in is `position:relative`, so this places a stacked\n\
+   row within one operator, not a paragraph on a canvas. It exists because\n\
+   flow has no way to say ABOVE — see `emit_placed_text` for the argument,\n\
+   including why the strut is what makes `top` exact. */\n\
+.dtx {{ position: absolute; line-height: 0; white-space: nowrap; }}\n\
+.dtx > .dtx-strut {{ display: inline-block; width: 0; vertical-align: baseline; }}\n\
 .embed {{ margin: 0.5em 0; }}\n\
 .iframe {{ display: inline; }}\n\
 .hskip {{ display: inline-block; }}\n\

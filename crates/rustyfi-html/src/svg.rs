@@ -50,6 +50,13 @@
 //! — and invisible in the source, which is well-formed XML. Placement is
 //! unaffected: the nested boxes carry absolute coordinates of their own, so
 //! where in the DOM they sit does not move them.
+//!
+//! That last sentence is a statement about this module's CONTRACT, and it is
+//! the callback's job to hold up its end. The `(x, y)` handed to `nested` is
+//! the run's real anchor — its left edge and its BASELINE — and a consumer
+//! that appends the content and ignores them gets the wrapper origin
+//! instead, which is only the same place when the run was anchored there.
+//! `reflow::inline`'s `emit_placed_text` is where they are honoured.
 
 use rustyfi_backend::{Closing, Color, GraphicsElem, Path, PathSeg, PureHorzBox};
 use std::fmt::Write as _;

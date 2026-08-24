@@ -35,7 +35,8 @@ pub use hbox::{
 };
 pub use length::Length;
 pub use linebreak::{
-    break_into_lines, break_opportunities, fit_cell, measure_block, natural_metrics, BreakKind,
+    break_into_lines, break_opportunities, fit_cell, measure_block, natural_metrics,
+    pure_natural_metrics, BreakKind,
 };
 pub use math::{
     default_math_variant_char, math_alphanumeric_base, MathCharClass, MathGlyph, MathKind,

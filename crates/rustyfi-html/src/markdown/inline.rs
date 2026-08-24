@@ -262,9 +262,22 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // main path, not a fallback: `easytable` reaches a `tabular` through
         // a `draw-text` inside an `inline-graphics`, so by the time one is
         // seen it is already inside inline content.
+        //
+        // **Not every `Tabular` is a table.** The `math` package builds
+        // `+align` — its multi-line equation block — out of one
+        // (`math.satyh:541-574`), so an aligned equation arrives here in the
+        // same box a spreadsheet does. In the modes that DRAW or TYPESET the
+        // equation the alignment belongs to the equation and a grid around it
+        // is an artefact, so those divert; see
+        // `crate::recover::is_aligned_equation` for how the two are told
+        // apart, and `table::render_aligned_equation` for what is written
+        // instead.
         PureHorzBox::Tabular(tab) => {
             ctx.open_opaque(para);
-            if let Some(md) = super::table::render_table(tab, ctx) {
+            if draws_math(ctx.math) && crate::recover::is_aligned_equation(tab) {
+                let blocks = super::table::render_aligned_equation(tab, ctx);
+                ctx.pending_blocks.borrow_mut().extend(blocks);
+            } else if let Some(md) = super::table::render_table(tab, ctx) {
                 ctx.pending_blocks.borrow_mut().push(md);
             }
         }
@@ -347,6 +360,27 @@ fn math_flow(para: &mut Para, ctx: &Ctx, plain: &str) {
     ctx.resolve_glue(para, plain.chars().next());
     ctx.last_char.set(plain.chars().next_back());
     ctx.mono_run.set(false);
+}
+
+/// Does `mode` DRAW or TYPESET an equation, as opposed to writing out its
+/// characters?
+///
+/// The one thing the `+align` decision turns on. A mode that draws the
+/// equation has already said the alignment is the EQUATION's business, so a
+/// grid around it is an artefact of how `math.satyh` happens to build the
+/// block. A mode that writes characters has nothing else to align WITH, and a
+/// two-column text table is a defensible way to show an alignment in plain
+/// text — so `--unicode-math` keeps the grid (see `table::render_table`, which
+/// still drops the header-row promotion for it).
+///
+/// Exhaustive on purpose. A new [`crate::MathMode`] must decide which side of
+/// this it is on, and a compile error asking that question is better than a
+/// wildcard answering it silently.
+fn draws_math(mode: crate::MathMode) -> bool {
+    match mode {
+        crate::MathMode::SvgOutline | crate::MathMode::SvgText | crate::MathMode::Katex => true,
+        crate::MathMode::Unicode => false,
+    }
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) is a deliberate gap

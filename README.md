@@ -359,6 +359,42 @@ and justified prose ends only its last line that way.
   most local previewers; GitHub's image proxy refuses them, so there an image
   degrades to its alt text rather than to a broken path.
 
+### An aligned equation is not a table
+
+The `math` package builds `+align` — its multi-line equation block — out of a
+`tabular`, so an aligned equation and a spreadsheet reach the backend in the
+same box. Rendered literally, a two-row `+align` came out as a GFM pipe table
+whose **column heading was an equation**: GFM's delimiter row always follows
+row one, so the first line of the alignment was promoted to a header.
+
+An aligned equation is recognized by its construction rather than by
+resemblance — it draws no rules, every cell's only ink is an equation, and its
+columns run right, left, right, … (the `inline-fil` placement `+align` uses,
+and exactly the column pattern LaTeX's `aligned` is defined as). A grid that
+draws its own lines, one with text in any cell, or one whose cells are
+*centred* — a matrix — is a table and stays one.
+
+What is written instead depends on what the mode can say:
+
+- **`--katex`** writes one `$$\begin{aligned} … \end{aligned}$$`. The cell
+  boundary is the `&` and the row boundary is the `\\`, so the document's own
+  alignment survives exactly, including the second and later column pairs of a
+  multi-column `+align`;
+- **`--svg-math` / `--svg-outline-math`** write one block per row, with the
+  row's cells joined — a row is one equation split at the alignment point. The
+  column alignment *between* rows is lost: keeping it would mean re-deriving
+  the solved grid geometry into a composed drawing, to buy an alignment that
+  only exists for a reader whose renderer keeps the `<svg>` at all;
+- **`--unicode-math`** keeps the grid. It writes characters, and a two-column
+  text table is a defensible way to show an alignment in plain text — but the
+  grid now gets an **empty header row**, so no equation is promoted to a
+  heading. GFM has no headerless table, and an empty header is the only way to
+  say it.
+
+The block structure does not depend on whether `download-fonts.sh` has been
+run: with no font store a drawing mode degrades to characters, but that is a
+degradation of one equation's rendering, not of the document's shape.
+
 ### What does not survive
 
 Everything Markdown has no way to say is **dropped, not approximated**:

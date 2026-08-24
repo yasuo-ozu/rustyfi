@@ -20,6 +20,13 @@
 //! | bold/script/fraktur | recovered (see [`style_wrapper`]) | Unicode's Mathematical Alphanumeric Symbols encode it, so this one IS recoverable |
 //! | colour, explicit spacing | dropped / approximated | a `\,` and a `\;` are both "a gap wider than the threshold" by the time this runs |
 //!
+//! The `\begin{aligned}` row is about ONE math box, where the arrangement is
+//! carried by glyph positions and nothing delimits it. The `math` package's
+//! `+align` is not one box — it is a real `tabular` whose cells are still
+//! cells — so the Markdown backend does write `\begin{aligned}` for that, out
+//! of the grid rather than out of positions. See
+//! `markdown::table::render_aligned_equation`.
+//!
 //! **Nothing is emitted that would render differently from the PDF without
 //! saying so.** Where the structure is genuinely unavailable the characters go
 //! out as themselves, which renders as the same characters — legible, and

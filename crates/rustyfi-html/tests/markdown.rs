@@ -634,14 +634,16 @@ fn a_render_with_no_font_store_writes_characters_rather_than_an_empty_drawing() 
 /// `…</svg>は線の太さ`. The space BEFORE always survived, which is what made
 /// it easy to miss.
 ///
-/// Asserted in all four modes, because the fix is per-arm and three of the
-/// arms had to be changed.
+/// Asserted in every mode, because the fix is per-arm — each arm decides for
+/// itself whether the equation is opaque, and a new one gets it wrong by
+/// default.
 #[test]
 fn the_space_after_an_inline_equation_is_not_swallowed() {
     for mode in [
         rustyfi_html::MathMode::SvgOutline,
         rustyfi_html::MathMode::SvgText,
         rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::MathMl,
         rustyfi_html::MathMode::Unicode,
     ] {
         let md = render_math(
@@ -700,6 +702,87 @@ fn katex_writes_latex_in_dollar_delimiters() {
     );
     assert!(md.contains("$x^{2}$"), "{md}");
     assert!(!md.contains("$$"), "inline math must not be displayed: {md}");
+}
+
+/// `--mathml`: MathML Core in the document's own tree, `display="block"` when
+/// the equation is the whole paragraph and `display="inline"` when it is not.
+///
+/// The display flag is the counterpart of `$$…$$` and is not decoration: a
+/// browser sets `math-style: normal` for a block element, which puts a big
+/// operator's limits above and below at full size and sets a fraction at
+/// display proportions. Asserted as a CONTRAST — each half alone is satisfied
+/// by a renderer that emits only one of them.
+#[test]
+fn mathml_marks_a_displayed_equation_and_leaves_an_inline_one_inline() {
+    // Alone in its paragraph: displayed, and the whole paragraph is the one
+    // element.
+    let md = render_math(&[x_squared_plus_one()], rustyfi_html::MathMode::MathMl);
+    assert_eq!(
+        md.trim(),
+        // `mathvariant="normal"`: an ASCII `x` reaching a backend is a letter
+        // the document set UPRIGHT, because SATySFi writes math italic into
+        // the codepoint. Without it the browser italicises it and renders the
+        // opposite of the PDF — see `mathml::identifier`.
+        "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" class=\"math-ml\" \
+         display=\"block\"><msup><mi mathvariant=\"normal\">x</mi><mn>2</mn></msup>\
+         <mo>+</mo><mn>1</mn></math>",
+        "{md}"
+    );
+    // No drawing and no LaTeX: this mode replaces both rather than adding to
+    // them.
+    assert!(!md.contains("<svg"), "{md}");
+    assert!(!md.contains('$'), "{md}");
+
+    // With prose beside it, the same equation is inline.
+    let md = render_math(
+        &[line_of(vec![
+            text_run("see"),
+            glue(4.0),
+            PureHorzBox::Math {
+                width: Length::pt(30.0),
+                height: Length::pt(10.0),
+                depth: Length::pt(2.0),
+                glyphs: vec![
+                    math_glyph("x", 0.0, 0.0, 10.0),
+                    math_glyph("2", 6.0, 5.0, 7.0),
+                ],
+                rules: Vec::new(),
+            },
+        ])],
+        rustyfi_html::MathMode::MathMl,
+    );
+    assert!(md.contains("display=\"inline\""), "{md}");
+    assert!(!md.contains("display=\"block\""), "{md}");
+}
+
+/// Several math boxes in one paragraph become ONE `<math>` element, not one
+/// each.
+///
+/// A formula is not one box — `latexcmds`' Schrödinger equation reaches this
+/// backend as four, because each `\underset`-style construction splits the run
+/// — and four `display="block"` elements would be four centred lines where the
+/// document has one. The same merge `--katex` does for `$$…$$`.
+#[test]
+fn several_math_boxes_in_one_paragraph_become_one_mathml_element() {
+    let one = |ch: &str, dx: f64| PureHorzBox::Math {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::pt(2.0),
+        glyphs: vec![math_glyph(ch, dx, 0.0, 10.0)],
+        rules: Vec::new(),
+    };
+    let md = render_math(
+        &[line_of(vec![one("a", 0.0), one("b", 0.0)])],
+        rustyfi_html::MathMode::MathMl,
+    );
+    assert_eq!(md.matches("<math ").count(), 1, "{md}");
+    assert_eq!(md.matches("</math>").count(), 1, "{md}");
+    assert!(
+        md.contains(
+            "<mi mathvariant=\"normal\">a</mi><mi mathvariant=\"normal\">b</mi>"
+        ),
+        "{md}"
+    );
 }
 
 /// Two equations side by side must not run their delimiters together.

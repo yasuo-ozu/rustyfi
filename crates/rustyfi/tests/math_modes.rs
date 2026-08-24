@@ -1,4 +1,4 @@
-//! The four math renderings, end to end through the built binary.
+//! The five math renderings, end to end through the built binary.
 //!
 //! The unit tests in `rustyfi-html` cover each writer against hand-built
 //! glyphs. What only an end-to-end run can establish is the part that depends
@@ -490,6 +490,126 @@ fn html_katex_uses_display_delimiters_for_a_displayed_equation() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
+/// `--mathml` writes MathML Core into the document's own tree, in BOTH
+/// formats, and replaces the drawing rather than adding to it.
+///
+/// The elements are asserted by NAME rather than by "contains `<math`":
+/// `<mfrac>`/`<msubsup>`/`<munderover>` are the structure this mode exists to
+/// produce, and a writer that emitted one flat row of `<mi>`s would satisfy
+/// the weaker test while rendering as a row of letters.
+#[test]
+fn mathml_writes_core_structure_in_both_formats() {
+    if !bundled_faces_present() {
+        eprintln!(
+            "skipping: the bundled faces are absent, so the fixture's \
+             MATH-table `\\sum` and its limits never reach the recovery and \
+             there is no <munderover> to assert — run download-fonts.sh"
+        );
+        return;
+    }
+    let work = tmpdir("mathml");
+    for (ext, fmt) in [("md", "markdown"), ("html", "html")] {
+        let out = render(&work, ext, &["--format", fmt, "--mathml"]);
+        assert!(out.contains("<math "), "{fmt}: no MathML:\n{out}");
+        assert!(
+            out.contains("xmlns=\"http://www.w3.org/1998/Math/MathML\""),
+            "{fmt}: the namespace is what makes it well-formed XML:\n{out}"
+        );
+        // `\sum_{k=1}^{n}`: limits CENTRED on the operator, which is the one
+        // construct that needs `<munderover>` rather than `<msubsup>`.
+        assert!(
+            out.contains("<munderover>"),
+            "{fmt}: the big operator's limits are not set as limits:\n{out}"
+        );
+        // …with the browser told not to re-decide where they go.
+        assert!(
+            out.contains("movablelimits=\"false\""),
+            "{fmt}: an operator base must pin the position we measured:\n{out}"
+        );
+        // The fixture's `text-in-math` run: the layout splits it at every
+        // glue, so its words arrive as separate records with no space in
+        // them — `is_prose_run` cannot see them and they are not `<mtext>`.
+        // What they must NOT be is one `<mi>` per LETTER, which is eight
+        // elements where two do, and which italicises nothing correctly by
+        // accident.
+        assert!(
+            out.contains("<mi>if</mi>") && out.contains("<mi>and</mi>"),
+            "{fmt}: a folded text run came out letter by letter:\n{out}"
+        );
+        // Neither a drawing nor LaTeX.
+        assert!(!out.contains("<svg"), "{fmt}: still drawing:\n{out}");
+        assert!(!out.contains("<path d="), "{fmt}: still drawing:\n{out}");
+        assert!(!out.contains("math-tex"), "{fmt}: still writing LaTeX");
+        assert_eq!(
+            out.matches("<math ").count(),
+            out.matches("</math>").count(),
+            "{fmt}: unbalanced <math> elements"
+        );
+    }
+    // Every element must be on ONE line in the Markdown file: a renderer with
+    // `breaks: true` puts a `<br>` at every newline inside inline HTML, and a
+    // blank line ends the HTML block outright.
+    let md = render(&work, "md", &["--format", "markdown", "--mathml"]);
+    for line in md.lines().filter(|l| l.contains("<math ")) {
+        assert_eq!(
+            line.matches("<math ").count(),
+            line.matches("</math>").count(),
+            "a <math> element is split across lines:\n{line}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+/// HTML `--mathml` tells a DISPLAYED equation from an inline one, and marks a
+/// run whose drawing it could not fully account for.
+///
+/// Both halves are contrasts. `display="block"` alone is satisfied by a
+/// renderer that never emits the inline form — the vacuity that let a broken
+/// `sole_math_tex` ship — and `rustyfi-approx` alone is satisfied by a writer
+/// that marks everything, which would say nothing at all.
+#[test]
+fn html_mathml_marks_display_style_and_an_unrecovered_drawing() {
+    if !bundled_faces_present() {
+        eprintln!("skipping: bundled faces absent — run download-fonts.sh");
+        return;
+    }
+    let work = tmpdir("html-mathml-display");
+    let html = render_doc(
+        &work,
+        &display_fixture(),
+        "html",
+        &["--format", "html", "--mathml"],
+    );
+    assert!(
+        html.contains("display=\"block\""),
+        "the display upgrade never fired:\n{html}"
+    );
+    assert!(
+        html.contains("display=\"inline\""),
+        "no inline equation: the contrast is not being measured:\n{html}"
+    );
+    assert!(html.contains("class=\"para math-display\""), "{html}");
+    // The stylesheet rules the mode needs, and only in this mode. The two
+    // centring declarations are load-bearing: `math[display="block"]` is a
+    // block-level box, so the paragraph's own `text-align` does not move it.
+    assert!(html.contains("margin-inline: auto"), "{html}");
+    assert!(html.contains("width: fit-content"), "{html}");
+    let plain = render_doc(&work, &display_fixture(), "html", &["--format", "html"]);
+    assert!(
+        !plain.contains("margin-inline: auto"),
+        "the --mathml rules leaked into a render that did not ask for them"
+    );
+
+    // `math-selection.saty` draws no delimiter and no radical, so NOTHING in
+    // it is approximate — the control for the marker's other half.
+    let exact = render(&work, "html", &["--format", "html", "--mathml"]);
+    assert!(
+        !exact.contains("class=\"math-ml rustyfi-approx\""),
+        "a run with no unrecovered ink must not be marked:\n{exact}"
+    );
+    let _ = std::fs::remove_dir_all(&work);
+}
+
 // ---------------------------------------------------------------------------
 // The argv contract
 // ---------------------------------------------------------------------------
@@ -500,8 +620,13 @@ fn html_katex_uses_display_delimiters_for_a_displayed_equation() {
 /// checking one pair would pass even if a flag had been left out of it.
 #[test]
 fn the_math_flags_are_mutually_exclusive() {
-    const FLAGS: [&str; 4] =
-        ["--svg-outline-math", "--svg-math", "--katex", "--unicode-math"];
+    const FLAGS: [&str; 5] = [
+        "--svg-outline-math",
+        "--svg-math",
+        "--katex",
+        "--mathml",
+        "--unicode-math",
+    ];
     for (i, a) in FLAGS.iter().enumerate() {
         for b in &FLAGS[i + 1..] {
             let err = expect_usage_error(&["--format", "markdown", a, b]);
@@ -518,7 +643,13 @@ fn the_math_flags_are_mutually_exclusive() {
 /// nothing anywhere says the flag did nothing.
 #[test]
 fn a_math_flag_without_a_reflowed_format_is_refused() {
-    for flag in ["--svg-outline-math", "--svg-math", "--katex", "--unicode-math"] {
+    for flag in [
+        "--svg-outline-math",
+        "--svg-math",
+        "--katex",
+        "--mathml",
+        "--unicode-math",
+    ] {
         let err = expect_usage_error(&[flag]);
         assert!(
             err.contains(flag),

@@ -217,6 +217,27 @@ impl TtfFontStore {
         self
     }
 
+    /// Point the MATH font at `font`, as `default-font.satysfi-hash`'s
+    /// optional `"math"` abbrev does for a store built from a font root.
+    ///
+    /// Without this a store built from bytes has no math default at all, so
+    /// `get-initial-context` leaves `Context::math_font` at its seed — the
+    /// LATIN regular face. A text face has no `MATH` table, and every constant
+    /// math layout depends on (axis height, fraction-bar thickness, script
+    /// shifts, big-operator variants) then falls back to a guess: limits land
+    /// on top of their operator, fraction bars vanish, fences stop stretching.
+    /// It renders, and it is unmistakably wrong.
+    ///
+    /// Takes a [`FontKey`] rather than an abbrev for the same reason
+    /// [`Self::with_script_default`] does — a name the store does not carry
+    /// cannot be accepted and then silently do nothing. Get one from
+    /// [`Self::abbrev_key`].
+    #[must_use]
+    pub fn with_math_default(mut self, font: FontKey) -> Self {
+        self.math_default = Some(font);
+        self
+    }
+
     /// Builder used only by [`crate::fonts::FontRegistry::build_store`]:
     /// construct a store with the three default slots already
     /// loaded (via [`Self::load`]) plus every other configured abbrev's

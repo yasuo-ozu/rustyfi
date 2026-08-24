@@ -334,3 +334,62 @@ fn styled_math_renders_through_cid_pipeline() {
         path.display()
     );
 }
+
+/// A store built from BYTES can be given a math default, and without one the
+/// math font falls back to the Latin face.
+///
+/// This is the browser build's whole problem: `from_bytes_with_abbrevs` sets
+/// `math_default: None`, so `Context::math_font` stays at its seed — the text
+/// face — which has no `MATH` table. Every constant math layout reads then
+/// falls back to a guess and an equation collapses: limits land on their
+/// operator, fraction bars vanish, fences stop stretching. It renders, so
+/// nothing errors; it is just wrong.
+#[test]
+fn a_byte_built_store_takes_a_math_default() {
+    let path = need_math_font!();
+    let math = std::fs::read(&path).expect("read math font");
+    let text = match std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi/dist/fonts/Junicode.ttf"),
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            eprintln!("skipping: the bundled text face is absent — run download-fonts.sh");
+            return;
+        }
+    };
+
+    let store = TtfFontStore::from_bytes_with_abbrevs(
+        text,
+        None,
+        None,
+        [("lmmath".to_string(), math)],
+        "test fonts",
+    )
+    .expect("both faces must parse");
+
+    // The control: this is what the browser build ships today.
+    assert!(
+        store.default_math_font().is_none(),
+        "a byte-built store must not acquire a math default by itself",
+    );
+
+    let key = store.abbrev_key("lmmath").expect("the abbrev was registered");
+    let store = store.with_math_default(key);
+    assert_eq!(
+        store.default_math_font(),
+        Some(key),
+        "with_math_default must point the math font at the face given",
+    );
+    // And it has to be a DIFFERENT face from the text one, or the fix is
+    // pointing math back at the font that caused the problem.
+    assert_ne!(key, FontKey(0), "the math face must not be the Latin slot");
+    assert!(
+        store.math_constants(key).is_some(),
+        "the math default must resolve to a face with a MATH table",
+    );
+    assert!(
+        store.math_constants(FontKey(0)).is_none(),
+        "the bundled text face must have no MATH table — otherwise this test \
+         proves nothing about why the math default is needed",
+    );
+}

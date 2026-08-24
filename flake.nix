@@ -10,6 +10,11 @@
   # Nixpkgs ships SATySFi 0.0.11, a 0.0.x release matching the corpus's 0.0.x
   # documents, so the comparison target is pinned rather than dependent on
   # whatever a given machine happens to have.
+  #
+  # The dev shell also carries a TeX Live, for `--format latex`: a backend that
+  # emits `.tex` is only as good as the last time someone compiled its output,
+  # and "it looks like valid LaTeX" is not a test. See `texForRustyfi` below for
+  # what is in it and why.
 
   description = "rustyfi — a native Rust port of the SATySFi typesetter";
 
@@ -88,6 +93,60 @@
           };
         };
 
+      # ── the TeX Live the `--format latex` output needs ─────────────────────
+      #
+      # A curated set rather than `scheme-full`, which is ~7 GB for a handful of
+      # packages, and rather than `scheme-small` alone, which has neither
+      # `luatexja` nor `pgf` and so cannot typeset either of the two things this
+      # backend most needs to prove: Japanese, and a drawing.
+      #
+      # `lualatex` rather than `pdflatex` is the intended engine, and the CJK
+      # corpus is why. `pdflatex` cannot set Japanese at all; `xelatex` can with
+      # `fontspec`, but `luatexja` is what upstream SATySFi's own audience uses
+      # and it handles the JLreq line-breaking rules the port implements.
+      # `pdflatex` stays available for Latin-only output.
+      texForRustyfi = pkgs:
+        pkgs.texliveSmall.withPackages (ps: with ps; [
+          # Engines and the build driver. `scheme-small` already has xetex;
+          # luatex and latexmk are the additions.
+          latexmk
+          luatex
+
+          # Math. `amsmath` is the baseline; `unicode-math` is what lets a
+          # Unicode-math engine set the same characters the port's own math
+          # layout works in, rather than round-tripping them through 7-bit
+          # macro names.
+          amsmath
+          amsfonts
+          unicode-math
+          mathtools
+          lualatex-math  # unicode-math/mathtools pull this under lualatex
+
+          # Fonts, and the Japanese support that needs them. `haranoaji` is the
+          # open Japanese family; without it `luatexja` has nothing to set.
+          fontspec
+          luatexja
+          haranoaji
+
+          # Structure the recovered document actually uses: tables with the
+          # document's own rules, listings for fixed-pitch blocks, hyperref for
+          # the links and destinations the backend already records.
+          booktabs
+          multirow
+          tools          # array, longtable, multicol
+          listings
+          fancyvrb
+          hyperref
+          caption
+          geometry
+          xcolor
+          ulem
+
+          # Drawings. The elements are already vector paths, so TikZ can draw
+          # them directly rather than the figure being dropped or rasterised.
+          pgf
+        ]);
+
       # ── the home-manager module ────────────────────────────────────────────
       homeModule = { config, lib, pkgs, ... }:
         let
@@ -158,10 +217,11 @@
           rustyfi = mkRustyfi pkgs;
           # The reference typesetter the port is compared against.
           satysfi = pkgs.satysfi;
+          tex = texForRustyfi pkgs;
         in
         {
           packages = {
-            inherit rustyfi satysfi;
+            inherit rustyfi satysfi tex;
             default = rustyfi;
           };
 
@@ -188,12 +248,15 @@
               pkgs.satyrographos      # its package manager
               pkgs.poppler-utils      # pdftotext / pdfinfo — layout extraction
               pkgs.python3            # layout-tests/fidelity.py, benchmark.py
+              tex                     # `--format latex` output, actually compiled
             ];
             shellHook = ''
               echo "rustyfi dev shell — SATySFi $(satysfi --version 2>/dev/null \
                 | grep -oE '[0-9.]+' | head -1) available as the comparison target"
               echo "  layout fidelity:  python3 layout-tests/fidelity.py"
               echo "  benchmark:        python3 benchmark.py --satysfi \$(command -v satysfi)"
+              echo "  latex round-trip: rustyfi --format latex doc.saty -o doc.tex \\"
+              echo "                    && lualatex doc.tex     # xelatex/pdflatex also present"
             '';
           };
         })

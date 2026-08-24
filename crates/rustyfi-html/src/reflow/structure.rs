@@ -75,19 +75,14 @@ use super::Ctx;
 /// [`find_heading_level`] consults. Owned strings (see `Ctx::outline_by_dest`'s
 /// doc comment on why this isn't borrowed).
 pub(crate) fn outline_levels(outline: &[OutlineEntry]) -> HashMap<String, i64> {
-    outline
-        .iter()
-        .map(|entry| (entry.dest_name.clone(), entry.level))
-        .collect()
+    crate::recover::outline_levels(outline)
 }
 
-/// `register-outline`'s `level` is 0-based (`+section` registers level 0,
-/// `+subsection` level 1 — `stdjabook.satyh:548`/`:573`); HTML's heading
-/// tags are 1-based and capped at 6. A deeper-than-`<h6>` outline (unusual,
-/// but upstream never validates outline depth) collapses onto `<h6>` rather
-/// than emitting an invalid `<h7>`.
+/// `register-outline`'s 0-based `level` as an HTML heading tag NUMBER
+/// (`<h1>`..`<h6>`) — [`crate::recover::heading_depth`], which is the same
+/// 1-based, 6-capped depth Markdown's `#`..`######` uses.
 pub(crate) fn heading_tag(level: i64) -> u8 {
-    (level.max(0) as u64 + 1).min(6) as u8
+    crate::recover::heading_depth(level)
 }
 
 /// Does `bx` (or, recursively, one of its `Frame` descendants) carry the
@@ -97,38 +92,11 @@ pub(crate) fn heading_tag(level: i64) -> u8 {
 /// outermost/leftmost matching `Frame` wins — real doc classes never nest
 /// two destination frames for the same heading, so this tie-break is
 /// unobserved in practice). See this module's doc comment for why this is a
-/// structural match, not a heuristic.
-///
-/// **`InlineFrameMarker` is checked too, and that is what makes this work at
-/// all on a real document.** `inline-frame-breakable` splices its contents
-/// between a marker PAIR rather than building a `Frame`, so that the frame
-/// can split across a line break — and that is how every bundled doc class
-/// writes a section title (`stdjabook.satyh:551`, `stdjareport.satyh:445`:
-/// `inline-frame-breakable no-pads (Annot.register-location-frame label)`).
-/// Matching only `Frame`, as this did, meant no heading in any
-/// `stdjabook`/`stdjareport` document was ever promoted: the `latexcmds`
-/// manual's seven `+section`s all came out as `<p>`, with the `<nav>`
-/// linking to anchors on paragraphs. Only the START marker is consulted —
-/// the `end: true` twin carries the same `DecoId` and would match a second
-/// time for nothing.
+/// structural match, not a heuristic, and
+/// [`crate::recover::find_heading_level`] — which both backends call — for
+/// why `InlineFrameMarker` has to be checked as well as `Frame`.
 pub(crate) fn find_heading_level(bx: &PureHorzBox, ctx: &Ctx) -> Option<i64> {
-    match bx {
-        PureHorzBox::InlineFrameMarker { id, end: false, .. } => level_of_deco(id, ctx),
-        PureHorzBox::Frame { deco, contents, .. } => level_of_deco(deco, ctx).or_else(|| {
-            contents
-                .iter()
-                .find_map(|(_, inner)| find_heading_level(inner, ctx))
-        }),
-        _ => None,
-    }
-}
-
-/// `DecoId` -> destination name (S2's `ctx.dests`) -> outline level
-/// (`ctx.outline_by_dest`), the two-hop structural lookup both arms of
-/// [`find_heading_level`] share.
-fn level_of_deco(deco: &DecoId, ctx: &Ctx) -> Option<i64> {
-    let name = ctx.dests.get(deco)?;
-    ctx.outline_by_dest.get(*name).copied()
+    crate::recover::find_heading_level(bx, &ctx.dests, &ctx.outline_by_dest)
 }
 
 /// `PureHorzBox::Tabular` → a real `<table>`/`<tr>`/`<td>` (design doc §3's
@@ -138,39 +106,16 @@ fn level_of_deco(deco: &DecoId, ctx: &Ctx) -> Option<i64> {
 /// itself, mirroring how `FrameStart`/`EmbeddedBlock` carry their own
 /// pending margin.
 ///
-/// Row grouping is recovered from `TabularCellBox::x` alone: `TabularBox`
-/// does not carry the solver's `xs`/`ys` grid-line lists (those exist only
-/// on the transient `tabular::Solved` the lang-side rule callback consumes,
-/// `rustyfi-backend/src/tabular.rs`'s `Solved` vs. `TabularBox`), but
-/// `tabular::solidify_tabular` pushes cells in strict row-major order (outer
-/// loop over rows, inner over columns, `Cell::Empty` slots producing no
-/// entry at all) — so within one row, `x` (each cell's box-local left edge)
-/// is monotonically non-decreasing (later columns start further right); a
-/// new row begins exactly when `x` fails to increase. This recovers exact
-/// row/column-order grouping for the common case (no `Empty`-gap-heavy
-/// spans); a pathological grid whose first visible cell in a row happens to
-/// sit further right than the previous row's last visible cell would
-/// mis-group — accepted as the "best-effort" edge of an otherwise genuine
-/// recovery (see this module's doc comment: unlike lists, this is real
-/// recovery, not a guess, for the overwhelming common case).
+/// Row grouping is [`crate::recover::table_rows`] — recovered from
+/// `TabularCellBox::x` alone, shared with the Markdown backend, and
+/// documented there. What is NOT shared is everything below it: which grid
+/// lines the table draws ([`Borders`]) is a question only a bordered
+/// rendering asks.
 pub(crate) fn render_table(out: &mut String, tab: &TabularBox, extra_attrs: &str, ctx: &Ctx) {
     if tab.cells.is_empty() {
         return;
     }
-    let mut rows: Vec<Vec<&TabularCellBox>> = Vec::new();
-    let mut last_x: Option<f64> = None;
-    for cell in &tab.cells {
-        let x = cell.x.0;
-        let starts_new_row = match last_x {
-            None => true,
-            Some(lx) => x <= lx,
-        };
-        if starts_new_row {
-            rows.push(Vec::new());
-        }
-        rows.last_mut().expect("just pushed if empty").push(cell);
-        last_x = Some(x);
-    }
+    let rows = crate::recover::table_rows(tab);
 
     let paired;
     let rules: &[GraphicsElem] = if tab.rules.is_empty() {

@@ -17,12 +17,23 @@
 ///
 /// `--format html-reflow` still parses, as an alias of `html`, so any
 /// existing script keeps working.
+///
+/// ## What `--format markdown` means
+///
+/// `Markdown` is a SUBSET of `Html`: the same structure recovered out of the
+/// same pre-page-break box stream — headings, lists, tables, links,
+/// emphasis, code blocks, footnotes — written in Markdown's much smaller
+/// vocabulary. Everything Markdown cannot say (frames, alignment, colour,
+/// drawings, page geometry) is dropped rather than approximated. Readability
+/// is the goal; layout fidelity is explicitly not.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
     Pdf,
     /// Reflowable, semantic HTML — see this type's doc comment.
     Html,
+    /// GitHub-flavoured Markdown — see this type's doc comment.
+    Markdown,
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -34,7 +45,10 @@ impl std::str::FromStr for OutputFormat {
             // backend held `html`; that backend is gone, but the alias is
             // kept so the rename breaks nobody.
             "html" | "html-reflow" => Ok(OutputFormat::Html),
-            other => Err(format!("unknown --format {other:?} (expected pdf|html)")),
+            "markdown" | "md" => Ok(OutputFormat::Markdown),
+            other => Err(format!(
+                "unknown --format {other:?} (expected pdf|html|markdown)"
+            )),
         }
     }
 }
@@ -45,6 +59,7 @@ impl OutputFormat {
         match self {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html => "html",
+            OutputFormat::Markdown => "md",
         }
     }
 
@@ -68,10 +83,18 @@ impl OutputFormat {
     /// keeps existing reflow entries valid, but that is the smaller half of
     /// the reason. Pinned by `the_html_cache_tag_is_not_the_removed_backends`
     /// below.
+    ///
+    /// `Markdown` gets its own tag for the same reason and with the same
+    /// consequence if it does not: Markdown output is a SUBSET of HTML's, so
+    /// a cache that could not tell them apart would happily hand a `.md`
+    /// request the HTML document it stored earlier — and the stored payload
+    /// is a bare `<key>.pdf` whatever the format, so there is no extension,
+    /// no header and no magic number downstream to notice.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
             OutputFormat::Html => "html-reflow",
+            OutputFormat::Markdown => "markdown",
         }
     }
 }
@@ -106,5 +129,41 @@ mod tests {
             "html-reflow".parse::<OutputFormat>(),
             Ok(OutputFormat::Html)
         );
+    }
+
+    /// The cache stores every format's payload as a bare `<key>.pdf`, so the
+    /// tag is the ONLY thing standing between a `--format markdown` request
+    /// and the HTML document an earlier run of the same source cached. The
+    /// hazard is not hypothetical for these two in particular: Markdown's
+    /// output is a subset of HTML's, recovered from the same input by the
+    /// same code, so every other field in the key is identical.
+    #[test]
+    fn every_format_has_its_own_cache_tag() {
+        let tags = [
+            OutputFormat::Pdf.cache_tag(),
+            OutputFormat::Html.cache_tag(),
+            OutputFormat::Markdown.cache_tag(),
+        ];
+        let unique: std::collections::HashSet<_> = tags.iter().collect();
+        assert_eq!(unique.len(), tags.len(), "cache tags collide: {tags:?}");
+    }
+
+    #[test]
+    fn markdown_parses_and_names_its_own_extension() {
+        assert_eq!(
+            "markdown".parse::<OutputFormat>(),
+            Ok(OutputFormat::Markdown)
+        );
+        assert_eq!("md".parse::<OutputFormat>(), Ok(OutputFormat::Markdown));
+        assert_eq!(OutputFormat::Markdown.extension(), "md");
+        // Every format's default output name differs, or `-o` omitted would
+        // make two formats fight over one path.
+        let exts = [
+            OutputFormat::Pdf.extension(),
+            OutputFormat::Html.extension(),
+            OutputFormat::Markdown.extension(),
+        ];
+        let unique: std::collections::HashSet<_> = exts.iter().collect();
+        assert_eq!(unique.len(), exts.len(), "extensions collide: {exts:?}");
     }
 }

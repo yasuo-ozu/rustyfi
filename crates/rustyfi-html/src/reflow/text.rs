@@ -52,52 +52,12 @@ use std::collections::HashMap;
 
 use rustyfi_backend::{FontKey, GraphicsElem, PureHorzBox, TabularBox, VertBox};
 
-/// Anything below this (in pt) counts as a zero-width glue — a break
-/// opportunity or a kern, never spacing. Deliberately a hair above 0 rather
-/// than an exact comparison: the CJK pair glue's natural part is computed
-/// through several `f64` multiplications, and a 0.01pt residue is not a
-/// space.
-const GLUE_EPSILON_PT: f64 = 0.05;
-
-/// Is `c` set solid, with no inter-character space — Han, kana, Hangul, the
-/// CJK punctuation block and the full-width forms? Used only by
-/// [`wants_space`]; a false negative costs one spurious space and a false
-/// positive one missing one, so the ranges are the broad blocks rather than
-/// a Unicode script database.
-pub(crate) fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x1100..=0x11FF     // Hangul Jamo
-        | 0x2E80..=0x2EFF   // CJK radicals supplement
-        | 0x3000..=0x303F   // CJK symbols and punctuation (incl. U+3000)
-        | 0x3040..=0x30FF   // Hiragana + Katakana
-        | 0x3100..=0x312F   // Bopomofo
-        | 0x3190..=0x319F   // Kanbun
-        | 0x31F0..=0x31FF   // Katakana phonetic extensions
-        | 0x3400..=0x4DBF   // CJK ext A
-        | 0x4E00..=0x9FFF   // CJK unified ideographs
-        | 0xAC00..=0xD7AF   // Hangul syllables
-        | 0xF900..=0xFAFF   // CJK compatibility ideographs
-        | 0xFF00..=0xFF60   // full-width forms
-        | 0xFFE0..=0xFFE6
-        | 0x20000..=0x2FA1F // CJK ext B..F + compatibility supplement
-    )
-}
-
-/// Does a glue box of natural width `natural_pt`, sitting between `prev` and
-/// `next`, become a space? See this module's doc comment for the reasoning
-/// behind each clause. `prev`/`next` are `None` at a paragraph edge and
-/// either side of an opaque box (an `<svg>`, an `<img>`, a `<table>`), which
-/// count as non-CJK: a formula or figure set into Japanese prose takes the
-/// same space its inter-script glue was asking for.
-pub(crate) fn wants_space(prev: Option<char>, next: Option<char>, natural_pt: f64) -> bool {
-    if natural_pt <= GLUE_EPSILON_PT {
-        return false;
-    }
-    // Nothing to separate FROM: a leading space is trimmed by `flush_para`
-    // anyway, and emitting one here would defeat that trim inside a `<td>`.
-    let Some(p) = prev else { return false };
-    !(is_cjk(p) && next.is_some_and(is_cjk))
-}
+/// The glue rule this module's doc comment argues for lives in
+/// [`crate::recover`], because `--format markdown` needs exactly the same
+/// answer and a second copy of it would rot the next time either backend
+/// corrects it. The reasoning stays here, where it is about HTML; the
+/// decision is shared.
+pub(crate) use crate::recover::{is_cjk, wants_space};
 
 /// Does a rendered fragment hold anything a reader would see?
 ///

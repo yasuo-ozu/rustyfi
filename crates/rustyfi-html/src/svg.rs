@@ -117,6 +117,71 @@ pub(super) fn emit_graphics(
     out.push_str(&after);
 }
 
+/// One drawing as a SELF-CONTAINED `<svg>`, on a single line, in normal flow.
+///
+/// [`emit_graphics`] is not usable for this: it writes `position:absolute`
+/// with a `left`/`top` computed against an ancestor the reflow backend makes
+/// `position:relative`, and a Markdown file has no such ancestor — the
+/// drawing would be positioned against the page and land on top of the text.
+/// So this one carries no positioning at all and is sized to the drawing
+/// itself.
+///
+/// The viewport is the INK's bounding box, not the box's. A graphics box is
+/// routinely far larger than what it draws (a full-measure wrapper around a
+/// short rule), and a viewBox taken from the box would surround every figure
+/// with its own width in empty space.
+///
+/// Single-line by construction. A Markdown paragraph is one line, and a raw
+/// `<svg>` broken across lines would have blank lines and `nl2br` inserted
+/// into the middle of it by the reader's own parser. On its own line it
+/// satisfies CommonMark's HTML-block rule 7 and is passed through whole; used
+/// mid-paragraph it is inline HTML, which is equally valid.
+///
+/// `None` when the drawing has no bounding box (nothing to draw).
+///
+/// `GraphicsElem::Text` sub-boxes are DROPPED here — they are HTML, and an
+/// HTML child ejects the remainder of the drawing from the `<svg>` (see this
+/// module's own doc comment). The caller is responsible for their text; see
+/// `markdown::inline`'s `Graphics` arm.
+pub(super) fn graphics_block(elems: &[GraphicsElem]) -> Option<String> {
+    let ((lo_x, lo_y), (hi_x, hi_y)) = elems
+        .iter()
+        .filter_map(rustyfi_backend::graphics_bbox)
+        .reduce(|(alo, ahi), (blo, bhi)| {
+            (
+                (
+                    rustyfi_backend::Length(alo.0 .0.min(blo.0 .0)),
+                    rustyfi_backend::Length(alo.1 .0.min(blo.1 .0)),
+                ),
+                (
+                    rustyfi_backend::Length(ahi.0 .0.max(bhi.0 .0)),
+                    rustyfi_backend::Length(ahi.1 .0.max(bhi.1 .0)),
+                ),
+            )
+        })?;
+    let (w, h) = (hi_x.0 - lo_x.0, hi_y.0 - lo_y.0);
+    if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"gfx\" role=\"img\" \
+         width=\"{w}pt\" height=\"{h}pt\" viewBox=\"0 0 {w} {h}\">\
+         <g transform=\"translate({},{}) scale(1,-1)\">",
+        -lo_x.0, hi_y.0,
+    );
+    // Both `after` and the nested emitter are discarded: see the note above.
+    let mut after = String::new();
+    let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64| {};
+    emit_elems(&mut out, &mut after, elems, 0.0, 0.0, &mut nested);
+    out.push_str("</g></svg>");
+    // `emit_elems` ends each element with a newline; a Markdown paragraph is
+    // one line, so they are folded out rather than left to be reflowed by
+    // whatever reads the file.
+    Some(out.replace('\n', ""))
+}
+
 /// The recursive element walker (`Group`/`Clip` reenter this, not
 /// [`emit_graphics`], so a nested container never gets its own `<svg>`
 /// wrapper — exactly `place_graphics`'s own `Group`/`Clip` arms, which

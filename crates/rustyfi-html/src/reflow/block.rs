@@ -25,6 +25,11 @@ use std::fmt::Write as _;
 use rustyfi_backend::{ListMarkKind, PureHorzBox, VertBox};
 
 use super::{inline, structure, Ctx};
+// The inter-word space standing in for a rejoined line break, and which of
+// the three things a line boundary is — both shared with the Markdown
+// backend, which feeds the same values to the same rules
+// (`crate::recover`).
+use crate::recover::{LineJoin, WORD_SPACE_PT};
 
 /// Accumulated state for "the paragraph currently being built" — `text` is
 /// the flowing inline HTML gathered so far (escaped/styled runs, glue
@@ -350,33 +355,24 @@ pub(crate) fn walk_vboxes(out: &mut String, vboxes: &[VertBox], ctx: &Ctx) {
     drain_footnotes(out, ctx);
 }
 
-/// A plain inter-word space, in points, standing in for the line break
-/// between two consecutive `Line`s of one paragraph. The exact value is
-/// immaterial — it only has to be above `text::wants_space`'s zero-width
-/// threshold, since the decision it feeds is "is this a CJK pair" rather
-/// than "how wide".
-pub(crate) const WORD_SPACE_PT: f64 = 3.0;
-
-/// What a `Line`-to-`Line` boundary WITHIN one paragraph becomes, for
-/// proportional text: the browser is going to re-break the paragraph its own
-/// way, so the port's break must not survive as one.
+/// Apply [`crate::recover::line_join`] to a proportional paragraph's
+/// `Line`-to-`Line` boundary.
 ///
-/// Shared with `inline::emit_embedded_block`, which walks a nested block's
-/// lines for itself — the rule has three cases and getting one of them wrong
-/// is a silently wrong word, so there is one copy of it. (The fixed-pitch
-/// case is NOT here: only the block walker tracks whether a paragraph is set
-/// in a monospace face, and only there does a break belong to the author.)
+/// The CLASSIFICATION lives in `recover`, shared with the Markdown backend —
+/// the rule has three cases and getting one wrong is a silently wrong word,
+/// so there is one copy of it. What stays here is what the reflow backend
+/// DOES with each case, which is not shared: this one accumulates a glue on
+/// `Ctx`, and Markdown's own caller does something else with the same answer.
+///
+/// Called from `inline::emit_embedded_block` too, which walks a nested
+/// block's lines for itself. (The fixed-pitch case is NOT here: only the
+/// block walker tracks whether a paragraph is set in a monospace face, and
+/// only there does a break belong to the author.)
 pub(crate) fn rejoin_lines(text: &mut String, ctx: &Ctx) {
-    if ctx.break_hyphen.replace(false) {
-        // The breaker hyphenated here. Drop its hyphen and rejoin the word —
-        // no space either.
-        drop_break_hyphen(text);
-    } else if ends_with_hyphen(text) {
-        // An AUTHORED hyphen the breaker chose to break after (UAX#14 allows
-        // it). The hyphen stays — it is the author's — but the two halves of
-        // `code-printer` must not gain a space between them.
-    } else {
-        ctx.note_glue(WORD_SPACE_PT);
+    match crate::recover::line_join(ctx.break_hyphen.replace(false), ends_with_hyphen(text)) {
+        LineJoin::DropHyphen => drop_break_hyphen(text),
+        LineJoin::KeepHyphen => {}
+        LineJoin::Space => ctx.note_glue(WORD_SPACE_PT),
     }
 }
 
@@ -397,7 +393,7 @@ pub(crate) fn rejoin_lines(text: &mut String, ctx: &Ctx) {
 /// span that has since closed, as [`drop_break_hyphen`] does.
 fn ends_with_hyphen(text: &str) -> bool {
     let body = text.strip_suffix("</span>").unwrap_or(text);
-    matches!(body.chars().next_back(), Some('-' | '\u{2010}'))
+    body.chars().next_back().is_some_and(crate::recover::is_hyphen)
 }
 
 fn drop_break_hyphen(text: &mut String) {
@@ -407,7 +403,7 @@ fn drop_break_hyphen(text: &mut String) {
     } else {
         &text[..]
     };
-    if !matches!(body.chars().next_back(), Some('-' | '\u{2010}')) {
+    if !body.chars().next_back().is_some_and(crate::recover::is_hyphen) {
         return;
     }
     let hyphen_len = body.chars().next_back().map_or(0, char::len_utf8);

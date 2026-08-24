@@ -173,7 +173,7 @@ url = "https://example.org/another-index"
 | flag | what it does |
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
-| `--format <fmt>` | `pdf` (default) or `html` — see [HTML output](#html-output) |
+| `--format <fmt>` | `pdf` (default), `html` or `markdown` — see [HTML output](#html-output) and [Markdown output](#markdown-output) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |
@@ -283,6 +283,115 @@ they have it and a sensible generic if they do not.
 - **A `draw-text` run's text follows its drawing** instead of sitting at its
   point inside it: HTML content cannot live inside an `<svg>`, and there are
   no page coordinates left to place it at.
+
+## Markdown output
+
+```console
+$ rustyfi --format markdown doc.saty   # -> doc.md
+```
+
+`--format markdown` is a **subset of `--format html`**. It reads the same
+pre-page-break block stream and recovers the same structure through the same
+code — headings from `register-outline`, lists from the `list-mark` boxes,
+tables from a `tabular`'s own cell positions, links, emphasis, the CJK
+spacing rule, the line breaker's own hyphens. It then writes GitHub-flavoured
+Markdown, which can say much less.
+
+**Readability is the goal; layout fidelity is explicitly not.** Nothing here
+tries to look like the PDF. What it tries to be is a document you would be
+willing to read in a terminal, paste into an issue, or feed to a diff.
+
+What survives: `#`..`######` headings, `-`/`1.` lists with real nesting,
+`*emphasis*` and `**strong**`, GFM pipe tables, `[text](url)` links, fenced
+code blocks, GFM `[^1]` footnotes with their definitions collected at the
+foot, and reference-style images.
+
+Two things come out **better** than in HTML, both because a fence is a
+stronger container than a `<p>`:
+
+- **a code block keeps its indentation.** In HTML it is lost, because the
+  `inline-skip` carrying it collapses like any other glue. Here it is divided
+  back into columns by the fixed-pitch character advance measured from the
+  block's own runs — `code.satyh` sizes the indent in exact multiples of it,
+  so this recovers the source's own column count rather than estimating it;
+- **a footnote is a real footnote**, `[^1]` plus a definition, rather than an
+  `<aside>` wedged after the paragraph because there is no page foot left.
+
+Detecting a code block is also stricter than HTML's "every run is
+fixed-pitch", which misses every `+code` block containing Japanese — a
+fixed-pitch Latin face has no CJK glyphs, so those characters are set in the
+document's own face and the paragraph reads as mixed. Markdown keys on the
+structure instead: `code.satyh` ends every source line with an `inline-fil`,
+and justified prose ends only its last line that way.
+
+### The three decisions with no good answer
+
+- **Math is emitted as its characters, in reading order.** It is unrecoverable
+  as source: `${\frac{a}{b}}` is laid out during evaluation into a flat list
+  of glyphs with coordinates, and no `\frac` node survives — the same reason
+  the HTML backend draws an `<svg>` instead of MathML. An inline `<svg>` was
+  rejected here because it stops being Markdown (GitHub and every other
+  sanitizing renderer strip it, and a wall of `<text x= y=>` is not a legible
+  raw file); a bare `[math]` placeholder was rejected because `latexcmds`'
+  manual is math in nearly every paragraph. So the glyphs are sorted by their
+  own x offsets and written out, with two pieces of two-dimensional structure
+  recovered: **scripts** become Unicode superscript/subscript characters where
+  one exists (`x²`, `∑ₐᵇ`) and `^q`/`_q` where none does, and **fractions**
+  are split at the bar — which survives as a wide flat fill — into
+  `(a+b)/(c+d)`. **What is lost**: radicals (the sign is a path, not a glyph,
+  so `√` is not written and `√(1-v²/c²)` reads as its contents alone),
+  matrices and aligned environments, nested fractions beyond one level, and
+  anything whose meaning is carried by position rather than by its characters.
+- **Graphics become `[graphic]`.** There is no Markdown for a vector drawing,
+  and dropping them silently is the worst of the options: a reader of
+  `xpath`'s manual would see paragraphs referring to figures that are not
+  there, with no indication anything was missing. So each one leaves a named
+  hole a reader can act on. Drawings whose INK is under 4pt in either
+  dimension are dropped instead — the corpus is full of hairline rules, leader
+  dots and heading underlines drawn as one-off graphics, and marking each of
+  those would bury the real figures.
+- **Images are reference-style, with a `data:` URI definition at the foot.**
+  A compile produces ONE output path, so a sidecar directory would be a
+  contract the CLI does not have and would break the moment the file is moved
+  or pasted. Reference style is what keeps the prose legible: a figure is
+  commonly a hundred kilobytes of base64, and a paragraph interrupted by two
+  screens of it is not a readable file. `![image 1][md-img-1]` in the text,
+  the payload at the bottom. Data URIs render in VS Code, Typora, pandoc and
+  most local previewers; GitHub's image proxy refuses them, so there an image
+  degrades to its alt text rather than to a broken path.
+
+### What does not survive
+
+Everything Markdown has no way to say is **dropped, not approximated**:
+
+- **frames, decorations and borders** — a blockquote is not a frame;
+- **alignment** — `\align-center` is a pair of `inline-fil`s and there is no
+  alignment syntax; nothing about the text depends on it;
+- **page breaks, running heads and folios** — already absent from the
+  pre-page-break stream, and meaningless once reflowed;
+- **colour, font and size** — no styling syntax outside emphasis and code;
+- **a paragraph's recovered indentation** — four leading spaces is an indented
+  CODE BLOCK, so reproducing it would be a lie. This is what the HTML backend
+  uses to give the third-party `enumitem` its nesting, so an `enumitem` list
+  arrives here as flat paragraphs. Its numbered labels (`(a)`, `(i)`) are
+  typeset text and survive; its drawn bullets are graphics below the size
+  threshold and do not;
+- **table rules** — GFM has one table style, and no alignment colons are
+  emitted either: a cell records where it was PLACED, not how its column was
+  declared to align;
+- **in-document anchors** — a `\ref` becomes plain text rather than a link.
+  Markdown has no anchor scheme, and renderers invent heading anchors from the
+  heading's own words, so `[Section 3](#sec:intro)` would go nowhere. The
+  cross-reference text the document typeset is already what a reader needs.
+
+One known rough edge: a **one-line** `+code` block that also contains non-Latin
+text satisfies neither code-block test — it is not all fixed-pitch, and a
+single line is trivially "all its lines end with a fil", which is true of every
+one-line paragraph in the document. It comes out as inline code spans rather
+than a fence. Nothing is lost, and a fence would cost false positives on every
+short sentence that mentions a `\command`.
+
+`--format md` is accepted as an alias for `markdown`.
 
 ## Editor support
 

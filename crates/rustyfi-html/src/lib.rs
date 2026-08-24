@@ -1,10 +1,19 @@
-//! HTML output backend (`--format html`): one continuous, self-contained,
-//! semantic web document.
+//! HTML and Markdown output: two serializations of one recovered document.
 //!
-//! The whole backend lives in the [`reflow`] submodule — see its doc comment
-//! for what the box stream becomes and why. This root module holds only what
-//! that submodule and its helpers share: the crate's error type, HTML
-//! escaping, and the `base64`/`fonts`/`image`/`svg` helper modules.
+//! `--format html` ([`reflow`]) is one continuous, self-contained, semantic
+//! web document. `--format markdown` ([`markdown`]) is a SUBSET of it —
+//! the same document structure, written in a smaller vocabulary.
+//!
+//! **The recovery itself is shared** ([`recover`]): which paragraph is a
+//! heading, where the lists and their nesting are, how a table's rows are
+//! regrouped out of a flat cell list, when a glue box is a space and when it
+//! would ruin a Japanese sentence, and whose hyphen sits at the end of a
+//! line. Every one of those was got wrong at least once before it was got
+//! right, so there is one implementation and two callers. What each backend
+//! decides for itself is only what to WRITE.
+//!
+//! This root module holds what all of them share: the crate's error type,
+//! HTML escaping, and the `base64`/`fonts`/`image`/`svg` helper modules.
 //!
 //! The document is built from the flat block stream as it stood BEFORE page
 //! breaking (`DocumentValue::reflow_source` in `rustyfi-lang`), so there are
@@ -26,9 +35,12 @@
 mod base64;
 mod fonts;
 mod image;
+mod markdown;
+mod recover;
 mod reflow;
 mod svg;
 
+pub use markdown::{render_markdown, render_markdown_ttf_with};
 pub use reflow::{
     render_html_reflow, render_html_reflow_ttf_with, render_html_reflow_ttf_with_decos,
     render_html_reflow_with_decos,

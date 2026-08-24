@@ -389,6 +389,31 @@ fn cmd_compile(m: &ArgMatches) -> anyhow::Result<()> {
             )?
             .into_bytes(),
         },
+        // Markdown: the SAME recovery as the arm above (it shares
+        // `rustyfi-html`'s structure recovery outright — headings, lists,
+        // tables, links, the CJK glue rule), serialized into a much smaller
+        // vocabulary. It takes no geometry, because Markdown has no page,
+        // and no frame decorations, because it has no borders to draw them
+        // on.
+        format::OutputFormat::Markdown => match &font_store {
+            Some(store) => rustyfi_html::render_markdown_ttf_with(
+                doc.reflow_source.as_deref(),
+                store,
+                &doc.images,
+                &doc.extras,
+                &doc.reflow_links,
+                &doc.reflow_dests,
+            )?
+            .into_bytes(),
+            None => rustyfi_html::render_markdown(
+                doc.reflow_source.as_deref(),
+                &doc.images,
+                &doc.extras,
+                &doc.reflow_links,
+                &doc.reflow_dests,
+            )?
+            .into_bytes(),
+        },
     };
     if timing {
         eprintln!(

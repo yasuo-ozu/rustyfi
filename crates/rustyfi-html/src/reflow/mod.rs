@@ -326,12 +326,7 @@ impl Ctx<'_> {
     /// (`fonts::is_monospace_family` — a name heuristic, and labelled as one
     /// there). `false` in base-14 mode, where there is no file to ask.
     pub(crate) fn is_monospace(&self, font: Option<FontKey>) -> bool {
-        let (Some(store), Some(font)) = (self.fonts, font) else {
-            return false;
-        };
-        store
-            .file_family_name(store.file_index(font))
-            .is_some_and(|f| crate::fonts::is_monospace_family(&f))
+        crate::recover::is_monospace(self.fonts, font)
     }
 
     /// One math glyph's drawn form as the FACE'S OWN OUTLINES, resolved

@@ -136,6 +136,14 @@
           tools          # array, longtable, multicol
           listings
           fancyvrb
+          # `fancyvrb` here is still the 2.8 line, which has no `breaklines`
+          # at all — `\fvset{breaklines=true}` is a fatal xkeyval error, not a
+          # silent no-op. `fvextra` is the package that adds it (and
+          # `breakanywhere`, which is what a code listing with no spaces in
+          # its long lines actually needs). `--format latex` wraps every code
+          # block in a `Verbatim`, so without this every over-long listing
+          # line runs off the page.
+          fvextra
           hyperref
           caption
           geometry

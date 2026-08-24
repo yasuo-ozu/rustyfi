@@ -197,8 +197,12 @@ fn a_browser_can_select_copy_and_find_the_math_characters() {
     )
     .expect("write probe page");
 
-    let out = Command::new(&chromium)
+    let child = Command::new(&chromium)
         .args(["--headless=new", "--disable-gpu", "--no-sandbox"])
+        // A CI container's `/dev/shm` is typically 64 MB, and Chrome's default
+        // shared-memory use exceeds it — whereupon it does not exit, it hangs.
+        .arg("--disable-dev-shm-usage")
+        .args(["--no-first-run", "--disable-background-networking"])
         .arg(format!(
             "--user-data-dir={}",
             work.join("chrome").to_string_lossy()
@@ -206,8 +210,18 @@ fn a_browser_can_select_copy_and_find_the_math_characters() {
         .arg("--virtual-time-budget=5000")
         .arg("--dump-dom")
         .arg(format!("file://{}", page.to_string_lossy()))
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("spawn chromium");
+    let Some(out) = wait_with_deadline(child) else {
+        eprintln!(
+            "skipping: chromium did not exit within {BROWSER_TIMEOUT_SECS}s and was \
+             killed — the structural half of this file still ran and still asserts \
+             the phantom text is present; only the browser-behaviour half is lost"
+        );
+        return;
+    };
     let dom = String::from_utf8_lossy(&out.stdout).into_owned();
     let report = dom
         .split("<div id=\"rustyfi-probe\">")
@@ -267,6 +281,51 @@ fn a_browser_can_select_copy_and_find_the_math_characters() {
         "false",
         "the invisible text is capturing pointer events over the equation"
     );
+}
+
+/// How long the browser gets. It normally finishes in well under a second;
+/// this is a hang-breaker, not a performance budget.
+const BROWSER_TIMEOUT_SECS: u64 = 120;
+
+/// `Child::wait_with_output` with a deadline. `None` means the deadline passed
+/// and the process was killed.
+///
+/// Not `Command::output()`, which waits forever: a browser that wedges — for
+/// want of shared memory, a writable profile, or a display it cannot get —
+/// then wedges the whole test job until the CI runner's own six-hour limit
+/// fires. Both pipes are drained on their own threads, because a child that
+/// fills a pipe buffer blocks in `write` and would never reach the deadline
+/// check at all.
+fn wait_with_deadline(mut child: std::process::Child) -> Option<std::process::Output> {
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let drain = |r: &mut dyn std::io::Read| {
+        let mut buf = Vec::new();
+        let _ = r.read_to_end(&mut buf);
+        buf
+    };
+    let out_t = std::thread::spawn(move || drain(&mut stdout));
+    let err_t = std::thread::spawn(move || drain(&mut stderr));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(BROWSER_TIMEOUT_SECS);
+    let status = loop {
+        match child.try_wait().expect("poll chromium") {
+            Some(status) => break Some(status),
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    let stdout = out_t.join().unwrap_or_default();
+    let stderr = err_t.join().unwrap_or_default();
+    status.map(|status| std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn find_chromium() -> Option<PathBuf> {

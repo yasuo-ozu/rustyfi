@@ -459,6 +459,25 @@ fn flush_para(
                         "<h{tag} class=\"heading\" data-outline-level=\"{level}\"{style}>{trimmed}</h{tag}>\n"
                     );
                 }
+                // `--katex`: an equation that is the whole of its paragraph
+                // was DISPLAYED, and display style is not decoration — KaTeX
+                // sets `\sum`'s limits above and below at full size for
+                // `\[…\]` and beside a shrunken operator for `\(…\)`. This is
+                // the first point at which the whole paragraph is visible, so
+                // it is where the two can be told apart; see
+                // `text::sole_math_tex`.
+                None if super::text::sole_math_tex(trimmed).is_some() => {
+                    let latex =
+                        super::text::sole_math_tex(trimmed).expect("just matched");
+                    let style = style_attr(&[&margin]);
+                    // `writeln!` rather than the `write!(…\n)` its neighbours
+                    // use: identical bytes, and it does not add to this file's
+                    // existing crop of `clippy::write_with_newline`.
+                    let _ = writeln!(
+                        out,
+                        "<p class=\"para math-display\"{style}>\\[{latex}\\]</p>"
+                    );
+                }
                 None => {
                     let align = match para.alignment() {
                         Some(a) => format!(" data-align=\"{a}\""),

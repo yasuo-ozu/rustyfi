@@ -68,6 +68,9 @@ use para::Para;
 /// buffers.
 pub(crate) struct Ctx<'a> {
     fonts: Option<&'a TtfFontStore>,
+    /// How an equation is written — see [`crate::MathMode`]. All three modes
+    /// are reachable here; this is the backend the choice was invented for.
+    math: crate::MathMode,
     /// `DecoId -> action` for every `register-link-to-uri`/`-to-location`
     /// call the compile driver observed firing. The `DecoId` a `Frame` or an
     /// `InlineFrameMarker` carries is the SAME one, so this is an exact match
@@ -245,21 +248,32 @@ fn canonical_images(images: &[ImageResource]) -> HashMap<usize, usize> {
 /// so a code block comes out as ordinary prose. That is the same degradation
 /// the HTML backend takes, for the same reason, and the CLI always has a
 /// store.
+/// `math` chooses how equations are written ([`crate::MathMode`]) and is a
+/// required argument rather than an option with a default, unlike the HTML
+/// backend's. That is deliberate: this backend's default CHANGED — it drew
+/// Unicode characters and now draws outlines — so a caller that did not
+/// restate its choice would have silently got different output, and there is
+/// no reading of "unspecified" that is right for every caller.
+#[allow(clippy::too_many_arguments)]
 pub fn render_markdown(
     source: Option<&[VertBox]>,
     images: &[ImageResource],
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
-    render_markdown_impl(source, images, extras, links, dests, None)
+    render_markdown_impl(source, images, extras, links, dests, None, math)
 }
 
 /// [`render_markdown`] under a real [`TtfFontStore`] — the full-fidelity
-/// entry point the CLI uses. The store is read for exactly one thing: whether
-/// a run's face is fixed-pitch, which is what tells a code block from a
-/// wrapped paragraph. Nothing is embedded; there is nowhere in Markdown to
-/// embed it.
+/// entry point the CLI uses. The store is read for two things: whether a
+/// run's face is fixed-pitch, which is what tells a code block from a wrapped
+/// paragraph, and — under [`crate::MathMode::SvgOutline`] — the glyph outlines
+/// an equation is drawn from. No font FILE is embedded; there is nowhere in
+/// Markdown to embed one, which is also why the outlines are drawn as paths
+/// rather than named as a face.
+#[allow(clippy::too_many_arguments)]
 pub fn render_markdown_ttf_with(
     source: Option<&[VertBox]>,
     store: &TtfFontStore,
@@ -267,10 +281,12 @@ pub fn render_markdown_ttf_with(
     extras: &DocExtras,
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
-    render_markdown_impl(source, images, extras, links, dests, Some(store))
+    render_markdown_impl(source, images, extras, links, dests, Some(store), math)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_markdown_impl(
     source: Option<&[VertBox]>,
     images: &[ImageResource],
@@ -278,9 +294,11 @@ fn render_markdown_impl(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
     font_store: Option<&TtfFontStore>,
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
     let ctx = Ctx {
         fonts: font_store,
+        math,
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests
             .iter()

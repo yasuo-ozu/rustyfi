@@ -41,6 +41,14 @@
 ///   paragraph line full of pipes directly above one is read as its header
 ///   row, so the safe place to decide is nowhere;
 /// - `~` — GFM strikethrough;
+/// - `$` — a math delimiter. Not CommonMark, but every renderer that
+///   understands `--katex`'s output understands it, and this backend now
+///   EMITS `$…$`. So a document's own `$100` sitting beside an equation would
+///   pair with that equation's opening delimiter and swallow the prose
+///   between them; under a `dollars`-convention reader (`markdown-it-texmath`,
+///   Pandoc's `tex_math_dollars`) the whole span disappears into a formula.
+///   Escaped unconditionally, in every math mode: whether a later paragraph
+///   emits a delimiter is not a property of this run;
 /// - `&` — only when it opens something entity-shaped (`&amp;`, `&#8212;`),
 ///   since a bare ampersand between words is literal in CommonMark and
 ///   escaping every one of them is pure noise.
@@ -49,7 +57,7 @@ pub(super) fn inline(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '|' | '~' => {
+            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '|' | '~' | '$' => {
                 out.push('\\');
                 out.push(c);
             }

@@ -1,0 +1,23 @@
+% An INLINE equation and a DISPLAYED one in the same document, which is what
+% it takes to test that the two are told apart.
+%
+% A displayed equation is not a distinct construct in the box stream: what
+% makes one displayed is that its paragraph holds nothing else. So the second
+% `+p` below is one `${…}` and no prose, and the first has words around it —
+% and every backend's display detection is that difference and nothing more
+% (`markdown::para`'s `display_math`, `reflow::text`'s `sole_math_tex`).
+%
+% Kept apart from `math-selection.saty` rather than added to it: that fixture
+% asserts an exact count of math runs, and a fourth would make it fail for a
+% reason that has nothing to do with what it measures.
+
+@require: stdja-mini
+@require: math
+
+document (|
+  title = {Display and inline math};
+  author = {yasuo};
+|) '<
+  +p { inline: ${\forall \epsilon} in a sentence. }
+  +p { ${\sum_{k=1}^{n} k} }
+>

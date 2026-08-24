@@ -68,6 +68,42 @@ pub(super) enum Piece {
     /// the paragraph turns out to be a code block, where the markup would be
     /// literal text.
     Markup { md: String, plain: String },
+    /// An equation as LaTeX (`--katex`), still undelimited.
+    ///
+    /// Kept apart from [`Piece::Markup`] for one reason: whether it is written
+    /// `$…$` or `$$…$$` is not a property of the equation but of the
+    /// PARAGRAPH around it, and is therefore not knowable when the box is
+    /// walked. An equation that is the whole of its paragraph was DISPLAYED —
+    /// nothing else can be alone in a block — and every renderer that
+    /// understands `$$` sets it centred, on its own line, with big operators
+    /// carrying their limits above and below. An equation with prose beside it
+    /// was inline. Deciding at render time, where the whole paragraph is
+    /// visible, is the same deferral this module exists for; see
+    /// [`Para::sole_math`].
+    ///
+    /// `plain` is the reading-order text, for a code fence — where `$x^2$`
+    /// would be literal characters rather than an equation.
+    Math { latex: String, plain: String },
+    /// An equation as an inline `<svg>` (`--svg-math`, `--svg-outline-math`),
+    /// in BOTH the shapes it may take.
+    ///
+    /// Two strings rather than one for the same reason [`Piece::Math`] holds
+    /// undelimited LaTeX: whether the drawing may be broken across lines is a
+    /// property of the PARAGRAPH, not of the equation, and is not known when
+    /// the box is walked. `inline` is one line, safe anywhere; `block` is
+    /// indented one element per line and is only legal where the drawing is
+    /// its own HTML block. `crate::mathsvg::Wrap` has the CommonMark argument
+    /// for why the distinction is forced rather than chosen.
+    ///
+    /// Both are built up front. The alternative — keeping the glyphs and
+    /// rendering at flush time — would put a lifetime on [`Para`] and thread
+    /// it through the whole block walker to save re-running a font lookup a
+    /// few dozen times per document.
+    MathSvg {
+        inline: String,
+        block: String,
+        plain: String,
+    },
     /// An emphasis delimiter. Kept distinct from [`Piece::Markup`] because a
     /// Markdown delimiter may not sit against the whitespace inside its own
     /// span (`* text *` is not emphasis) — see [`Para::render`], which moves
@@ -232,7 +268,11 @@ impl Para {
     /// A code block comes back WITHOUT its fence, flagged
     /// [`Rendered::code`]: the writer keeps consecutive ones together in a
     /// single fence, which it cannot do once they are already wrapped.
-    pub(super) fn render(&self, advance: Option<f64>) -> Option<Rendered> {
+    /// `in_cell` says this paragraph is a table cell's content rather than a
+    /// block of its own, which decides whether a lone equation may be
+    /// upgraded to a display block or pretty-printed — see
+    /// [`Para::display_math`].
+    pub(super) fn render(&self, advance: Option<f64>, in_cell: bool) -> Option<Rendered> {
         if !self.open {
             return None;
         }
@@ -240,7 +280,7 @@ impl Para {
         let body = if code {
             self.render_code(advance)
         } else {
-            self.render_prose()
+            self.render_prose(in_cell)
         };
         let trimmed = body.trim_matches(|c| c == ' ' || c == '\n');
         if trimmed.is_empty() {
@@ -265,8 +305,94 @@ impl Para {
         Some(Rendered { text, code: false })
     }
 
+    /// Is this paragraph nothing but ONE equation — i.e. was the equation
+    /// DISPLAYED rather than set inside a sentence?
+    ///
+    /// Nothing in the box stream says "display style" directly: a displayed
+    /// equation is a `line-break` over an inline sequence like any other, and
+    /// what makes it displayed is that the sequence holds nothing else. So
+    /// this is the signal, and it is exact rather than a heuristic — a
+    /// paragraph whose only ink is one math box cannot have been part of a
+    /// sentence.
+    ///
+    /// Everything without ink is ignored: the `inline-fil`s that centre the
+    /// equation, the glue around it, the line boundary, and an emphasis or
+    /// link wrapper that contributes no characters of its own.
+    ///
+    /// **Several math pieces still count as one displayed equation**, and that
+    /// is the case worth explaining. A formula is not one box: `latexcmds`'
+    /// Schrödinger equation reaches this backend as FOUR, because each
+    /// `\underset`-style construction splits the run. They are pieces of one
+    /// equation, so they are written into one `$$…$$` rather than four — four
+    /// separate display blocks would be four centred lines where the document
+    /// has one, and four inline `$…$` would leave a displayed equation set in
+    /// the middle of a paragraph.
+    ///
+    /// Returns the pieces' LaTeX in order, or `None` when the paragraph holds
+    /// anything else. A LINK anywhere declines: its brackets have to be
+    /// written around the content, and a display block cannot be a link's
+    /// text.
+    ///
+    /// `in_cell` declines outright. A table cell whose only content is an
+    /// equation is not a displayed equation — it is a cell, and the paragraph
+    /// machinery simply has no other content to look at. Upgrading it puts a
+    /// centred `$$…$$` block inside a `|` row, which every renderer sets as a
+    /// full-width display block that breaks the table; five rows of
+    /// `easytable`'s own manual are this shape. "Alone in its block" only
+    /// means "displayed" when the block is a paragraph.
+    fn display_math(&self, in_cell: bool) -> Option<Vec<&str>> {
+        if in_cell {
+            return None;
+        }
+        let mut maths = Vec::new();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Math { latex, .. } => maths.push(latex.as_str()),
+                Piece::Text { s, .. } if !s.trim().is_empty() => return None,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return None,
+                Piece::MathSvg { .. } | Piece::LinkOpen(_) => return None,
+                _ => {}
+            }
+        }
+        (!maths.is_empty()).then_some(maths)
+    }
+
+    /// Is this paragraph one drawn equation and nothing else — i.e. may its
+    /// `<svg>` be pretty-printed?
+    ///
+    /// Same question as [`Para::display_math`] asks for LaTeX, and the same
+    /// answer for a cell: a drawing inside a `|` row must stay on one line,
+    /// because a table cell is not its own HTML block and a newline inside one
+    /// ends the row.
+    fn display_svg(&self, in_cell: bool) -> bool {
+        if in_cell {
+            return false;
+        }
+        let mut svgs = 0usize;
+        for piece in &self.pieces {
+            match piece {
+                Piece::MathSvg { .. } => svgs += 1,
+                Piece::Text { s, .. } if !s.trim().is_empty() => return false,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return false,
+                Piece::Math { .. } | Piece::LinkOpen(_) => return false,
+                _ => {}
+            }
+        }
+        svgs == 1
+    }
+
     /// The paragraph as one flowing line of prose.
-    fn render_prose(&self) -> String {
+    fn render_prose(&self, in_cell: bool) -> String {
+        // A paragraph that is nothing but equations was a DISPLAYED one — see
+        // [`Para::display_math`]. Written whole and returned here, before the
+        // inline walk, because the pieces join into a single `$$…$$` rather
+        // than each getting delimiters of its own.
+        if let Some(maths) = self.display_math(in_cell) {
+            return format!("$${}$$", maths.join(" "));
+        }
+        // The same question for a drawn equation: alone in its own block, the
+        // `<svg>` may be broken across lines and indented.
+        let pretty_svg = self.display_svg(in_cell);
         let mut out = String::new();
         // An emphasis delimiter waiting for the first non-space character, so
         // it never ends up leaning against a space.
@@ -308,6 +434,36 @@ impl Para {
                 // there must not be one.
                 Piece::Newline { .. } => {}
                 Piece::Markup { md, .. } => push_markup(&mut out, &mut pending_open, md),
+                // `$…$` inline, `$$…$$` displayed — the delimiters GitHub,
+                // Pandoc, VS Code and Typora all read. (The HTML backend uses
+                // `\(…\)`/`\[…\]` instead, because KaTeX's `auto-render` and
+                // MathJax enable those by default and `$…$` by configuration;
+                // `crate::latex`'s module comment has the argument.)
+                // Inline by construction: a paragraph whose only ink is
+                // equations returned above, so reaching here means there is
+                // prose beside this one.
+                // An equation drawn as an `<svg>`. Pretty-printed only when
+                // it is the whole paragraph — see `crate::mathsvg::Wrap`, and
+                // note the raw markup is never escaped.
+                Piece::MathSvg { inline, block, .. } => push_markup(
+                    &mut out,
+                    &mut pending_open,
+                    if pretty_svg { block } else { inline },
+                ),
+                Piece::Math { latex, .. } => {
+                    // Two equations may sit side by side with nothing between
+                    // them — one construction routinely produces several math
+                    // boxes in a row, and `latexcmds`' Schrödinger equation is
+                    // five. Written flush, the closing `$` of one and the
+                    // opening `$` of the next form a literal `$$`, which every
+                    // renderer that understands display math reads as one.
+                    // Measured: `$h$$\frac{1}{2m}…` swallowed the whole
+                    // formula into a display block that never closed.
+                    if out.ends_with('$') {
+                        out.push(' ');
+                    }
+                    push_markup(&mut out, &mut pending_open, &format!("${latex}$"));
+                }
                 Piece::EmphOpen(delim) => {
                     // Two delimiters in a row would open and immediately
                     // reopen; flush the first as ordinary markup.
@@ -387,8 +543,11 @@ impl Para {
                     out.push('\n');
                 }
                 // Inside a fence there is no markup, only text — so a link
-                // contributes its URL-free text and an image its label.
-                Piece::Markup { plain, .. } => out.push_str(plain),
+                // contributes its URL-free text, an image its label, and an
+                // equation its characters rather than its LaTeX.
+                Piece::Markup { plain, .. }
+                | Piece::Math { plain, .. }
+                | Piece::MathSvg { plain, .. } => out.push_str(plain),
                 Piece::EmphOpen(_)
                 | Piece::EmphClose(_)
                 | Piece::LinkOpen(_)
@@ -579,7 +738,7 @@ mod tests {
             open: true,
             ..Para::default()
         };
-        let rendered = para.render(None).expect("some content");
+        let rendered = para.render(None, false).expect("some content");
         assert!(!rendered.code, "expected prose, got code");
         rendered.text
     }
@@ -794,7 +953,7 @@ mod tests {
             mono: true,
             ..Para::default()
         };
-        let rendered = para.render(Some(3.0)).unwrap();
+        let rendered = para.render(Some(3.0), false).unwrap();
         assert!(rendered.code);
         assert_eq!(rendered.text, "if x:\n    return");
     }
@@ -813,7 +972,7 @@ mod tests {
             mono: true,
             ..Para::default()
         };
-        assert_eq!(para.render(Some(3.0)).unwrap().text, "a * b_c");
+        assert_eq!(para.render(Some(3.0), false).unwrap().text, "a * b_c");
     }
 
     #[test]
@@ -827,7 +986,7 @@ mod tests {
             heading_level: Some(1),
             ..Para::default()
         };
-        assert_eq!(para.render(None).unwrap().text, "## Introduction");
+        assert_eq!(para.render(None, false).unwrap().text, "## Introduction");
     }
 
     /// The gap arithmetic is a division, not a guess: `code.satyh` sizes its

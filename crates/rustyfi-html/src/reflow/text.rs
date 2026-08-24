@@ -93,6 +93,95 @@ pub(crate) fn has_visible_content(html: &str) -> bool {
     }
 }
 
+/// The tag `--katex` wraps an equation in. One constant, because two places
+/// have to agree about it exactly: [`inline::emit_math_svg`] writes it and
+/// [`sole_math_tex`] reads it back.
+///
+/// [`inline::emit_math_svg`]: crate::reflow::inline
+pub(crate) const MATH_TEX_OPEN: &str = "<span class=\"math-tex\">\\(";
+/// The closing half of [`MATH_TEX_OPEN`].
+pub(crate) const MATH_TEX_CLOSE: &str = "\\)</span>";
+
+/// The LaTeX of a flushed paragraph that holds `--katex` equations and
+/// nothing else — i.e. an equation that was DISPLAYED — or `None`.
+///
+/// **Why this reads the buffer back instead of being decided where the box
+/// was walked.** Whether an equation is inline or displayed is a property of
+/// the paragraph, not of the equation: nothing in the box stream says
+/// "display style", and what makes one displayed is that its `line-break`
+/// holds nothing else. The inline emitters take `&mut String`, not `&mut
+/// Para`, so at the point the math box is seen there is no paragraph to ask —
+/// and the answer is not known yet anyway, since the rest of the line has not
+/// arrived. `block.rs`'s flush is the first place the whole paragraph exists.
+///
+/// **Why sniffing the string is safe here.** The markup being matched is this
+/// backend's OWN, written a few lines away from a shared constant, and its
+/// body is `escape_html`'d LaTeX — which by construction contains no `<`, no
+/// `&` and therefore no nested element. So "the trimmed paragraph is exactly
+/// one `math-tex` span" is decidable by looking at its two ends. It is the
+/// same layer, and the same kind of reasoning, as [`has_visible_content`]
+/// just above.
+///
+/// The distinction is worth the trouble: `\(…\)` and `\[…\]` are not two
+/// spellings of one thing. In inline style KaTeX sets `\sum`'s limits BESIDE
+/// the operator and shrinks the operator itself; in display style it sets
+/// them above and below at full size. Getting it wrong turns every displayed
+/// equation in a document into a cramped inline one.
+///
+/// **Several spans still make ONE displayed equation.** A formula is not one
+/// box: `latexcmds`' Schrödinger equation reaches this backend as four,
+/// because each `\underset`-style construction splits the run. They are pieces
+/// of one equation, so their bodies are joined into a single `\[…\]` — four
+/// separate display blocks would be four centred lines where the document has
+/// one.
+pub(crate) fn sole_math_tex(html: &str) -> Option<String> {
+    let mut rest = html.trim();
+    let mut parts: Vec<&str> = Vec::new();
+    while !rest.is_empty() {
+        rest = strip_hskip(rest);
+        if rest.is_empty() {
+            break;
+        }
+        let after_open = rest.strip_prefix(MATH_TEX_OPEN)?;
+        let end = after_open.find(MATH_TEX_CLOSE)?;
+        let inner = &after_open[..end];
+        // The body is `escape_html`'d LaTeX, so it can hold no element of its
+        // own; a `<` here means the shape is not what it looks like.
+        if inner.contains('<') {
+            return None;
+        }
+        parts.push(inner);
+        rest = after_open[end + MATH_TEX_CLOSE.len()..].trim_start();
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// Drop any leading spacing struts, and the whitespace after them.
+///
+/// **Without this the display upgrade essentially never fires**, which is how
+/// it shipped: a DISPLAYED equation is centred, and `\align-center` is a pair
+/// of `inline-fil`s that reach this backend as `<span class="hskip">`. So the
+/// paragraph does not START with the math span, `strip_prefix` fails, and
+/// every displayed equation in the document is written with inline
+/// delimiters — the exact failure [`sole_math_tex`]'s own doc comment warns
+/// about. Measured across ten corpus documents: `\[` fired once.
+///
+/// The same strut is what [`has_visible_content`] skips, and for the same
+/// reason: it carries no ink, so it cannot be evidence that the paragraph
+/// holds anything besides the equation.
+fn strip_hskip(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start();
+        let Some(after) = s.strip_prefix("<span class=\"hskip\"") else {
+            return s;
+        };
+        match after.find("></span>") {
+            Some(end) => s = &after[end + "></span>".len()..],
+            None => return s,
+        }
+    }
+}
+
 /// The document's body text style: the `(font, size)` pair the most
 /// characters are set in. `css.rs` writes it onto `body`, and `inline.rs`
 /// omits from each run's `<span>` every property that matches it — omitting

@@ -53,7 +53,7 @@ use rustyfi_backend::{
     VertBox,
 };
 
-use super::{Ctx, GlyphOutline};
+use super::Ctx;
 use crate::image;
 
 /// Append `bx`'s reflow rendering to `out`. Never touches `out`'s
@@ -977,32 +977,33 @@ fn all_nested_text_at_anchor(elems: &[GraphicsElem]) -> bool {
 /// Slice 2 (design doc §4 "Math"): MathML is not recoverable (structure is
 /// flattened to positioned glyphs by `read_math`/`layout_math_value` well
 /// before any box exists), so this renders the honest approximation instead
-/// — each glyph as positioned text, each `rules`
+/// — each glyph as an outline path from the document's own face, each `rules`
 /// element (fraction bar/radical) as an SVG path — bundled into ONE
 /// self-contained, intrinsically-sized inline `<svg>` (the design doc's
 /// "inline `<svg>` sized to the box").
 ///
 /// Two sub-layers, both anchored at the SAME wrapper `(0,0)` top-left:
-/// - **Glyphs**: native SVG `<text>` elements, positioned directly in the
-///   `<svg>`'s own native (y-DOWN) coordinate space — `MathGlyph.dx`/`dy`
-///   are box-local y-**up** offsets from the box's own baseline (the same
-///   convention `GraphicsElem::Path` points use, confirmed by the PDF
-///   writer's own `anchor_y + glyph.dy` arithmetic in its y-up space,
-///   `rustyfi-pdf`'s `place_math`), so a local
-///   `(dx, dy)` lands at SVG-native `(dx, height - dy)` — computed BY HAND
-///   here (not via a `<g transform>` flip) specifically so `<text>` glyphs
-///   are never inside a `scale(1,-1)` group, which would render them
-///   MIRRORED upside-down (SVG text has no orientation-independence the way
-///   a filled path does).
+/// - **Glyphs**: [`crate::mathsvg::emit_glyph_layer`], shared verbatim with
+///   the Markdown backend, which draws the identical equation into a
+///   self-contained `<svg>` of its own. What differs between the two is only
+///   the wrapper this function writes and where the phantom layer's
+///   invisibility comes from; the geometry, the outline lookup and the
+///   selectable-text layer are one implementation. See that module.
 /// - **Rules**: [`crate::svg::emit_graphics`] reused VERBATIM (same call
 ///   shape as [`emit_graphics_box`]) for `rules` — these ARE orientation-
 ///   independent paths, so they go through the normal `<g transform>` flip
-///   this helper already implements.
+///   that helper already implements.
 ///
-/// **`font-size` is written in USER UNITS, not `pt`, and that is the whole
-/// point of [`math_font_size_uu`]** — see that function for why writing the
-/// `pt` value with a `pt` suffix inside this viewport magnifies every glyph
-/// by exactly 4/3 while leaving `dx`/`dy` and the `rules` paths alone.
+/// **This function's own contribution is the WRAPPER**, and it is what the
+/// Markdown backend cannot share: a `position:absolute` `<svg>` inside a
+/// `position:relative` `<span class="math">`, so that a `draw-text` inside
+/// `rules` — a big operator's limits — can be placed against it
+/// ([`emit_placed_text`]) instead of flowing. A Markdown file has no such
+/// ancestor and no stylesheet, which is exactly the pair of facts
+/// `crate::mathsvg::math_block` exists to handle differently.
+///
+/// **`--katex` short-circuits all of it** and writes the equation as LaTeX
+/// for the reader's own typesetter; see the first branch below.
 fn emit_math_svg(
     out: &mut String,
     width: f64,
@@ -1013,6 +1014,43 @@ fn emit_math_svg(
     ctx: &Ctx,
 ) {
     if glyphs.is_empty() && rules.is_empty() {
+        return;
+    }
+    // `--katex`: the equation as LaTeX for the reader's own typesetter,
+    // instead of as a picture. Handled before every geometry decision below,
+    // because none of them applies — there is no viewport to size, nothing to
+    // flip and no phantom layer to hide, only a string in delimiters.
+    if ctx.math == crate::MathMode::Katex {
+        // A `draw-text` inside the rules is ordinary inline content (a big
+        // operator built out of `text-in-math`, a `\paren` decoration) and its
+        // characters are not in `glyphs`, so it has to be emitted separately
+        // or the operator disappears — there is no LaTeX for "some HTML,
+        // here".
+        //
+        // FIRST, matching the Markdown backend: a `draw-text` operator sits at
+        // the box's own origin, so `\sum_a^b` is a sigma followed by its
+        // limits, and emitting it afterwards reads as `ₐᵇ∑`. The two
+        // backends disagreed about this until an audit measured it.
+        if !rules.is_empty() {
+            let mut nested = String::new();
+            emit_text_only(&mut nested, rules, ctx);
+            out.push_str(&nested);
+        }
+        let latex = crate::latex::math_latex(glyphs, rules);
+        if !latex.is_empty() {
+            open_opaque(out, ctx);
+            // Inline delimiters unconditionally here; a paragraph that turns
+            // out to hold nothing but this equation is upgraded to `\[…\]` by
+            // `block.rs`'s flush, which is the first place the whole paragraph
+            // exists. See `text::sole_math_tex`.
+            let _ = writeln!(
+                out,
+                "{}{}{}",
+                super::text::MATH_TEX_OPEN,
+                crate::escape_html(&latex),
+                super::text::MATH_TEX_CLOSE,
+            );
+        }
         return;
     }
     // Whether this run's `draw-text` rules are POSITIONING their contents or
@@ -1049,37 +1087,19 @@ fn emit_math_svg(
         "<svg class=\"math-glyphs\" style=\"position:absolute; left:0; top:0; overflow:visible;\" \
          width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">",
     );
-    let mut phantom = Phantom::default();
-    for (i, g) in glyphs.iter().enumerate() {
-        let x = g.dx.0;
-        let y = height - g.dy.0 - g.info.rising.0;
-        // Every glyph is drawn from the face's own outline where one can be
-        // had, so the equation does not depend on the reader having the face
-        // — see [`emit_math_glyph_path`] and `Ctx::math_glyph_outline`. The
-        // characters themselves survive as invisible, selectable text
-        // ([`Phantom`]); without it a `<path>` would be uncopyable,
-        // unsearchable and unreadable to a screen reader.
-        if let Some(outline) = ctx.math_glyph_outline(g) {
-            emit_math_glyph_path(&mut drawing, &outline, g, x, y);
-            if let Some(text) = phantom_text(glyphs, i) {
-                phantom.push(text, g, x, y);
-            }
-            continue;
-        }
-        let mut style = format!("font-size:{};", math_font_size_uu(g.info.size.0));
-        if let Some(stack) = ctx.font_family_for(g.info.font) {
-            style.push_str(&format!("font-family:{stack};"));
-        }
-        if g.info.color != Color::Gray(0.0) {
-            style.push_str(&format!("fill:{};", crate::svg::css_color(g.info.color)));
-        }
-        let _ = writeln!(
-            drawing,
-            "<text x=\"{x}\" y=\"{y}\" style=\"{style}\">{}</text>",
-            crate::escape_html(&g.text),
-        );
+    // The glyph layer — all of it shared with the Markdown backend, which
+    // draws the same equation into a differently-shaped `<svg>`.
+    //
+    // `--svg-math` writes SVG's own `<text>` and needs no phantom, since the
+    // text is real; the default `--svg-outline-math` writes outline paths with
+    // the characters behind them. `false`: this document HAS a stylesheet, and
+    // `css.rs`'s `.math-glyphs .mphantom` is where that invisibility lives.
+    if ctx.math == crate::MathMode::SvgText {
+        crate::mathsvg::emit_text_layer(&mut drawing, glyphs, height, ctx.fonts, "\n");
+        drawing.push('\n');
+    } else {
+        crate::mathsvg::emit_outline_layer(&mut drawing, glyphs, height, ctx.fonts, false);
     }
-    phantom.finish(&mut drawing);
     drawing.push_str("</svg>\n");
     let mut nested = String::new();
     if !rules.is_empty() {
@@ -1110,296 +1130,4 @@ fn emit_math_svg(
     out.push_str(&drawing);
     out.push_str(&nested);
     out.push_str("</span>\n");
-}
-
-/// One `MathGlyph`'s ink, as SVG `<path>`s of the face's own outlines —
-/// placed at the same `(x, y)` the `<text>` branch would have used, which is
-/// the glyph's ORIGIN (pen position), not its top-left.
-///
-/// **Why EVERY math glyph goes this way**, not only the variant ones.
-/// A `<text>` names a face and hopes; a reader without it gets a substitute
-/// whose advances are not the ones the equation was laid out against. Math is
-/// the one place in this backend where that is fatal rather than untidy,
-/// because every glyph is positioned ABSOLUTELY (`MathGlyph::dx`/`dy`) and
-/// there is no flow to absorb the difference. Measured on the reported
-/// symptom, `\forall \epsilon \: \exists \delta` at 12pt: the port reserves
-/// 7.992pt for `∀` and lays `ε` down at that offset, while a substituted face
-/// draws the quantifier 12.000pt wide, so the two overlap. The full argument
-/// and the fallback conditions are on `Ctx::math_glyph_outline`.
-///
-/// **What was wrong before that.** `MathGlyph::gid` is `Some` exactly when the
-/// glyph the document laid out is not the one its `text` cmaps to: an
-/// OpenType MATH `MathVariants` record — a display-size big operator
-/// (`push_big_char_glyph`), a stretchy delimiter or one part of a
-/// `GlyphAssembly` (`push_delimiter_glyph`) — or an `ssty` script form
-/// (`push_char_glyph`). The PDF writer emits the id straight into the content
-/// stream (`cid.rs`'s `encode_glyph_run`); an SVG `<text>` can only address
-/// the CHARACTER, so this backend drew the base glyph and there was no
-/// spelling of `∑` that would have produced the display one.
-///
-/// **It was two symptoms of one bug, and this fixes both.** The size was the
-/// visible half; the misplacement was the consequence. Measured on the
-/// playground's "Displayed equations" example at 12pt, in Latin Modern Math:
-/// `∑` is `summation` (advance 1.056 em) and the display variant is
-/// `summation.v1` (advance 1.444 em, ink 0.056..1.387 em).
-/// `layout_math_list`'s `UpperLimit`/`LowerLimit` arms centre each limit on
-/// the base's own width (`center_offsets`) — 17.328pt, the VARIANT's advance,
-/// because the variant is what the document laid out — so `n` and `k = 1`
-/// were both centred on x = 8.664, while the base-size `∑` this backend
-/// actually painted has its ink centred on x = 6.330. Every limit sat 2.334pt
-/// right of the operator it belonged to. `∫` shows the same arithmetic
-/// without the centring: its scripts are set to the RIGHT at the base's
-/// width, so the subscript began at x = 11.988 (again the variant's advance)
-/// with a 4.008pt gap after the 7.980pt base glyph. Drawing the variant
-/// closes both, because every one of those offsets was already right about a
-/// glyph that was not being drawn.
-///
-/// **Why the outline and not a scaled `<text>`**, the cheaper repair. Scaling
-/// the base glyph by the advance ratio fixes the horizontal centring by
-/// construction but not the ink: for `∑` the ratio is 1.367 against a true
-/// height+depth ratio of 1.400 (2.5% short — fine), but for `∫` it is 1.502
-/// against 2.000, leaving the integral 25% too short. The display forms are
-/// separately drawn glyphs, not scalings of the base, and the two operators
-/// the report names disagree by enough that no single scale factor serves
-/// both. The outline is what the PDF draws, so this makes the two backends
-/// agree rather than approximately agree — and it is also the only branch
-/// here that does not depend on the reader having Latin Modern Math
-/// installed, which for these glyphs is the difference between the right
-/// shape and an arbitrary substitute.
-///
-/// **Geometry.** `d` is in design units, y-up (`svg::glyph_outline_d`); the
-/// `<text>` around it is in the math `<svg>`'s native y-DOWN space, at
-/// 1 user unit = 1 pt. So the per-element transform is the whole conversion:
-/// translate to the pen position, then `scale(s, -s)` with
-/// `s = size / units_per_em` — the y-flip that [`emit_math_svg`] deliberately
-/// does NOT apply to `<text>` (it would mirror the letters) is exactly right
-/// for a filled path, which is orientation-independent.
-///
-/// A record holding several characters emits one `<path>` per inked one, each
-/// translated by the pen offset `Ctx::math_glyph_outline` accumulated for it
-/// — already in points, so it simply adds to `x`.
-///
-/// **No `fill-rule`**, unlike every other path this backend writes. Glyph
-/// outlines are defined under NONZERO winding — SVG's default — and CFF faces
-/// in particular use overlapping contours that even-odd would punch holes in.
-/// `svg.rs`'s `Fill`/`Clip` arms say `evenodd` because they are reproducing
-/// PDF's `f*`; this is reproducing a font.
-fn emit_math_glyph_path(out: &mut String, outline: &GlyphOutline, g: &MathGlyph, x: f64, y: f64) {
-    let s = g.info.size.0 / outline.upem;
-    let mut attrs = String::new();
-    if g.info.color != Color::Gray(0.0) {
-        attrs.push_str(&format!(" fill=\"{}\"", crate::svg::css_color(g.info.color)));
-    }
-    for (d, pen) in &outline.parts {
-        let _ = writeln!(
-            out,
-            "<path d=\"{d}\" transform=\"translate({} {y}) scale({s} {})\"{attrs}/>",
-            x + pen,
-            -s,
-        );
-    }
-}
-
-/// The characters `glyphs[i]` should contribute to the document's TEXT, or
-/// `None` when it should contribute none.
-///
-/// Almost always the record's own `text`. The exception is a stretchy
-/// delimiter grown from a `GlyphAssembly`: `push_delimiter_glyph` emits one
-/// `MathGlyph` per PART — a top, some extenders, a bottom — and gives every
-/// one of them the same `text` and the same `dx`, since they are stacked in a
-/// single column. Copying that verbatim would put `(((((` in the clipboard
-/// where the page shows one tall bracket. So a record whose `text` and `dx`
-/// both repeat its predecessor's is a continuation part and stays silent;
-/// the first part already carries the character.
-///
-/// Nothing else in the corpus produces two glyph records at an identical `dx`
-/// with identical text — that would be one character painted on top of
-/// another, which is a layout bug rather than a construction.
-fn phantom_text(glyphs: &[MathGlyph], i: usize) -> Option<&str> {
-    let g = &glyphs[i];
-    if g.text.is_empty() {
-        return None;
-    }
-    if let Some(prev) = i.checked_sub(1).map(|p| &glyphs[p]) {
-        if prev.text == g.text && prev.dx == g.dx {
-            return None;
-        }
-    }
-    Some(&g.text)
-}
-
-/// The invisible, SELECTABLE text that rides with a run of outlined glyphs,
-/// carrying the characters the `<path>`s beside them draw.
-///
-/// **This is not a nicety.** A `<path>` is a shape: it cannot be selected,
-/// copied, found with the browser's in-page search, or announced by a screen
-/// reader. Outlining every math glyph without this would silently destroy all
-/// four for every equation in the document — trading one real fidelity bug
-/// for four accessibility ones. The technique is the one PDF viewers use for
-/// a scanned page with an OCR layer: paint the picture, and put the text
-/// behind it where the machinery that reads text can still find it.
-///
-/// **`fill: none` (`css.rs`'s `.math-glyphs .mphantom`), and specifically NOT
-/// `visibility: hidden` or `display: none`.** The latter two remove the
-/// element from the accessibility tree and from the selection along with the
-/// paint, which is exactly the thing being avoided; `fill: none` removes only
-/// the paint. Verified in headless chromium rather than assumed — see
-/// `crates/rustyfi/tests/html_math_selection.rs`, which drives a real browser
-/// over a real render.
-///
-/// **It steals no hit-testing from the paths.** SVG's default
-/// `pointer-events: visiblePainted` tests the FILL only where a fill is
-/// actually painted, and none is — so `elementFromPoint` over an equation
-/// returns the wrapper, not this. Selection is unaffected by that, because it
-/// walks text nodes rather than hit-testing paint. It changes no layout
-/// either: SVG text contributes nothing to the flow.
-///
-/// **ONE `<text>` per run, one `<tspan>` per glyph**, rather than a `<text>`
-/// each. Chrome serialises a selection that spans several `<text>` elements
-/// with a newline between every one, so a reader copying `∀ε : ∃δ` got each
-/// character on its own line; `<tspan>`s inside a single `<text>` are inline
-/// and copy as `∀𝜀:∃𝛿`. It is also where the wrapper's `class` and the run's
-/// shared `font-size` are paid for once instead of per glyph.
-///
-/// No whitespace is written between the `<tspan>`s or inside the `<text>`:
-/// under SVG's default `xml:space` a newline there collapses to a real space
-/// and would show up in the copied text.
-///
-/// **Document order is reading order**, because [`emit_math_svg`]'s loop
-/// walks `glyphs` in the order the math layout produced them — a base before
-/// its scripts, a numerator before its denominator — and this preserves that
-/// order.
-///
-/// The only property carried is `font-size`, and only where a glyph departs
-/// from the run's first: it sizes the selection highlight the browser paints
-/// over an invisible glyph. The FAMILY is deliberately not repeated — this
-/// text is never drawn, so naming a face would buy nothing and cost ~110
-/// bytes on every glyph in the document.
-#[derive(Default)]
-struct Phantom {
-    /// The `<tspan>`s so far, concatenated with no separator but the
-    /// occasional deliberate space (see [`Phantom::push`]).
-    spans: String,
-    /// The first glyph's size, hoisted onto the enclosing `<text>`.
-    size: Option<f64>,
-    /// The previous glyph's right edge (`dx + width`) and baseline `y`, which
-    /// is what decides whether a space belongs between it and the next.
-    prev: Option<(f64, f64)>,
-}
-
-/// Two phantom glyphs are on the SAME ROW when their baselines agree to
-/// within this many points — a threshold rather than equality because the
-/// baselines are arithmetic on `Length`s, not copies of one value.
-const PHANTOM_ROW_EPS: f64 = 0.5;
-
-/// A horizontal gap of at least this fraction of the font size becomes a
-/// space in the copied text. A word space is 0.25–0.33 em in the faces this
-/// port bundles and the widest math space (`\;`, 5/18 em) is 0.28, so this
-/// takes both and leaves italic correction and the sub-0.1 em inter-atom
-/// kerns alone.
-const PHANTOM_SPACE_EM: f64 = 0.2;
-
-impl Phantom {
-    /// Add one glyph record's characters, at the pen position the `<path>`
-    /// beside it uses.
-    ///
-    /// **Why a gap can become a space.** Nothing else can put one there:
-    /// `primitives::math_boxes_of_inline_boxes` turns the glue inside a
-    /// `text-in-math` body into bare ADVANCE and keeps no character for it,
-    /// so `${x \text!{ if and only if } y}` reaches this backend as four
-    /// glyph records reading `if`, `and`, `only`, `if` and nothing between
-    /// them. Concatenating those verbatim copies as `ifandonlyif`. The gap is
-    /// the only surviving evidence that a space was set, and reading it back
-    /// is what a PDF text extractor does with the same absolutely-placed
-    /// glyphs — `place_math` writes one `Tj` per glyph at its own point, and
-    /// poppler reconstructs the spaces the same way.
-    ///
-    /// **Same row only, and only forwards.** A script or a big operator's
-    /// limit sits on its own baseline and at an `x` that may run BACKWARDS
-    /// relative to the glyph before it (`∑` at 0, its subscript at 0.46, its
-    /// superscript back at 5.70), so a gap across rows means nothing about
-    /// reading order and must not manufacture a space.
-    fn push(&mut self, text: &str, g: &MathGlyph, x: f64, y: f64) {
-        let size = g.info.size.0;
-        if let Some((prev_right, prev_y)) = self.prev {
-            if (prev_y - y).abs() < PHANTOM_ROW_EPS && x - prev_right >= size * PHANTOM_SPACE_EM {
-                self.spans.push(' ');
-            }
-        }
-        self.prev = Some((x + g.width.0, y));
-        let attr = match self.size {
-            None => {
-                self.size = Some(size);
-                String::new()
-            }
-            Some(run) if (run - size).abs() < 1e-9 => String::new(),
-            Some(_) => format!(" style=\"font-size:{};\"", math_font_size_uu(size)),
-        };
-        let _ = write!(
-            self.spans,
-            "<tspan x=\"{x}\" y=\"{y}\"{attr}>{}</tspan>",
-            crate::escape_html(text),
-        );
-    }
-
-    fn finish(self, out: &mut String) {
-        let Some(size) = self.size else { return };
-        let _ = writeln!(
-            out,
-            "<text class=\"mphantom\" style=\"font-size:{};\">{}</text>",
-            math_font_size_uu(size),
-            self.spans,
-        );
-    }
-}
-
-/// A math glyph's `pt` font size, spelled for the inside of
-/// [`emit_math_svg`]'s viewport — i.e. in SVG USER UNITS, as a `px` length.
-///
-/// **The bug this exists to prevent.** The math `<svg>` is
-/// `width="{w}pt" viewBox="0 0 {w} {h}"`, so one user unit renders as exactly
-/// one `pt` — the deliberate "1 user unit = 1 pt" contract `svg.rs`'s module
-/// comment states, and what makes `MathGlyph::dx`/`dy` and every `rules` path
-/// coordinate emittable as a bare `Length` with no conversion. An ABSOLUTE
-/// CSS length inside that viewport does NOT get the same treatment: `pt`
-/// resolves against the CSS reference pixel *before* the viewBox transform
-/// (SVG fixes 1px = 1 user unit for absolute-unit conversion), so
-/// `font-size:12pt` becomes 16 user units and then renders at 16pt. Every
-/// glyph came out 4/3 too big while its POSITION stayed right, so glyphs
-/// overlapped each other, overflowed the fraction bars and radical overbars
-/// (which, being `rules` paths, were correctly scaled), and — because the
-/// wrapper `<span>` reserves only the box's own `height`/`depth` while the
-/// `<svg>` is `overflow:visible` — spilled ink into the lines above and
-/// below. The PDF was never affected: it positions each glyph absolutely and
-/// sets the size in the content stream's own points.
-///
-/// **Why `px` and not a bare number**, which is what "user units" literally
-/// means. A unitless length is legal in SVG only as a PRESENTATION
-/// ATTRIBUTE (`font-size="12"`); this size goes into `style="…"`, which is
-/// CSS, and CSS requires a unit on a non-zero `<length>`. Measured in
-/// chromium inside a `viewBox="0 0 100 100"`/`width="100pt"` viewport, four
-/// spellings of "12" on the same `<text>`:
-///
-/// | written                     | computed | user units |
-/// |-----------------------------|----------|-----------:|
-/// | `style="font-size:12pt"`    | `16px`   |         16 |
-/// | `style="font-size:12px"`    | `12px`   |         12 |
-/// | `style="font-size:12"`      | `12px`   |         12 |
-/// | `font-size="12"` (attribute)| `12px`   |         12 |
-///
-/// So the bare `style` spelling happens to work in Blink — Blink runs the
-/// SVG presentation-attribute grammar over the declaration — but it is
-/// invalid CSS and Gecko drops it, which would leave the glyph at the
-/// INHERITED body size with no error anywhere. `px` is the portable
-/// spelling of one user unit (SVG fixes 1px = 1 user unit), so the number
-/// is unchanged and only the unit is corrected: 12pt of document size ->
-/// `font-size:12px` -> 12 user units -> 12pt rendered.
-///
-/// Every other length inside this viewport is already unitless, because
-/// every other one is an attribute rather than CSS: `x`/`y` here, and
-/// `svg.rs`'s `d`, `stroke-width`, `stroke-dasharray` and
-/// `stroke-dashoffset`. `font-size` is the only one that had to be a
-/// declaration, which is why it was the only one that got this wrong.
-fn math_font_size_uu(size_pt: f64) -> String {
-    format!("{size_pt}px")
 }

@@ -118,7 +118,7 @@ use std::fmt::Write as _;
 
 use rustyfi_backend::{
     AnnotAction, DecoId, DocExtras, FontKey, FrameDecoration, GraphicsElem, ImageResource,
-    MathGlyph, PageGeometry, VertBox,
+    PageGeometry, VertBox,
 };
 
 use rustyfi_pdf::TtfFontStore;
@@ -130,6 +130,15 @@ pub(crate) use text::BodyStyle;
 /// Render-time state shared by every `emit_*` function in this module.
 pub(crate) struct Ctx<'a> {
     pub(crate) fonts: Option<&'a TtfFontStore>,
+    /// How an equation is written — see [`crate::MathMode`].
+    ///
+    /// Only two of the three are reachable here. [`crate::MathMode::Unicode`]
+    /// is a plain-TEXT fallback whose whole purpose is to survive a renderer
+    /// that strips markup, and an HTML document is markup by definition; the
+    /// CLI refuses `--unicode-math` with `--format html` rather than letting
+    /// it mean something arbitrary, and `inline.rs` treats it as
+    /// [`crate::MathMode::SvgOutline`] should it ever arrive anyway.
+    pub(crate) math: crate::MathMode,
     /// S2 ("Links/metadata"): `DecoId -> action` for every
     /// `register-link-to-uri`/`-to-location` call the compile driver
     /// observed firing (`DocumentValue:: reflow_links`) — built once per
@@ -289,22 +298,6 @@ pub(crate) struct Ctx<'a> {
     pub(crate) open_run: RefCell<Option<String>>,
 }
 
-/// What [`Ctx::math_glyph_outline`] resolves one `MathGlyph` to: the face's
-/// `units_per_em` — the unit every `d` below is written in — and the run's
-/// inked glyphs in pen order.
-///
-/// `parts` is a LIST rather than one path because a `MathGlyph`'s `text` is
-/// not always a single character: `primitives::math_boxes_of_inline_boxes`
-/// folds a whole `text-in-math` `InnerString` into one glyph record, so a
-/// `\text{if and only if}` inside an equation arrives here as one `MathGlyph`
-/// holding sixteen characters. Each entry's `f64` is that character's pen
-/// offset from the record's own `dx`, in POINTS (the enclosing `<svg>`'s user
-/// unit), so the caller adds it and needs no unit conversion of its own.
-pub(crate) struct GlyphOutline {
-    pub(crate) upem: f64,
-    pub(crate) parts: Vec<(String, f64)>,
-}
-
 impl Ctx<'_> {
     /// Resolve `font` to a CSS `font-family` VALUE — the real family name
     /// the font file declares, followed by generic fallbacks
@@ -315,10 +308,7 @@ impl Ctx<'_> {
     /// This NAMES the face rather than embedding it — see
     /// `fonts::reflow_font_stack` for the argument.
     pub(crate) fn font_family_for(&self, font: FontKey) -> Option<String> {
-        let store = self.fonts?;
-        let file_idx = store.file_index(font);
-        let family = store.file_family_name(file_idx)?;
-        Some(crate::fonts::reflow_font_stack(&family))
+        crate::mathsvg::font_family_for(self.fonts, font)
     }
 
     /// Whether `font` is a fixed-pitch face, read off the same family name
@@ -327,74 +317,6 @@ impl Ctx<'_> {
     /// there). `false` in base-14 mode, where there is no file to ask.
     pub(crate) fn is_monospace(&self, font: Option<FontKey>) -> bool {
         crate::recover::is_monospace(self.fonts, font)
-    }
-
-    /// One math glyph's drawn form as the FACE'S OWN OUTLINES, resolved
-    /// against this render's font store: the `units_per_em` the `d` numbers
-    /// are expressed in, and one `(d, dx_pt)` per inked glyph — `dx_pt` an
-    /// offset in POINTS from the `MathGlyph`'s own pen position.
-    ///
-    /// **Every math glyph takes this route, not just the variant ones.** A
-    /// `<text>` names a face and hopes the reader has it; where they do not,
-    /// the substitute's advances are not the ones the document was laid out
-    /// against and the equation collides with itself. Measured on
-    /// `\forall \epsilon \: \exists \delta` in Latin Modern Math at 12pt, the
-    /// port reserves 7.992pt for `∀` and a substituted face draws 12.000 —
-    /// so `ε` lands inside the quantifier. Every glyph is positioned
-    /// ABSOLUTELY here (`MathGlyph::dx`/`dy`), so there is no flow to absorb
-    /// the difference the way body text has. Drawing the outline makes math
-    /// independent of the reader's fonts entirely, and makes this backend
-    /// agree with the PDF rather than approximately agree.
-    ///
-    /// Two shapes, because `MathGlyph` has two:
-    ///
-    /// - `gid: Some(_)` — a MATH-table variant (a display-size big operator,
-    ///   a stretchy delimiter, one part of a `GlyphAssembly`, an `ssty`
-    ///   script form). The id is drawn directly; no cmap is consulted,
-    ///   because that is exactly the case where `text` does NOT cmap to the
-    ///   glyph the document laid out.
-    /// - `gid: None` — an ordinary run, whose glyphs ARE the ones `text`
-    ///   cmaps to. Each character is looked up through the face's cmap and
-    ///   the pen advances by that glyph's own `hmtx` advance. That
-    ///   reproduces the port's own measurement exactly: `measure_run`
-    ///   (`rustyfi-lang`) is purely additive per character with no kerning or
-    ///   ligatures, and `FontMetrics::advance` is this same
-    ///   `hmtx / units_per_em` ratio.
-    ///
-    /// `None` — leaving the caller on its `<text>` path — in base-14 mode
-    /// (no store, so no face to ask), when the face will not parse, when a
-    /// character has no cmap entry or no `hmtx` advance (the port measured
-    /// that one through a fallback face this function cannot see, so
-    /// advancing by anything here would misplace the rest of the run), and
-    /// when nothing in the run has an outline at all (a lone space).
-    ///
-    /// A character the face maps but draws blank — a space inside a
-    /// `text-in-math` run — contributes no `d` and still advances, so it
-    /// leaves a real gap rather than closing one up.
-    pub(crate) fn math_glyph_outline(&self, glyph: &MathGlyph) -> Option<GlyphOutline> {
-        let face = self.fonts?.face(glyph.info.font)?;
-        let upem = f64::from(face.units_per_em());
-        if upem <= 0.0 {
-            return None;
-        }
-        if let Some(gid) = glyph.gid {
-            let d = crate::svg::glyph_outline_d(&face, gid)?;
-            return Some(GlyphOutline {
-                upem,
-                parts: vec![(d, 0.0)],
-            });
-        }
-        let scale = glyph.info.size.0 / upem;
-        let mut parts = Vec::new();
-        let mut pen = 0.0;
-        for c in glyph.text.chars() {
-            let gid = face.glyph_index(c)?;
-            if let Some(d) = crate::svg::glyph_outline_d(&face, gid.0) {
-                parts.push((d, pen));
-            }
-            pen += f64::from(face.glyph_hor_advance(gid)?) * scale;
-        }
-        (!parts.is_empty()).then_some(GlyphOutline { upem, parts })
     }
 
     /// Record that a glue box of `natural_pt` natural width stands here.
@@ -504,12 +426,31 @@ pub fn render_html_reflow(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> Result<String, HtmlError> {
-    render_html_reflow_impl(source, geometry, images, extras, links, dests, &[], None)
+    render_html_reflow_impl(
+        source,
+        geometry,
+        images,
+        extras,
+        links,
+        dests,
+        &[],
+        None,
+        crate::MathMode::SvgOutline,
+    )
 }
 
 /// [`render_html_reflow`] plus the frame decorations
 /// (`DocumentValue::reflow_frame_decos`), so framed blocks draw their own
-/// decoration instead of nothing.
+/// decoration instead of nothing — and the math mode ([`crate::MathMode`]).
+///
+/// **The `math` parameter is on the two `_with_decos` entry points and not on
+/// the other two**, which is asymmetric on purpose. These are the ones the CLI
+/// drives, so they are the ones a `--katex` has to reach; the plain
+/// [`render_html_reflow`]/[`render_html_reflow_ttf_with`] are the simple
+/// library-facing pair and mean [`crate::MathMode::SvgOutline`], which is both
+/// the default and what they have always done. Threading a mode through all
+/// four would have added a parameter to a dozen call sites to say "unchanged".
+#[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow_with_decos(
     source: Option<&[VertBox]>,
     geometry: &PageGeometry,
@@ -518,8 +459,11 @@ pub fn render_html_reflow_with_decos(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
     frame_decos: &[(DecoId, FrameDecoration)],
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
-    render_html_reflow_impl(source, geometry, images, extras, links, dests, frame_decos, None)
+    render_html_reflow_impl(
+        source, geometry, images, extras, links, dests, frame_decos, None, math,
+    )
 }
 
 /// Same as [`render_html_reflow`], but rendering under a real
@@ -540,11 +484,22 @@ pub fn render_html_reflow_ttf_with(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
 ) -> Result<String, HtmlError> {
-    render_html_reflow_impl(source, geometry, images, extras, links, dests, &[], Some(store))
+    render_html_reflow_impl(
+        source,
+        geometry,
+        images,
+        extras,
+        links,
+        dests,
+        &[],
+        Some(store),
+        crate::MathMode::SvgOutline,
+    )
 }
 
-/// [`render_html_reflow_ttf_with`] plus the frame decorations — the
-/// full-fidelity entry point the CLI uses.
+/// [`render_html_reflow_ttf_with`] plus the frame decorations and the math
+/// mode — the full-fidelity entry point the CLI uses. See
+/// [`render_html_reflow_with_decos`] on why `math` is on this pair only.
 #[allow(clippy::too_many_arguments)]
 pub fn render_html_reflow_ttf_with_decos(
     source: Option<&[VertBox]>,
@@ -555,6 +510,7 @@ pub fn render_html_reflow_ttf_with_decos(
     links: &[(DecoId, AnnotAction)],
     dests: &[(DecoId, String)],
     frame_decos: &[(DecoId, FrameDecoration)],
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
     render_html_reflow_impl(
         source,
@@ -565,6 +521,7 @@ pub fn render_html_reflow_ttf_with_decos(
         dests,
         frame_decos,
         Some(store),
+        math,
     )
 }
 
@@ -578,6 +535,7 @@ fn render_html_reflow_impl(
     dests: &[(DecoId, String)],
     frame_decos: &[(DecoId, FrameDecoration)],
     font_store: Option<&TtfFontStore>,
+    math: crate::MathMode,
 ) -> Result<String, HtmlError> {
     // One read-only pass over the flow before anything is written: which
     // `(font, size)` most of the text is in, and how much of it is CJK. Both
@@ -587,6 +545,7 @@ fn render_html_reflow_impl(
     let image_canon = canonical_images(images, &body_style.image_uses);
     let ctx = Ctx {
         fonts: font_store,
+        math,
         links: links.iter().map(|(id, action)| (*id, action)).collect(),
         dests: dests
             .iter()
@@ -643,6 +602,9 @@ fn render_html_reflow_impl(
     );
     out.push_str("<style>\n");
     out.push_str(&css::stylesheet(geometry, &ctx));
+    // Empty unless `--katex` — see `css::math_tex_rules` on why it is not
+    // folded into the sheet above.
+    out.push_str(&css::math_tex_rules(&ctx));
     // Reads state the body walk filled in, so it must come after it: which
     // images were placed often enough to be worth sharing. (No
     // `@font-face` counterpart — this backend names fonts rather than

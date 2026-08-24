@@ -3092,6 +3092,7 @@ fn a_frames_own_decoration_is_drawn_over_it() {
         &[],
         &[],
         &decos,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("reflow HTML rendering must succeed");
     let html = body_of(&out);
@@ -3172,6 +3173,7 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
         &[],
         &[],
         &decos,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("reflow HTML rendering must succeed");
     let html = body_of(&out);

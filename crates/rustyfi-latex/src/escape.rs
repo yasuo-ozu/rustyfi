@@ -48,9 +48,33 @@
 /// The `{}` after the argument-less commands is not optional: without it TeX
 /// swallows the following space, and `a \textbackslash b` comes out as
 /// `a \bb`.
+///
+/// ## …and the characters TeX changes without being asked
+///
+/// None of the above is what actually broke first. A LIGATURE is the other
+/// failure mode: TeX's text fonts turn `--` into an en dash and `---` into an
+/// em dash, so `rustyfi --format latex` renders as `rustyfi –format latex` —
+/// two source characters becoming one glyph, in a backend whose typical
+/// output is a tool manual full of long options. The document itself typeset
+/// two hyphens, so this is loss the backend introduces.
+///
+/// [`ligature_break`] lists the pairs and puts an empty group between them,
+/// which is the standard way to stop the ligature program without changing
+/// anything else about the run.
+///
+/// **A LONE `'` or `` ` `` is deliberately left alone.** TeX renders them as
+/// ’ and ‘, which is a glyph substitution rather than a two-into-one, is what
+/// the surrounding prose is set in anyway, and is what practically every
+/// author wants; breaking it would litter ordinary text with `{}`. Only the
+/// pairs, where the character COUNT changes, are broken.
 pub(super) fn text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut prev = '\0';
     for c in s.chars() {
+        if ligature_break(prev, c) {
+            out.push_str("{}");
+        }
+        prev = c;
         match c {
             '\\' => out.push_str("\\textbackslash{}"),
             '{' => out.push_str("\\{"),
@@ -69,6 +93,24 @@ pub(super) fn text(s: &str) -> String {
         }
     }
     out
+}
+
+/// Would `prev` immediately followed by `c` form a text-mode ligature that
+/// silently rewrites the document's own characters?
+///
+/// The set is TeX's, not a guess. `--`/`---` are the en and em dash (`---` is
+/// `--`'s ligature taking one more hyphen, so breaking the pair breaks the
+/// triple too); ``` `` ``` and `''` are the double quotes; `,,` is T1's low
+/// double quote; `` !` `` and `` ?` `` are `¡` and `¿`.
+///
+/// `<<` and `>>` are French guillemets under T1 and are absent here only
+/// because [`text`] has already turned both characters into `\textless{}`
+/// and `\textgreater{}`, which cannot ligature with anything.
+fn ligature_break(prev: char, c: char) -> bool {
+    matches!(
+        (prev, c),
+        ('-', '-') | ('`', '`') | ('\'', '\'') | (',', ',') | ('!', '`') | ('?', '`')
+    )
 }
 
 /// A destination or label name, reduced to characters `hyperref` can carry
@@ -129,6 +171,35 @@ pub(super) fn url(u: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A double hyphen is TWO hyphens, not an en dash. This backend's typical
+    /// output is a tool manual, and `rustyfi --format latex` rendering as
+    /// `rustyfi –format latex` is the document being changed rather than
+    /// typeset.
+    #[test]
+    fn a_double_hyphen_does_not_become_a_dash() {
+        assert_eq!(text("rustyfi --format latex"), "rustyfi -{}-format latex");
+        // `---` is the em dash, reached by the same pair taking one more
+        // hyphen, so breaking the pair covers it.
+        assert_eq!(text("a---b"), "a-{}-{}-b");
+        // A LONE hyphen is untouched: it is not a ligature and `-{}` in every
+        // hyphenated word would be noise.
+        assert_eq!(text("well-formed"), "well-formed");
+    }
+
+    /// The rest of TeX's text ligatures, and the deliberate exception.
+    #[test]
+    fn the_other_ligatures_break_but_a_lone_quote_does_not() {
+        assert_eq!(text("''quoted''"), "'{}'quoted'{}'");
+        assert_eq!(text("``quoted``"), "`{}`quoted`{}`");
+        assert_eq!(text(",,low"), ",{},low");
+        assert_eq!(text("!`"), "!{}`");
+        assert_eq!(text("?`"), "?{}`");
+        // A single `'`/`` ` `` renders as ’/‘, which is a glyph choice rather
+        // than two characters becoming one, and is what the prose around it
+        // is set in anyway. Left alone on purpose — see `text`'s doc comment.
+        assert_eq!(text("it's"), "it's");
+    }
 
     /// The failure this exists to prevent: `%` comments out the rest of the
     /// line, silently, and the document still compiles.

@@ -541,6 +541,111 @@ fn math_is_written_in_math_mode() {
     assert_eq!(tex, "$\\alpha x$");
 }
 
+/// A document whose only non-Latin content is GREEK is not a
+/// "compiles anywhere" document, and used to claim to be one.
+///
+/// The engine was chosen with `recover::is_cjk`, which is a SPACING predicate
+/// — it knows Han, kana and Hangul because those are what `wants_space` has
+/// to suppress a space between, and nothing else. So Greek, Cyrillic, Hebrew,
+/// an arrow or a bare `≤` took the "any of pdflatex, xelatex or lualatex"
+/// branch, and what that produced was a hard error under pdfLaTeX and a clean
+/// exit 0 with the glyphs missing under the other two.
+#[test]
+fn a_non_latin_non_cjk_document_does_not_claim_to_compile_under_pdflatex() {
+    let tex = render(&[text_line("the ratio φ and the bound ≤")]);
+    assert!(
+        tex.contains("% ENGINE: xelatex or lualatex, NOT pdflatex."),
+        "{tex}"
+    );
+    // Refused where TeX will see it, not only where a reader will.
+    assert!(
+        tex.contains("\\ifPDFTeX\n  \\PackageError{rustyfi}"),
+        "{tex}"
+    );
+    // And it is NOT the CJK branch: no luatexja, no Japanese faces.
+    assert!(!tex.contains("luatexja"), "{tex}");
+    assert!(!tex.contains("\\RequireLuaTeX"), "{tex}");
+
+    // The control: pure Latin-1 still claims all three, so the new arm is
+    // reached by the characters that need it and not by every document.
+    let plain = render(&[text_line("a plain sentence, with a café in it")]);
+    assert!(
+        plain.contains("% ENGINE: any of pdflatex, xelatex or lualatex."),
+        "{plain}"
+    );
+    assert!(plain.contains("\\usepackage[T1]{fontenc}"), "{plain}");
+}
+
+/// **The word space on BOTH sides of an opaque box survives.**
+///
+/// The trailing one did not, and nothing here caught it: an equation reached
+/// `Ctx::open_opaque`, which cleared `last_char`, and
+/// `recover::wants_space(None, …)` returns `false`, so the glue after the
+/// formula was discarded and `ALPHA $x$ BRAVO` came out as `ALPHA $x$BRAVO`.
+/// It survived review because the LEADING space is judged separately and was
+/// always right, and because every formula in `latex-plain.saty` happens to
+/// be followed by punctuation — the one position where no space is wanted.
+///
+/// The assertion is `assert_eq!` on the whole paragraph rather than a
+/// `contains`, because the failure is an ABSENCE and a substring test for the
+/// good case is what was missing in the first place.
+#[test]
+fn a_formula_between_two_words_keeps_the_space_on_both_sides() {
+    let tex = body(&render(&[line_of(vec![
+        text_run("ALPHA"),
+        glue(4.0),
+        PureHorzBox::Math {
+            width: Length::pt(10.0),
+            height: Length::pt(10.0),
+            depth: Length::ZERO,
+            glyphs: vec![math_glyph("x", 0.0, 0.0, 10.0)],
+            rules: Vec::new(),
+        },
+        glue(4.0),
+        text_run("BRAVO"),
+    ])]));
+    assert_eq!(tex, "ALPHA $x$ BRAVO");
+}
+
+/// The same rule for the other four opaque constructs, which share one
+/// implementation (`Ctx::flow_across`) precisely so they cannot disagree.
+/// A drawing is the case with a visible body; an image placeholder is the
+/// case whose verbatim text is generated rather than recovered.
+#[test]
+fn a_drawing_and_an_image_keep_the_space_after_them() {
+    let drawing = body(&render(&[line_of(vec![
+        text_run("ALPHA"),
+        glue(4.0),
+        filled_square(20.0),
+        glue(4.0),
+        text_run("BRAVO"),
+    ])]));
+    assert!(
+        drawing.contains("ALPHA "),
+        "the space before the drawing: {drawing}"
+    );
+    assert!(
+        drawing.ends_with(" BRAVO"),
+        "the space after the drawing: {drawing}"
+    );
+
+    let image = body(&render(&[line_of(vec![
+        text_run("ALPHA"),
+        glue(4.0),
+        PureHorzBox::Image {
+            image: rustyfi_backend::ImageId(0),
+            width: Length::pt(30.0),
+            height: Length::pt(20.0),
+        },
+        glue(4.0),
+        text_run("BRAVO"),
+    ])]));
+    assert!(
+        image.ends_with(" BRAVO"),
+        "the space after the image placeholder: {image}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Escaping
 // ---------------------------------------------------------------------------

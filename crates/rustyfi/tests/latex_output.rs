@@ -199,8 +199,29 @@ fn a_document_with_no_cjk_compiles_under_every_engine_with_its_specials_intact()
             tex.contains("% ENGINE: any of pdflatex"),
             "the fixture has no CJK, so it must not demand one engine:\n{tex}"
         );
+        // The word space either side of an inline formula, in the .tex
+        // itself. Asserted before compiling because it is the only form of
+        // the check that says WHERE the space went missing; the PDF check
+        // below says whether a reader would see it.
+        assert!(
+            tex.contains("WORDA $x$ WORDB"),
+            "the space around an inline formula is gone from the source:\n{tex}"
+        );
         let pdf = compile(path, &work).unwrap_or_else(|e| panic!("{e}"));
         let text = pdf_text(&pdf);
+        // …and out of the finished PDF. This is the assertion that would have
+        // caught the backend treating an equation as an opaque box: it
+        // cleared the flow's `last_char`, `recover::wants_space` returns
+        // false on a `None` predecessor, and every formula in the corpus lost
+        // the space after it (22 of `latexcmds`' 26). Every OTHER formula in
+        // this fixture is followed by punctuation, which is exactly why the
+        // suite was green while the bug was live.
+        for expected in ["WORDA x WORDB", "WORDD"] {
+            assert!(
+                text.contains(expected),
+                "{name} lost the spacing around an inline formula ({expected:?}):\n{text}"
+            );
+        }
         // Every reserved character, back out of the PDF as itself. `100%`
         // first: unescaped it takes the rest of the line with it and the
         // document still compiles, so nothing else here would notice.

@@ -33,6 +33,16 @@ document (|
     ${\alpha + \beta \leq \gamma}.
   }
   +p {
+    % Every formula ABOVE is followed by punctuation, which is the one
+    % position where no word space is wanted — so for a long time nothing
+    % here would have noticed the backend dropping the space AFTER an opaque
+    % box. These two are between words on both sides, which is the case that
+    % breaks: `WORDA x WORDB` came out as `WORDA xWORDB`, in the PDF and not
+    % only in the .tex.
+    A formula between two words: WORDA ${x} WORDB, and with a fraction,
+    WORDC ${\frac{a}{b}} WORDD.
+  }
+  +p {
     A link: \href?*(`https://example.invalid/a%20b#frag`){percent-encoded},
     whose URL must keep its escaping or take the rest of the line with it.
   }

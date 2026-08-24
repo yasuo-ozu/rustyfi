@@ -300,17 +300,22 @@ fn clamp(v: f64) -> f64 {
 fn path_tikz(path: &Path) -> String {
     let mut out = String::new();
     for sub in &path.subpaths {
-        let _ = write!(out, "({:.3},{:.3})", sub.start.0 .0, sub.start.1 .0);
+        let _ = write!(out, "({:.3},{:.3})", bp(sub.start.0 .0), bp(sub.start.1 .0));
         for seg in &sub.segs {
             match seg {
                 PathSeg::Line(pt) => {
-                    let _ = write!(out, " -- ({:.3},{:.3})", pt.0 .0, pt.1 .0);
+                    let _ = write!(out, " -- ({:.3},{:.3})", bp(pt.0 .0), bp(pt.1 .0));
                 }
                 PathSeg::Bezier(c1, c2, dest) => {
                     let _ = write!(
                         out,
                         " .. controls ({:.3},{:.3}) and ({:.3},{:.3}) .. ({:.3},{:.3})",
-                        c1.0 .0, c1.1 .0, c2.0 .0, c2.1 .0, dest.0 .0, dest.1 .0,
+                        bp(c1.0 .0),
+                        bp(c1.1 .0),
+                        bp(c2.0 .0),
+                        bp(c2.1 .0),
+                        bp(dest.0 .0),
+                        bp(dest.1 .0),
                     );
                 }
             }
@@ -322,13 +327,38 @@ fn path_tikz(path: &Path) -> String {
                 let _ = write!(
                     out,
                     " .. controls ({:.3},{:.3}) and ({:.3},{:.3}) .. cycle",
-                    c1.0 .0, c1.1 .0, c2.0 .0, c2.1 .0,
+                    bp(c1.0 .0),
+                    bp(c1.1 .0),
+                    bp(c2.0 .0),
+                    bp(c2.1 .0),
                 );
             }
         }
         out.push(' ');
     }
     out.trim_end().to_string()
+}
+
+/// One coordinate, as TikZ will read it.
+///
+/// **A non-finite coordinate is pinned to 0 rather than printed.** `{:.3}` on
+/// an `f64` writes `NaN` or `inf`; TikZ then tries to read that as a
+/// dimension and stops, with an error naming neither the drawing nor the
+/// document — so one degenerate control point costs the whole file. A
+/// `Length` here is the evaluator's own arithmetic, and a division by a
+/// zero length is all it takes to produce one. `fit_scale` does not catch
+/// these: it guards the drawing's overall BOX, and a `NaN` slips through the
+/// bounding box too, because `f64::min(NaN, x)` is `x`.
+///
+/// Pinned rather than dropped: dropping the path loses the figure, while
+/// pinning loses one point of it and leaves something a reader can see is
+/// wrong. Both beat a document that does not compile.
+fn bp(v: f64) -> f64 {
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]

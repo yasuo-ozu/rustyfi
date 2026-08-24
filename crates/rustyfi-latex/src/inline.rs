@@ -145,7 +145,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             // `ₐᵇ∑`.
             emit_nested_text(para, rules, ctx);
             if !body.is_empty() {
-                ctx.open_opaque(para);
+                ctx.flow_across(para, &body);
                 para.push_markup(format!("${body}$"), &body);
             }
         }
@@ -185,12 +185,14 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             width,
             height,
         } => {
-            ctx.open_opaque(para);
             let n = ctx.image_number(image.0);
             let label = match ctx.images.get(image.0) {
                 Some(res) if res.pdf.is_some() => format!("[embedded PDF page {n}]"),
                 _ => format!("[image {n}]"),
             };
+            // Below the label, not above it: the flow is carried across the
+            // placeholder from the placeholder's own text.
+            ctx.flow_across(para, &label);
             ctx.mark_tikz();
             para.push_markup(
                 super::tikz::placeholder(width.0, height.0, &label),
@@ -206,7 +208,10 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // `tabular` through a `draw-text` inside an `inline-graphics`, so by
         // the time one is seen it is already inside inline content.
         PureHorzBox::Tabular(tab) => {
-            ctx.open_opaque(para);
+            // No verbatim text of its own — the paragraph closes OVER the gap
+            // the table is hoisted out of, so it still wants the space that
+            // was there.
+            ctx.flow_across(para, "");
             if let Some(tex) = super::table::render_table(tab, ctx) {
                 ctx.pending_blocks.borrow_mut().push(tex);
             }
@@ -216,7 +221,7 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // whatever page it lands on, which is where the document put it
         // before page breaking removed the pages.
         PureHorzBox::Footnote { block } => {
-            ctx.open_opaque(para);
+            ctx.flow_across(para, "");
             // Rendered NOW, where the marker rides, so it sees the
             // surrounding context — but into its own writer, and inside
             // `Ctx::isolated` so the note's last character does not decide
@@ -226,7 +231,21 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
                 // paragraph queued before reaching this marker would be
                 // emitted INSIDE the note's body.
                 let parked = std::mem::take(&mut *ctx.pending_blocks.borrow_mut());
+                // `inline_only`, for the same reason a `tabular` cell needs
+                // it and for a different mechanism: a `\footnote` argument is
+                // read as a MACRO ARGUMENT, so its catcodes are already fixed
+                // by the time the body is expanded and `\begin{Verbatim}`
+                // inside one is a hard error rather than a mis-set line. A
+                // `+code` block in a footnote is not exotic — it is how an
+                // API manual annotates a signature.
+                //
+                // It costs an `itemize` in a footnote its environment, which
+                // LaTeX would actually have accepted. That is the trade taken
+                // knowingly: bare items still read as a list, and an
+                // uncompilable document does not read at all.
+                let was = ctx.inline_only.replace(true);
                 let body = super::block::render_block(block, ctx);
+                ctx.inline_only.set(was);
                 *ctx.pending_blocks.borrow_mut() = parked;
                 body
             });
@@ -322,7 +341,8 @@ fn emit_drawing(para: &mut Para, elems: &[GraphicsElem], width: f64, height: f64
         emit_nested_text(para, elems, ctx);
         return;
     }
-    ctx.open_opaque(para);
+    // `[graphic]` is the same verbatim side `push_markup` is given below.
+    ctx.flow_across(para, "[graphic]");
     // Rendered into its own paragraph buffer so a label carries the same
     // escaping, emphasis and math handling as body text — and inside
     // `Ctx::isolated`, since a label's last character must not decide the

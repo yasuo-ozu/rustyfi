@@ -53,18 +53,61 @@
 //! plain document's preamble to five lines, and it means a reader can tell
 //! from the top of the file what is in the rest of it.
 //!
+//! ## Known wrong, as opposed to known absent
+//!
+//! Everything in the table above is a deliberate simplification. These are
+//! not: they are cases where the output is silently WRONG or does not
+//! compile, found by an adversarial sweep and written down because a reader
+//! comparing the `.tex` to the PDF deserves to find them here rather than
+//! discover them.
+//!
+//! - **A footnote is numbered twice** under `stdjabook`/`stdjareport`. The
+//!   note's BODY already begins with the numeral the document typeset
+//!   (`stdjabook.satyh:628`) and `\footnote` adds its own. The reference
+//!   MARKER is already handled — `Ctx::drop_fn_marker` drops it, keyed on
+//!   `set-manual-rising` — but the body's leading numeral has no such tell,
+//!   and stripping a leading digit from arbitrary note text would take more
+//!   than it gave.
+//! - **A footnote inside a table cell loses its text.** `\footnote` inside
+//!   `tabular` needs `\footnotemark`/`\footnotetext` split across the table
+//!   boundary, which this walk has no place to put.
+//! - **A table nested inside a table cell is hoisted out and emitted BEFORE
+//!   its parent**, inverting the reading order. Same queue
+//!   (`Ctx::pending_blocks`) that correctly lifts a top-level table out of a
+//!   paragraph, one level too deep.
+//! - **A list nested five deep** is `Too deeply nested`. Four is LaTeX's
+//!   limit for `itemize`/`enumerate` and is not raised here.
+//! - **A coordinate or paper size past `\maxdimen`** (about 5.76 m) fails.
+//!   [`tikz::fit_scale`] does not help: TikZ evaluates a coordinate before
+//!   applying `scale`.
+//! - **Above Latin-1, a Unicode engine may still lack the glyph.** The
+//!   preamble says which engine is required and says this out loud, because
+//!   TeX reports it as one `Missing character` line and then exits 0. See
+//!   [`needs_unicode_engine`].
+//!
 //! ## Location: its own crate, depending on `rustyfi-html`
 //!
 //! This backend is a crate of its own, a peer of `rustyfi-pdf` and
 //! `rustyfi-html`, and it **depends on `rustyfi-html`** for the structure
 //! recovery it shares with the HTML and Markdown backends
 //! ([`rustyfi_html::recover`]) and for the math-run writer `--katex` also
-//! uses ([`rustyfi_html::latex`]). Nothing shared is COPIED: there is one
-//! `wants_space`, one `line_join`, one `table_rows`, one `Borders` and one
-//! `math_latex` in the tree, and this crate calls them. A second copy of the
-//! CJK glue rule would be the one outcome worth refusing outright — the two
-//! would diverge, and the symptom (a space between every pair of Japanese
-//! characters, in one format only) is not one anybody would look for here.
+//! uses ([`rustyfi_html::latex`]). **This crate copies nothing**: every rule
+//! it needs, it calls. There is one `wants_space` in the tree, one
+//! `line_join`, one `table_rows`, one `Borders`, one `collapse_whitespace`
+//! and one `math_latex`. A second copy of the CJK glue rule would be the one
+//! outcome worth refusing outright — the two would diverge, and the symptom
+//! (a space between every pair of Japanese characters, in one format only) is
+//! not one anybody would look for here.
+//!
+//! **Not every rule in [`rustyfi_html::recover`] is singular yet, though, and
+//! that is not this crate's doing.** Eight of the box-stream helpers there —
+//! `is_pure_text`, `glue_width`, the `HSKIP_MIN_PT`/`GRAPHIC_MIN_PT`
+//! thresholds and five more — still have a second or third definition inside
+//! `rustyfi-html`'s own backends, because the commit that hoisted them wrote
+//! a new copy and left the old ones. This crate calls the hoisted one; the
+//! duplicates are `rustyfi-html`-internal, are listed row by row under
+//! "Still forked" in [`rustyfi_html::recover`]'s module doc, and are waiting
+//! on the files they live in to be quiet.
 //!
 //! **The dependency points the wrong way if you read the crate names as a
 //! layering, and it is deliberate.** The alternative — lifting
@@ -204,6 +247,10 @@ pub(crate) struct Ctx<'a> {
     /// Which packages the body turned out to need — see this module's doc
     /// comment. Set where the construct is emitted, never predicted.
     uses_cjk: Cell<bool>,
+    /// The finished body holds a character outside Latin-1 that is not CJK —
+    /// see [`needs_unicode_engine`]. Set from the body in one pass, not
+    /// during the walk.
+    uses_wide: Cell<bool>,
     uses_tikz: Cell<bool>,
     uses_hyperref: Cell<bool>,
     uses_verbatim: Cell<bool>,
@@ -263,12 +310,44 @@ impl Ctx<'_> {
         out
     }
 
-    /// Settle any pending glue against "no following character" before
-    /// writing something that is not text at all — a formula, a drawing, a
-    /// table — and forget the last character.
-    fn open_opaque(&self, para: &mut Para) {
-        self.resolve_glue(para, None);
-        self.last_char.set(None);
+    /// Settle the inline flow ACROSS something that is not text — a formula,
+    /// a drawing, an image, a table, a footnote — carrying it from the
+    /// reading-order text that thing stands for.
+    ///
+    /// **The obvious version of this clears `last_char`, and doing so drops
+    /// the word space after every one of them.**
+    /// [`rustyfi_html::recover::wants_space`] opens with
+    /// `let Some(p) = prev else { return false }`, so a `None` predecessor
+    /// discards the glue that follows and the next word runs straight into
+    /// the box: `ALPHA $x$ BRAVO` came out as `ALPHA $x$BRAVO`, on 22 of the
+    /// 26 formulas in `latexcmds`' manual, and identically for every drawing,
+    /// `\node` label, image placeholder and table.
+    ///
+    /// Two things hid it. The space BEFORE is fine — `resolve_glue` is called
+    /// with the box's own first character and answers correctly — so half the
+    /// spacing looked right. And the HTML and Markdown backends have the same
+    /// hazard and escape it, because their markup contributes a newline where
+    /// the space was; LaTeX emits no whitespace token at all, so nothing
+    /// covers for it. `markdown/inline.rs`'s `math_flow` is where this was
+    /// diagnosed the first time, for equations only. This is that fix applied
+    /// to every opaque construct, in the backend that cannot survive it.
+    ///
+    /// `plain` is whatever the call site passes to `Para::push_markup` as its
+    /// verbatim side, so there is one notion per site of "what this box says
+    /// in text". Where a site has none — a table, a footnote — the flow still
+    /// has to carry, so the box counts as U+FFFC OBJECT REPLACEMENT
+    /// CHARACTER: present, and not CJK. That is exactly the contract
+    /// [`rustyfi_html::recover::wants_space`]'s own doc comment states for an
+    /// opaque box ("a formula or figure set into Japanese prose takes the
+    /// same space its inter-script glue was asking for") — the trailing half
+    /// of it had simply never been implemented here.
+    ///
+    /// `mono_run` is cleared because none of these is fixed-pitch, whatever
+    /// the run before it was.
+    fn flow_across(&self, para: &mut Para, plain: &str) {
+        self.resolve_glue(para, plain.chars().next());
+        self.last_char
+            .set(Some(plain.chars().next_back().unwrap_or('\u{fffc}')));
         self.mono_run.set(false);
     }
 
@@ -386,6 +465,7 @@ fn render_latex_impl(
         text_area: area,
         inline_only: Cell::new(false),
         uses_cjk: Cell::new(false),
+        uses_wide: Cell::new(false),
         uses_tikz: Cell::new(false),
         uses_hyperref: Cell::new(false),
         uses_verbatim: Cell::new(false),
@@ -404,6 +484,13 @@ fn render_latex_impl(
         Some(vboxes) => block::render_block(vboxes, &ctx),
     };
 
+    // Which ENGINE the file needs is a question about the finished body, so
+    // it is asked of the finished body — once, here, rather than at each of
+    // the several places a character can be written. `uses_cjk` is set during
+    // the walk because it also selects PACKAGES; this only selects a claim
+    // and a guard.
+    ctx.uses_wide.set(body.chars().any(needs_unicode_engine));
+
     let mut out = preamble(&ctx, paper_w, paper_h, area, extras);
     out.push_str("\\begin{document}\n\n");
     out.push_str(&body);
@@ -412,6 +499,32 @@ fn render_latex_impl(
     }
     out.push_str("\n\\end{document}\n");
     Ok(out)
+}
+
+/// Does this character require a Unicode engine (XeTeX or LuaTeX) to be set
+/// at all?
+///
+/// **This is deliberately NOT
+/// [`rustyfi_html::recover::is_cjk`], and the difference is what the engine
+/// claim got wrong.** `is_cjk` answers a SPACING question — "is this set
+/// solid, with no inter-character glue" — and its doc comment says so; it
+/// knows Han, kana and Hangul because those are the scripts `wants_space`
+/// has to suppress a space between. Using it to choose an engine silently
+/// promised pdfLaTeX, XeLaTeX and LuaLaTeX for every document whose only
+/// non-Latin content was Greek, Cyrillic, Hebrew, Arabic, an emoji or a bare
+/// `≤`. What that actually produced was a hard error under pdfLaTeX and, far
+/// worse, a clean exit 0 under the other two with dozens of `Missing
+/// character` lines in the log and the glyphs simply absent from the page —
+/// a loss this backend introduced, since the port's own PDF sets them
+/// correctly.
+///
+/// The line is drawn at U+00FF rather than at a font's real coverage because
+/// that is the boundary of what pdfTeX's 8-bit `T1`/`inputenc` route can
+/// address at all. Above it, only a Unicode engine has a chance; whether it
+/// has the GLYPH is a font question this backend cannot answer and says so
+/// in the preamble instead.
+fn needs_unicode_engine(c: char) -> bool {
+    c as u32 > 0xFF
 }
 
 /// Everything before `\begin{document}`.
@@ -423,6 +536,7 @@ fn preamble(
     extras: &DocExtras,
 ) -> String {
     let cjk = ctx.uses_cjk.get();
+    let wide = !cjk && ctx.uses_wide.get();
     let mut out = String::new();
     out.push_str("% Generated by rustyfi --format latex.\n%\n");
     if cjk {
@@ -433,12 +547,28 @@ fn preamble(
              % below.  The \\RequireLuaTeX under \\usepackage{iftex} makes a wrong\n\
              % engine fail immediately rather than silently dropping the glyphs.\n",
         );
+    } else if wide {
+        out.push_str(
+            "% ENGINE: xelatex or lualatex, NOT pdflatex.  This document has no CJK\n\
+             % in it, but it does contain characters outside Latin-1 -- Greek,\n\
+             % Cyrillic, an arrow, a mathematical relation set as prose -- and\n\
+             % pdflatex's 8-bit fonts cannot address them at all.\n\
+             %\n\
+             % A KNOWN LIMITATION, stated because the alternative is finding it in\n\
+             % the output: even under a Unicode engine the DEFAULT font may not\n\
+             % have every one of those glyphs, and TeX reports that as a\n\
+             % `Missing character' line in the log and then exits 0.  If a\n\
+             % character is absent from the PDF, that is where it went; give the\n\
+             % preamble a `fontspec' main font that covers the script.  This\n\
+             % backend does not choose one, because choosing wrong is worse than\n\
+             % saying so.\n",
+        );
     } else {
         out.push_str(
             "% ENGINE: any of pdflatex, xelatex or lualatex.  This document has no\n\
-             % CJK in it, and the mathematics is written with amsmath/amssymb\n\
-             % command names rather than Unicode characters, so nothing here is\n\
-             % engine-specific except the fontenc guard below.\n",
+             % CJK in it, nothing outside Latin-1, and the mathematics is written\n\
+             % with amsmath/amssymb command names rather than Unicode characters,\n\
+             % so nothing here is engine-specific except the fontenc guard below.\n",
         );
     }
     out.push_str(
@@ -457,6 +587,18 @@ fn preamble(
              \\setmainjfont{HaranoAjiMincho}\n\
              \\setsansjfont{HaranoAjiGothic}\n\
              \\setmonojfont{HaranoAjiGothic}\n",
+        );
+    } else if wide {
+        // Refused rather than attempted. pdfTeX's 8-bit fonts have no slot
+        // for these characters, so what it actually does is emit an error per
+        // character and set nothing — dozens of them, with the real cause at
+        // the top of a log nobody reads to the top. One stated error beats
+        // that. XeTeX and LuaTeX are both fine, so the test is on the engine
+        // that cannot rather than on the one that must.
+        out.push_str(
+            "\\ifPDFTeX\n  \\PackageError{rustyfi}{This document needs xelatex or \
+             lualatex}{It contains characters outside Latin-1, which pdflatex \
+             cannot set.}\n\\fi\n",
         );
     } else {
         // Both are no-ops outside pdfTeX — modern LaTeX is UTF-8 by default

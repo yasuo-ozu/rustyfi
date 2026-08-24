@@ -430,7 +430,7 @@ The generated preamble says, in a comment at the top of the file, and enforces
 it with `iftex` so a wrong engine fails immediately instead of dropping
 glyphs:
 
-- **No CJK in the document** → it compiles under **pdflatex, xelatex and
+- **Nothing above Latin-1** → it compiles under **pdflatex, xelatex and
   lualatex alike**. The mathematics is written with `amsmath`/`amssymb`
   command names rather than Unicode characters, and the only
   engine-conditional line is an `\ifPDFTeX`-guarded `fontenc`.
@@ -438,6 +438,15 @@ glyphs:
   faces. pdfLaTeX cannot set CJK at all; XeLaTeX could, through `xeCJK`, but
   a generated file can only name one and `luatexja` is the one that also gets
   the JLreq inter-script spacing right.
+- **Anything else above Latin-1** — Greek, Cyrillic, Hebrew, Arabic, an
+  emoji, a bare `≤` in prose — → **xelatex or lualatex**, and pdflatex is
+  refused with a named error rather than left to fail once per character.
+  Note the honest limit here, which the preamble also states: a Unicode
+  engine can ADDRESS those characters, but the default font may not contain
+  them, and TeX reports a missing glyph as one log line and then exits 0. If
+  a character is absent from the PDF, add a `fontspec` main font that covers
+  the script. The backend does not pick one, because picking wrong is worse
+  than saying so.
 
 The preamble declares **only the packages the body turned out to use** —
 `tikz`, `hyperref` and `fvextra` appear only if the document has a drawing, a
@@ -480,6 +489,24 @@ sentence.
 - **A drawing bigger than the measure is scaled down** to fit. Not a
   preference: a `tikzpicture` is one unbreakable box, and LaTeX responds to
   one taller than `\textheight` by ending the page and trying again, forever.
+
+### Known wrong, as opposed to known absent
+
+Everything above is a deliberate simplification. These are cases where the
+output is silently *wrong* or does not compile, found by an adversarial sweep
+and listed so that a reader comparing the `.tex` to the PDF finds them here
+rather than discovering them:
+
+- a **footnote is numbered twice** under `stdjabook`/`stdjareport` — the note
+  body already opens with the numeral the document typeset, and `\footnote`
+  adds its own (the reference *marker* is already dropped);
+- a **footnote inside a table cell loses its text**, and a **table nested
+  inside a table cell is emitted before its parent** rather than inside it;
+- a **list nested five deep** is `Too deeply nested` — four is LaTeX's own
+  limit for `itemize`/`enumerate`, and it is not raised;
+- **coordinates or a paper size past `\maxdimen`** (about 5.76 m) fail; TikZ
+  evaluates a coordinate before applying the fit scale, so the scaling that
+  saves an oversized drawing does not save these.
 
 Math is `--katex`'s conversion — the same function, so
 [What `--katex` cannot recover](#what---katex-cannot-recover) applies here word

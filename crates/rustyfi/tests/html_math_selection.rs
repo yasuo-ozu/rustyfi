@@ -37,6 +37,23 @@ fn repo_lib_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib-rustyfi")
 }
 
+/// Whether the faces this fixture's glyphs live in are actually on disk.
+///
+/// They are fetched by `download-fonts.sh`, and CI runs it for the fidelity
+/// and real-package jobs but NOT for `build · clippy · test` — the job that
+/// runs these tests. Without them every glyph falls back to naming a font,
+/// which is precisely what the structural test asserts must not happen, so it
+/// would fail on a checkout that is perfectly valid.
+///
+/// The math face is the one that matters: an outline is taken from it, and
+/// with no MATH-table face there is nothing to outline.
+fn bundled_faces_present() -> bool {
+    let fonts = repo_lib_root().join("dist/fonts");
+    ["latinmodern-math.otf", "Junicode.ttf"]
+        .iter()
+        .all(|f| fonts.join(f).is_file())
+}
+
 /// Three `${…}` runs, one per branch of the outline/phantom code — see the
 /// fixture's own header for which is which.
 fn fixture() -> PathBuf {
@@ -111,6 +128,14 @@ const EXPECTED: [&str; 3] = ["∀𝜀 : ∃𝛿", "∑𝑘=1𝑛𝑘", "𝑥if a
 /// bare `<path>`-count assertion would not see it.
 #[test]
 fn every_math_glyph_is_an_outline_with_its_character_kept_as_phantom_text() {
+    if !bundled_faces_present() {
+        eprintln!(
+            "skipping: the bundled faces are absent, so every glyph falls back \
+             to naming a font and there is no outline to assert — run \
+             download-fonts.sh"
+        );
+        return;
+    }
     let work = tmpdir("structure");
     let html = render(&work);
 
@@ -180,6 +205,10 @@ fn every_math_glyph_is_an_outline_with_its_character_kept_as_phantom_text() {
 /// it, a `find` that returned `true` for everything would pass.
 #[test]
 fn a_browser_can_select_copy_and_find_the_math_characters() {
+    if !bundled_faces_present() {
+        eprintln!("skipping: the bundled faces are absent — run download-fonts.sh");
+        return;
+    }
     let Some(chromium) = find_chromium() else {
         eprintln!(
             "skipping: no chromium on PATH — the structural half of this file \

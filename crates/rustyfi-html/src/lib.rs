@@ -160,6 +160,30 @@ pub enum HtmlError {
     Io(#[from] std::io::Error),
 }
 
+/// Fold every run of whitespace to one space and drop it at the edges.
+///
+/// Not a formatting nicety in either caller: it is what makes a recovered
+/// paragraph safe to put somewhere that has a LINE structure of its own. A
+/// GFM pipe table's row grammar ends at the newline, and a LaTeX alignment
+/// cell treats a blank line as a `\par` — `Paragraph ended before \\ was
+/// complete`, a hard error. The backends had a copy each.
+pub(crate) fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_space = true;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !last_space {
+                out.push(' ');
+            }
+            last_space = true;
+        } else {
+            out.push(c);
+            last_space = false;
+        }
+    }
+    out.trim_end().to_string()
+}
+
 /// Escape the five HTML/attribute-hostile characters. Emitted text is never
 /// re-parsed as markup, so this is the standard minimal set (no need for a
 /// full entity table).

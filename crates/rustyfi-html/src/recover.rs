@@ -152,13 +152,176 @@ pub(crate) const WORD_SPACE_PT: f64 = 3.0;
 /// REDO from one it must KEEP. A wrapped paragraph and a `+code` block are
 /// structurally identical — `code.satyh` calls `line-break` once per source
 /// line exactly as the line breaker does per wrapped line.
-pub(crate) fn is_monospace(store: Option<&TtfFontStore>, font: Option<FontKey>) -> bool {
-    let (Some(store), Some(font)) = (store, font) else {
-        return false;
-    };
-    store
-        .file_family_name(store.file_index(font))
-        .is_some_and(|f| crate::fonts::is_monospace_family(&f))
+/// **Answered once per FILE, not once per run**, and that is the difference
+/// between this backend costing 2ms and costing 145ms.
+/// `TtfFontStore::file_family_name` re-`Face::parse`s the whole font file and
+/// decodes a UTF-16 `name` record on every call; the box stream emits one
+/// text run per CJK CHARACTER, so `latexcmds` asked the same question of the
+/// same 7.8MB `ipaexm.ttf` about 5400 times and got the same answer. There
+/// are at most `num_files()` distinct answers, and they are all computed
+/// here, up front.
+pub(crate) struct MonoFiles(Vec<bool>);
+
+impl MonoFiles {
+    pub(crate) fn new(store: Option<&TtfFontStore>) -> Self {
+        MonoFiles(match store {
+            None => Vec::new(),
+            Some(store) => (0..store.num_files())
+                .map(|i| {
+                    store
+                        .file_family_name(i)
+                        .is_some_and(|f| crate::fonts::is_monospace_family(&f))
+                })
+                .collect(),
+        })
+    }
+
+    /// Whether `font` is a fixed-pitch face. `false` in base-14 mode, where
+    /// there is no file to ask — see [`MonoFiles`].
+    pub(crate) fn is_monospace(&self, store: Option<&TtfFontStore>, font: Option<FontKey>) -> bool {
+        let (Some(store), Some(font)) = (store, font) else {
+            return false;
+        };
+        self.0
+            .get(store.file_index(font))
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
+/// A `FixedEmpty` (`inline-skip`) at least this wide (pt) is a deliberate gap
+/// worth one space; anything narrower is a KERN and renders as nothing.
+///
+/// The two populations it separates: a paragraph indent or a table cell's
+/// padding above, the `\LaTeX` logo's own four kerns and a table-of-contents
+/// leader's dot spacing below.
+pub(crate) const HSKIP_MIN_PT: f64 = 2.0;
+
+/// Smaller than this in either dimension (pt) and a drawing's INK is a rule,
+/// a leader dot or a piece of underlining, not a figure.
+///
+/// The size measured is the INK's, not the box's, and that distinction is
+/// load-bearing: `stdjabook` draws the rule under a section heading as a
+/// 440pt x 1pt line inside a 440pt x 4pt box. Judged by the box it is a
+/// figure, and `easytable`'s manual grew a placeholder above and below every
+/// heading in it.
+pub(crate) const GRAPHIC_MIN_PT: f64 = 4.0;
+
+/// How many spaces a gap of `pt` points is, in a document whose fixed-pitch
+/// character advances `advance` points.
+///
+/// `code.satyh` sizes both the leading indent and every inter-word space in
+/// exact multiples of that advance (`set-space-ratio (charwid /' fontsize)`),
+/// so this division is not an estimate — it recovers the source's own column
+/// count. With no advance measured (a base-14 render, where no font file says
+/// whether a face is fixed-pitch at all) it degrades to one space, which
+/// keeps the words apart and loses only the indentation.
+pub(crate) fn gap_spaces(pt: f64, advance: Option<f64>) -> usize {
+    match advance {
+        Some(a) if a > 0.0 => (pt / a).round().max(0.0) as usize,
+        // No measurement: any positive gap is one space.
+        _ => usize::from(pt > 0.0),
+    }
+}
+
+/// The fixed-pitch character advance a run measures, if it is one this can be
+/// measured from.
+///
+/// In a fixed-pitch face every character is one advance wide, so a run's own
+/// width divided by its character count IS the column width a code block's
+/// indentation is counted in. Only a run of plain ASCII is measured — a
+/// fixed-pitch Latin face still sets a stray CJK character full-width, which
+/// would halve the estimate.
+pub(crate) fn mono_advance(text: &str, width: f64) -> Option<f64> {
+    let n = text.chars().count();
+    (n > 0 && width > 0.0 && text.chars().all(|c| c.is_ascii_graphic()))
+        .then(|| width / n as f64)
+}
+
+/// Whether `elem` contributes no ink of its own — a `draw-text`, or a group
+/// containing only those. `Group`/`Clip` recurse so a `unite-graphics` of
+/// text runs is recognised too.
+pub(crate) fn is_pure_text(elem: &GraphicsElem) -> bool {
+    match elem {
+        GraphicsElem::Text { .. } => true,
+        GraphicsElem::Group(inner) | GraphicsElem::Clip(_, inner) => inner.iter().all(is_pure_text),
+        _ => false,
+    }
+}
+
+/// The union of every element's ink bounding box, or `None` when nothing in
+/// `elems` draws.
+pub(crate) fn ink_bbox(elems: &[GraphicsElem]) -> Option<((Length, Length), (Length, Length))> {
+    elems
+        .iter()
+        .filter_map(graphics_bbox)
+        .reduce(|(alo, ahi), (blo, bhi)| {
+            (
+                (
+                    Length(alo.0 .0.min(blo.0 .0)),
+                    Length(alo.1 .0.min(blo.1 .0)),
+                ),
+                (
+                    Length(ahi.0 .0.max(bhi.0 .0)),
+                    Length(ahi.1 .0.max(bhi.1 .0)),
+                ),
+            )
+        })
+}
+
+/// Does a `Discretionary`'s `pre_break` carry a visible character (the
+/// hyphenation dictionary's hyphen), as opposed to bare glue?
+pub(crate) fn pre_break_carries_text(pre_break: &[PureHorzBox]) -> bool {
+    pre_break.iter().any(|b| match b {
+        PureHorzBox::InnerString { text, .. } => !text.is_empty(),
+        _ => false,
+    })
+}
+
+/// The total natural width of a `Discretionary`'s `pre_break` glue, fed to
+/// the ordinary glue rule when there is no hyphen to show.
+pub(crate) fn glue_width(pre_break: &[PureHorzBox]) -> f64 {
+    pre_break
+        .iter()
+        .map(|b| match b {
+            PureHorzBox::OuterEmpty { natural, .. } => natural.0,
+            PureHorzBox::FixedEmpty { width } => width.0,
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// Is a paragraph with these tallies a code block — one whose line breaks are
+/// the AUTHOR's and whose whitespace is significant?
+///
+/// The obvious test, `all_mono`, is not enough: a `+code` block containing any
+/// Japanese fails it, because a fixed-pitch Latin face has no CJK glyphs and
+/// SATySFi sets those characters in the document's own gothic/mincho face, so
+/// the paragraph reads as MIXED. In `latexcmds`' manual, whose code samples
+/// are full of Japanese string literals, that is most of the code blocks in
+/// the document.
+///
+/// The reliable signal is structural: `code.satyh` builds a block as ONE
+/// `line-break` over a sequence of
+/// `inline-skip ++ line ++ inline-fil ++ discretionary`, one per source line,
+/// so EVERY line of a code block ends with an `inline-fil`. A justified prose
+/// paragraph ends only its LAST line that way.
+///
+/// A single line cannot be told apart this way (one line is always "all its
+/// lines"), so a one-line paragraph falls back to `all_mono` — which is
+/// exactly right for it, and is kept as an alternative at every length.
+///
+/// The count is a MAJORITY, not "all", because a code line too long for the
+/// measure is broken by the paragraph breaker like any other and ends at a
+/// hyphenation point rather than at its fil. One overflowing line in `xpath`'s
+/// API listing was enough to make the whole block prose under an "all" test.
+pub(crate) fn is_code_paragraph(
+    all_mono: bool,
+    has_mono: bool,
+    lines: usize,
+    fil_lines: usize,
+) -> bool {
+    all_mono || (lines >= 2 && has_mono && fil_lines * 2 > lines)
 }
 
 /// `dest_name -> level` from `extras.outline` (`register-outline`'s already
@@ -181,11 +344,31 @@ pub(crate) fn heading_depth(level: i64) -> u8 {
     (level.max(0) as u64 + 1).min(6) as u8
 }
 
+/// [`find_heading`], for a caller that wants only the level.
+pub(crate) fn find_heading_level(
+    bx: &PureHorzBox,
+    dests: &HashMap<DecoId, &str>,
+    outline_by_dest: &HashMap<String, i64>,
+) -> Option<i64> {
+    find_heading(bx, dests, outline_by_dest).map(|(level, _)| level)
+}
+
 /// Does `bx` (or, recursively, one of its `Frame` descendants) carry the
 /// `DecoId` of a `register-location-frame`/`register-destination` call whose
 /// resolved name matches a `register-outline` entry? Returns that entry's
-/// level on the first match. See `reflow/structure.rs`'s doc comment for why
-/// this is a structural match rather than a font-size heuristic.
+/// level AND the destination name on the first match. See
+/// `reflow/structure.rs`'s doc comment for why this is a structural match
+/// rather than a font-size heuristic.
+///
+/// **The name comes back with the level, rather than from a second lookup.**
+/// The LaTeX backend needs both — the level to pick `\section*` and the name
+/// for the `\hypertarget` a `\ref` reaches it by — and it originally asked
+/// twice, walking this same recursion again a line later. The refinement
+/// below (that `InlineFrameMarker`, not only `Frame`, has to be matched or no
+/// heading in any `stdjabook` document is ever promoted) then had to hold in
+/// two traversals, and if they ever disagreed a heading would keep its
+/// `\section*` and silently lose its anchor — turning every cross-reference
+/// to it into a dead link that still compiles.
 ///
 /// **`InlineFrameMarker` is checked too, and that is what makes this work at
 /// all on a real document.** `inline-frame-breakable` splices its contents
@@ -195,11 +378,11 @@ pub(crate) fn heading_depth(level: i64) -> u8 {
 /// Matching only `Frame` meant no heading in any `stdjabook` document was
 /// ever promoted. Only the START marker is consulted — the `end: true` twin
 /// carries the same `DecoId` and would match a second time for nothing.
-pub(crate) fn find_heading_level(
+pub(crate) fn find_heading<'a>(
     bx: &PureHorzBox,
-    dests: &HashMap<DecoId, &str>,
+    dests: &HashMap<DecoId, &'a str>,
     outline_by_dest: &HashMap<String, i64>,
-) -> Option<i64> {
+) -> Option<(i64, &'a str)> {
     match bx {
         PureHorzBox::InlineFrameMarker { id, end: false, .. } => {
             level_of_deco(id, dests, outline_by_dest)
@@ -208,7 +391,7 @@ pub(crate) fn find_heading_level(
             level_of_deco(deco, dests, outline_by_dest).or_else(|| {
                 contents
                     .iter()
-                    .find_map(|(_, inner)| find_heading_level(inner, dests, outline_by_dest))
+                    .find_map(|(_, inner)| find_heading(inner, dests, outline_by_dest))
             })
         }
         _ => None,
@@ -216,14 +399,14 @@ pub(crate) fn find_heading_level(
 }
 
 /// `DecoId` -> destination name -> outline level, the two-hop structural
-/// lookup both arms of [`find_heading_level`] share.
-fn level_of_deco(
+/// lookup both arms of [`find_heading`] share.
+fn level_of_deco<'a>(
     deco: &DecoId,
-    dests: &HashMap<DecoId, &str>,
+    dests: &HashMap<DecoId, &'a str>,
     outline_by_dest: &HashMap<String, i64>,
-) -> Option<i64> {
-    let name = dests.get(deco)?;
-    outline_by_dest.get(*name).copied()
+) -> Option<(i64, &'a str)> {
+    let name = *dests.get(deco)?;
+    outline_by_dest.get(name).copied().map(|l| (l, name))
 }
 
 /// Regroup a solved `TabularBox`'s flat cell list back into rows.

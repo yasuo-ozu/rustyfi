@@ -353,6 +353,15 @@ pub(crate) fn frame_decoration(deco: &DecoId, ctx: &Ctx) -> FrameRender {
     if frame.elems.is_empty() || frame.width.0 <= 0.0 || frame.height.0 <= 0.0 {
         return FrameRender::none();
     }
+    // An INLINE frame's recording, reached through a block `FrameStart`, would
+    // stretch a wavy underline over a whole `<div>`. It cannot happen — a
+    // `DecoId` is minted per registration and an inline frame's never appears
+    // as a `VertBox::FrameStart` — but the two recordings share one table, so
+    // the discriminator is checked rather than assumed. See
+    // [`inline_frame_decoration`], which is the arm that draws these.
+    if frame.depth.is_some() {
+        return FrameRender::none();
+    }
     if let Some(color) = solid_panel(frame) {
         return FrameRender {
             extra_class: " framed",
@@ -376,6 +385,90 @@ pub(crate) fn frame_decoration(deco: &DecoId, ctx: &Ctx) -> FrameRender {
         style: pad_right(frame),
         svg: retarget_svg(&svg, frame),
     }
+}
+
+/// An INLINE frame's recorded decoration as CSS declarations that paint it on
+/// the wrapper `<span>` — `railway`'s `\uwave`, a highlight panel behind a
+/// phrase, a rule over or under one. `None` when the entry is a BLOCK frame's
+/// (that is [`frame_decoration`]'s job) or has no ink.
+///
+/// **Why a background rather than an element.** The region is a run of text
+/// the browser will re-break, so the decoration has to survive being split at
+/// a point the port never chose. An `<svg>` child would be one box; a
+/// background is painted per line fragment, and `box-decoration-break: clone`
+/// (in `css.rs`'s `.ideco` rule) makes each fragment redraw the WHOLE
+/// decoration at its own width — which is exactly what upstream does when it
+/// re-runs the deco once per fragment (`lineBreak.ml:695`'s
+/// `append_framed_lines`). The reader's line breaks are not the port's, and
+/// this is the construct that does not care.
+///
+/// **Vertical placement — the part that cannot be exact.** CSS measures a
+/// background against the inline box's PADDING box, whose height comes from
+/// the font's own ascent and descent; nothing in CSS positions anything
+/// relative to the baseline, and nothing here can know what the browser will
+/// make the content area (it depends on the face that actually loads and on
+/// whether the UA reads `hhea` or `OS/2`). So the drawing is anchored by which
+/// side of the baseline its ink is on, which is a property this DOES know:
+///
+/// - ink entirely at or below the baseline — an UNDERLINE — anchors its bottom
+///   to the box's bottom, i.e. just under the descenders, which is where an
+///   underline goes and where the browser's own `text-decoration` puts one;
+/// - ink entirely at or above it — an overline, a strike above the x-height —
+///   anchors its top to the box's top;
+/// - ink STRADDLING the baseline — a panel or a border — is stretched over the
+///   whole box, the same compromise [`frame_decoration`] makes for a block.
+///
+/// For `\uwave` that lands the wave about half a point below where the PDF
+/// draws it at 12pt, which is within the error the anchor itself has.
+///
+/// **Horizontally a rule TILES and a panel STRETCHES**, and the split falls
+/// out of the same three cases. A rule — a wave, a dash pattern, a plain line
+/// — is a pattern repeated along x, so `repeat-x` at the recorded natural
+/// width keeps its period exactly right however wide the reader's line is; and
+/// restarting that pattern at each fragment's left edge is not an
+/// approximation, it is what upstream does, since every fragment re-runs the
+/// deco from its own `x = 0` (`WavyLine.new` is called per fragment with that
+/// fragment's width). A panel or a border is a single shape with two ends, so
+/// it is stretched to the box instead — the compromise [`frame_decoration`]
+/// already makes for a block.
+///
+/// Stretching the rule case too was tried first and is much worse. The
+/// recording is ONE fragment of the port's own layout, and when the port broke
+/// the region over three lines that fragment is a third of what the browser
+/// then puts on one line: the measured case stretched a 92pt wave over a 640pt
+/// line and produced a nearly flat ripple with a seven-times wavelength. The
+/// tiling artifact in the same case is a phase break every 92pt — the
+/// recording is not a whole number of periods (`WavyLine.new` fits `round
+/// num-waves` whole units plus a partial `residual-segment`) and the period
+/// itself is not recoverable from the flattened path — but on a 0.75pt
+/// amplitude that is a kink, not a different drawing.
+pub(crate) fn inline_frame_decoration(frame: &FrameDecoration) -> Option<String> {
+    let depth = frame.depth?.0;
+    // A stroke is centred on its path, so the ink reaches this far above and
+    // below the bbox `graphics_bbox` measures — see `svg::graphics_background`,
+    // including why the same allowance is NOT made horizontally.
+    let pad_y = crate::svg::max_stroke_overhang(&frame.elems);
+    let (svg, (x0, y0), (x1, y1)) = crate::svg::graphics_background(&frame.elems, pad_y)?;
+    let uri = crate::svg::svg_data_uri(&svg);
+    let (w, h) = (x1 - x0, y1 - y0);
+    // Half a device pixel at 96dpi, in points: below this an "underline" that
+    // grazes the baseline and one that sits on it are the same drawing.
+    const EPS_PT: f64 = 0.2;
+    let placement = if y1 <= depth + EPS_PT {
+        format!(
+            "background-size:{w}pt {h}pt; background-position:left bottom; \
+             background-repeat:repeat-x;"
+        )
+    } else if y0 >= depth - EPS_PT {
+        format!(
+            "background-size:{w}pt {h}pt; background-position:left top; \
+             background-repeat:repeat-x;"
+        )
+    } else {
+        "background-size:100% 100%; background-position:left top; background-repeat:no-repeat;"
+            .to_string()
+    };
+    Some(format!("background-image:url(\"{uri}\"); {placement}"))
 }
 
 /// The one padding the flow does not already carry — see

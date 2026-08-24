@@ -204,11 +204,12 @@ pub struct Interp<'a> {
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
     /// Drained into `DocumentValue::reflow_dests`.
     pub dest_decos: Vec<(rustyfi_backend::DecoId, String)>,
-    /// Each block frame's own decoration at its natural size, box-local —
-    /// see `rustyfi_backend::FrameDecoration`. Recorded by `fire_hooks` and
-    /// drained into `DocumentValue::reflow_frame_decos`, so a renderer with
-    /// no page grid can draw the frame the document actually asked for
-    /// instead of nothing at all. Unread by the PDF path.
+    /// Each frame's own decoration at its natural size, box-local — see
+    /// `rustyfi_backend::FrameDecoration`, whose `depth` field distinguishes
+    /// the BLOCK frames from the INLINE ones sharing this table. Recorded by
+    /// `fire_hooks` and drained into `DocumentValue::reflow_frame_decos`, so a
+    /// renderer with no page grid can draw the frame the document actually
+    /// asked for instead of nothing at all. Unread by the PDF path.
     pub frame_decos: Vec<(rustyfi_backend::DecoId, rustyfi_backend::FrameDecoration)>,
     /// `namedDest.ml`'s key -> "nameddest{N}" sanitizer table: arbitrary
     /// user keys become stable PDF name strings, shared by

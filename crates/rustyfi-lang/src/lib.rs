@@ -2691,6 +2691,7 @@ fn fire_inline_frame_fragment(
         frame.depth,
     )?;
     interp.current_deco_id = None;
+    record_inline_frame_deco(interp, frame.id, pt, width, frame.height, frame.depth, &gr);
     interp.page_graphics[page].extend(gr);
     Ok(())
 }
@@ -3134,11 +3135,55 @@ fn fire_block_frame_fragment(
                 width,
                 height,
                 pads: (pads.l, pads.r, pads.t, pads.b),
+                depth: None,
                 elems: gr.iter().map(|e| shift_graphics(back, e)).collect(),
             },
         ));
     }
     Ok(gr)
+}
+
+/// Record one INLINE frame's fired decoration box-local for the reflow
+/// backend, the twin of [`fire_block_frame_fragment`]'s own tail — see
+/// [`rustyfi_backend::FrameDecoration`], whose `depth` field is what tells
+/// the two apart.
+///
+/// The deco was applied at `pt`, the fragment's left edge ON THE BASELINE
+/// (both inline call sites build `pt` that way), so the shift that puts the
+/// origin at the box's bottom-left is `-(pt.x, pt.y - dp)` rather than the
+/// block twin's plain `-pt`.
+///
+/// FIRST recording for a `DecoId` wins. That covers three cases with one
+/// rule: a frame that fits on one line (`decoS`), a frame split across lines
+/// (its `decoH` head, which for an inline frame is a complete decoration —
+/// see `FrameDecoration::depth`), and the same frame VALUE placed twice, which
+/// would otherwise record its drawing once per placement. The scan is linear
+/// in the number of already-recorded decorations, which is the number of
+/// distinct inline frames that actually DRAW something — a `\href`, the
+/// overwhelmingly common inline frame, has an empty deco and never gets here.
+fn record_inline_frame_deco(
+    interp: &mut eval::Interp,
+    id: rustyfi_backend::DecoId,
+    pt: (Length, Length),
+    width: Length,
+    height: Length,
+    depth: Length,
+    gr: &[GraphicsElem],
+) {
+    if gr.is_empty() || interp.frame_decos.iter().any(|(seen, _)| *seen == id) {
+        return;
+    }
+    let back = (Length::ZERO - pt.0, depth - pt.1);
+    interp.frame_decos.push((
+        id,
+        rustyfi_backend::FrameDecoration {
+            width,
+            height: height + depth,
+            pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            depth: Some(depth),
+            elems: gr.iter().map(|e| shift_graphics(back, e)).collect(),
+        },
+    ));
 }
 
 /// Fire block-frame decorations that live INSIDE an `EmbeddedBlock` inline box.
@@ -3402,6 +3447,7 @@ fn fire_inline_frame(
                     *depth,
                 )?;
                 interp.current_deco_id = None;
+                record_inline_frame_deco(interp, *deco, pt, *width, *height, *depth, &gr);
                 interp.page_graphics[page].extend(gr);
             }
             contents

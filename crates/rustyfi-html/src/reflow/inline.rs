@@ -21,7 +21,11 @@
 //! [`emit_math_svg`]/[`emit_graphics_box`] — and gives `Frame` real `<a
 //! href>`/`id=` treatment when its `DecoId` matches an observed link/
 //! destination (`Ctx::links`/`Ctx::dests`, sourced from `DocumentValue::
-//! reflow_links`/`reflow_dests`). `GraphicsOuter`/`Image`/`Footnote` remain
+//! reflow_links`/`reflow_dests`). A frame that DRAWS gets its drawing too,
+//! as a background on the same wrapper — see [`wrapper_tags`] and
+//! `structure::inline_frame_decoration`, which is where the placement of a
+//! decoration over text the reader is about to re-break is argued.
+//! `GraphicsOuter`/`Image`/`Footnote` remain
 //! inert PLACEHOLDER `<span>`s (`GraphicsOuter` in particular is a
 //! lang-side-only DEFERRED callback — `resolve_outer_graphics_in_contents`,
 //! `rustyfi-lang/src/primitives.rs:3917`, always resolves it to a plain
@@ -577,34 +581,68 @@ pub(crate) fn close_run(out: &mut String, ctx: &Ctx) {
 ///   `register-location-frame`) → a plain `<span>` carrying the `id=` that
 ///   anchor lands on;
 /// - neither → an inert `<span class="iframe">`, kept as a CSS hook.
+///
+/// Independently of all three, a frame that DREW something
+/// (`Ctx::frame_decos`, an inline entry — `railway`'s `\uwave`) also carries
+/// the `ideco ideco-N` classes that paint it; see [`inline_deco_classes`].
+/// Independently, because whether a region is a link and whether it is
+/// decorated are unrelated: `\href` is a link that draws nothing, `\uwave`
+/// draws and is not a link, and a decorated link is legal and gets both.
+///
 /// Returns `(open, reopen, close)`. `reopen` differs from `open` only for a
 /// destination wrapper, whose `id=` must appear once and only once even if
 /// the region has to be split across a paragraph boundary
-/// (`Ctx::iframe_stack`).
+/// (`Ctx::iframe_stack`). The decoration classes are on BOTH: a region split
+/// across a paragraph boundary must keep drawing on the far side.
 fn wrapper_tags(deco: &rustyfi_backend::DecoId, ctx: &Ctx) -> (String, String, &'static str) {
+    let deco_cls = inline_deco_classes(deco, ctx);
     if let Some(action) = ctx.links.get(deco) {
         let href = match action {
             AnnotAction::Uri(uri) => crate::escape_html(uri),
             AnnotAction::GotoName(name) => format!("#{}", crate::escape_html(name)),
         };
-        let tag = format!("<a class=\"link\" href=\"{href}\">");
+        let tag = format!("<a class=\"link{deco_cls}\" href=\"{href}\">");
         (tag.clone(), tag, "</a>")
     } else if let Some(name) = ctx.dests.get(deco) {
         (
             format!(
-                "<span class=\"iframe\" id=\"{}\">",
+                "<span class=\"iframe{deco_cls}\" id=\"{}\">",
                 crate::escape_html(name)
             ),
-            "<span class=\"iframe\">".to_string(),
+            format!("<span class=\"iframe{deco_cls}\">"),
             "</span>",
         )
     } else {
         (
-            "<span class=\"iframe\">".to_string(),
-            "<span class=\"iframe\">".to_string(),
+            format!("<span class=\"iframe{deco_cls}\">"),
+            format!("<span class=\"iframe{deco_cls}\">"),
             "</span>",
         )
     }
+}
+
+/// The ` ideco ideco-N` a decorated inline region's wrapper carries, or the
+/// empty string when this `DecoId` drew nothing.
+///
+/// Registering on Ctx rather than writing the drawing inline is the
+/// `shared_images` bargain — see [`Ctx::inline_decos`], including why the
+/// index is looked up by the declarations rather than by the `DecoId`.
+fn inline_deco_classes(deco: &rustyfi_backend::DecoId, ctx: &Ctx) -> String {
+    let Some(frame) = ctx.frame_decos.get(deco) else {
+        return String::new();
+    };
+    let Some(rule) = super::structure::inline_frame_decoration(frame) else {
+        return String::new();
+    };
+    let mut decos = ctx.inline_decos.borrow_mut();
+    let i = match decos.iter().position(|seen| *seen == rule) {
+        Some(i) => i,
+        None => {
+            decos.push(rule);
+            decos.len() - 1
+        }
+    };
+    format!(" ideco ideco-{i}")
 }
 
 /// Close every inline wrapper this block opened, innermost first, and leave

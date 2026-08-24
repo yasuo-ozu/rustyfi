@@ -408,11 +408,18 @@ pub struct DocumentValue {
     /// Same idea as `reflow_links`, for `register-destination`
     /// (`annot.satyh`'s `register-location-frame` idiom): `(DecoId, name)`.
     pub reflow_dests: Vec<(DecoId, String)>,
-    /// Each block frame's own decoration at its natural size, box-local
+    /// Each frame's own decoration at its natural size, box-local
     /// (`FrameDecoration`). Same provenance and lifetime as `reflow_dests`:
     /// filled by `fire_hooks`, drained by `eval_document_trials`, read only
     /// by the reflowable HTML backend — which has no page grid and so cannot
     /// re-run a deco callback itself.
+    ///
+    /// BLOCK and INLINE frames both, in one table; `FrameDecoration::depth`
+    /// says which, and the two are placed differently enough that a renderer
+    /// must look. An inline frame's decoration IS the visual for a whole class
+    /// of markup — `railway`'s `\uwave` is an `inline-frame-breakable` whose
+    /// deco strokes the wave and whose contents are just the text under it —
+    /// so recording only the block kind left those documents blank.
     pub reflow_frame_decos: Vec<(DecoId, FrameDecoration)>,
 }
 

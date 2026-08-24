@@ -134,6 +134,28 @@ body {{\n\
    the measure the document chose for it. */\n\
 .embed-inline {{ display: inline-block; max-width: 100%; text-align: left; }}\n\
 .iframe {{ display: inline; }}\n\
+/* An INLINE frame that DRAWS something — `railway`'s `\\uwave`, a highlight\n\
+   panel, a rule over or under a phrase. The drawing itself is one rule per\n\
+   decoration below (`inline_deco_rules`); these are the parts every one of\n\
+   them shares.\n\
+\n\
+   `box-decoration-break: clone` is the whole reason this is a background and\n\
+   not an element: it makes each LINE FRAGMENT of the region redraw the whole\n\
+   decoration at its own width, which is exactly what upstream does when it\n\
+   re-runs the deco per fragment (`lineBreak.ml:695`). The default, `slice`,\n\
+   would size the drawing to the region's unbroken width and hand each line a\n\
+   slice of it — so a phrase the browser breaks in two would get the left half\n\
+   of one wave and the right half of another, each squeezed to half its line.\n\
+   `-webkit-` first, then unprefixed: Safari still needs the prefix, and the\n\
+   later declaration wins where both are understood.\n\
+\n\
+   `pointer-events: none` has no analogue here (there is no element to catch\n\
+   them), which is the other reason a background beats an overlay: a decorated\n\
+   `\\href` stays clickable through its own decoration. */\n\
+.ideco {{\n\
+  -webkit-box-decoration-break: clone;\n\
+  box-decoration-break: clone;\n\
+}}\n\
 .hskip {{ display: inline-block; }}\n\
 .clearpage {{\n\
   border: none;\n\
@@ -235,6 +257,22 @@ pub(crate) fn shared_image_rules(ctx: &Ctx) -> String {
                 crate::image::data_uri(res),
             );
         }
+    }
+    out
+}
+
+/// One rule per DISTINCT inline-frame decoration the flow actually reached
+/// (`Ctx::inline_decos`, filled during the body walk — so, exactly like
+/// [`shared_image_rules`] above, this must be called AFTER it).
+///
+/// The declarations were computed at registration time by
+/// `structure::inline_frame_decoration`, which is where the geometry — and
+/// what it can and cannot promise once the browser re-breaks the line — is
+/// argued.
+pub(crate) fn inline_deco_rules(ctx: &Ctx) -> String {
+    let mut out = String::new();
+    for (i, decls) in ctx.inline_decos.borrow().iter().enumerate() {
+        let _ = writeln!(out, ".ideco-{i} {{ {decls} }}");
     }
     out
 }

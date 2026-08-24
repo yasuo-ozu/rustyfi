@@ -3075,6 +3075,10 @@ fn a_frames_own_decoration_is_drawn_over_it() {
                 Length::pt(4.0),
                 Length::pt(4.0),
             ),
+            // A BLOCK frame: no baseline to be measured against, which is also
+            // what keeps it out of the inline arm — see
+            // `an_inline_frames_decoration_is_painted_on_its_own_wrapper`.
+            depth: None,
             // A stroked outline, so NOT the plain-panel shortcut.
             elems: vec![rule_line(0.0, 0.0, 100.0, 0.0, 1.0)],
         },
@@ -3113,6 +3117,72 @@ fn a_frames_own_decoration_is_drawn_over_it() {
     assert!(html.contains("padding-right:8pt;"), "{html}");
     assert!(!html.contains("padding-left"), "{html}");
     assert!(html.contains("inside"), "lost the frame's content:\n{html}");
+    assert_balanced_tags(&out);
+}
+
+/// An INLINE frame's decoration lands on the wrapper `<span>` as a background,
+/// not on a `<div>` as a stretched `<svg>` — and the two are told apart by
+/// `FrameDecoration::depth` alone, which is the only thing in the recording
+/// that says a baseline was involved.
+///
+/// The end-to-end statement of this is `rustyfi/tests/html_inline_frame_deco.rs`
+/// (it has to be end to end: the recording side is where the bug was). This is
+/// the unit-level pin on the discriminator, which that test cannot isolate —
+/// it drives the same table with the block entry the block arm expects.
+#[test]
+fn an_inline_frames_decoration_is_painted_on_its_own_wrapper() {
+    let deco = DecoId(21);
+    // 11pt tall, baseline 2pt up from the bottom (the marker's own metrics),
+    // with a rule stroked 1pt BELOW that baseline — `\uwave`'s shape.
+    let decos = vec![(
+        deco,
+        rustyfi_backend::FrameDecoration {
+            width: Length::pt(60.0),
+            height: Length::pt(11.0),
+            pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            depth: Some(Length::pt(2.0)),
+            elems: vec![rule_line(0.0, 1.0, 60.0, 1.0, 0.5)],
+        },
+    )];
+    let vboxes = vec![line_of(vec![
+        iframe_marker(21, false),
+        text_run("wavy"),
+        iframe_marker(21, true),
+    ])];
+    let out = rustyfi_html::render_html_reflow_with_decos(
+        Some(&vboxes),
+        &geometry(),
+        &[],
+        &DocExtras::default(),
+        &[],
+        &[],
+        &decos,
+    )
+    .expect("reflow HTML rendering must succeed");
+
+    assert!(
+        out.contains(".ideco-0 { background-image:url(\"data:image/svg+xml,"),
+        "the inline decoration reached no stylesheet rule:\n{out}"
+    );
+    assert!(
+        body_of(&out).contains("<span class=\"iframe ideco ideco-0\">wavy</span>"),
+        "the wrapper does not wear its decoration:\n{}",
+        body_of(&out)
+    );
+    // Ink below the baseline: tiled, bottom-anchored. NOT the block arm's
+    // `<svg class="frame-deco">`, which would need a `<div>` to stretch over.
+    assert!(
+        out.contains("background-repeat:repeat-x;")
+            && out.contains("background-position:left bottom;"),
+        "wrong placement class for a rule below the baseline:\n{out}"
+    );
+    // `.frame.framed > svg.frame-deco` is static stylesheet furniture; what
+    // must not exist is an ELEMENT wearing it.
+    assert!(
+        !body_of(&out).contains("frame-deco"),
+        "an inline decoration must not go through the block arm:\n{}",
+        body_of(&out)
+    );
     assert_balanced_tags(&out);
 }
 
@@ -3156,6 +3226,7 @@ fn a_plain_filled_panel_becomes_a_background_not_an_svg() {
             width: Length::pt(100.0),
             height: Length::pt(40.0),
             pads: (Length::ZERO, Length::ZERO, Length::ZERO, Length::ZERO),
+            depth: None,
             elems: vec![GraphicsElem::Fill(Color::Gray(0.9), panel)],
         },
     )];

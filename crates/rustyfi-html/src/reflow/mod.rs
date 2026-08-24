@@ -277,6 +277,24 @@ pub(crate) struct Ctx<'a> {
     /// `ImageId`s covering two actual pictures. Keying on the id alone found
     /// nothing to share.
     image_canon: HashMap<usize, (usize, usize)>,
+    /// The DISTINCT inline-frame decorations the walk has reached, in
+    /// first-use order: each entry is the CSS declarations that draw one, and
+    /// its position is the `N` in the `ideco-N` class its wrappers wear.
+    ///
+    /// The `shared_images` pattern, for the same reason: a wavy underline over
+    /// one paragraph is tens of kilobytes of SVG path data, and a `style=`
+    /// attribute would carry it in the middle of the prose, once per
+    /// occurrence. Instead the wrapper gets `class="ideco ideco-N"` and the
+    /// drawing goes into the stylesheet once (`css::inline_deco_rules`, which
+    /// like `shared_image_rules` must therefore run AFTER the body walk).
+    ///
+    /// Deduplicated by the DECLARATIONS, not by `DecoId` — content, exactly as
+    /// `image_canon` deduplicates images by their pixels. The same frame value
+    /// placed twice is the easy case; the one that pays is a package that
+    /// decorates every one of its many regions identically
+    /// (`code-printer`'s manual draws 246 rounded panels over 187 distinct
+    /// drawings).
+    pub(crate) inline_decos: RefCell<Vec<String>>,
     /// The `style` of the `<span class="run">` currently left OPEN, if any.
     /// A run whose style matches simply appends its text to it, so a word
     /// the box stream split into chunks — and a Japanese phrase it split
@@ -608,6 +626,7 @@ fn render_html_reflow_impl(
         footnote_seq: Cell::new(0),
         shared_images: RefCell::new(Vec::new()),
         image_canon,
+        inline_decos: RefCell::new(Vec::new()),
         open_run: RefCell::new(None),
     };
 
@@ -648,6 +667,9 @@ fn render_html_reflow_impl(
     // `@font-face` counterpart — this backend names fonts rather than
     // embedding them; see `fonts::reflow_font_stack`.)
     out.push_str(&css::shared_image_rules(&ctx));
+    // Same "reads what the body walk found" ordering, for the same reason:
+    // which inline frames actually drew a decoration.
+    out.push_str(&css::inline_deco_rules(&ctx));
     out.push_str("</style>\n</head>\n<body>\n");
     out.push_str(&body);
     out.push_str("</body>\n</html>\n");

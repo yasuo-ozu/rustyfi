@@ -28,10 +28,24 @@
 //! declared width IS the document's wrapping instruction and the browser is
 //! meant to re-break.
 //!
-//! **No bundled face is needed.** Hyphenation is dictionary-driven and every
-//! assertion here is about which characters appear in which element, not about
-//! a measurement, so this holds against the built-in base-14 fonts exactly as
-//! against `download-fonts.sh`'s.
+//! **No bundled face is needed**, and that is a CONSTRAINT on what may be
+//! asserted here rather than a remark. Hyphenation is dictionary-driven and
+//! every assertion is about which characters appear in which element, so this
+//! holds against the built-in base-14 fonts exactly as against
+//! `download-fonts.sh`'s — but only for as long as nothing writes a measured
+//! number down. `.github/workflows/ci.yml` runs `download-fonts.sh` in the
+//! fidelity, real-packages and release jobs; `build · clippy · test`, the one
+//! that runs `cargo test`, does NOT. A width literal therefore passes on any
+//! developer's tree and fails CI on a perfectly valid checkout. Two of them
+//! did. Identify a box by its CONTENT; the fixture's own `30pt` is the sole
+//! number that may be matched, because the fixture writes it.
+//!
+//! Skipping when the faces are absent — the idiom the rest of this suite uses,
+//! and the right one for a test that genuinely needs a face — would be the
+//! wrong fix HERE, and not a mild one: line 37 is the only `cargo test` in the
+//! whole workflow (the fidelity job runs one `--ignored` target, the corpus job
+//! one syntax target), so a skip would take this test out of CI altogether.
+//! Nothing in it needs a face; it only needed to stop saying so in numbers.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -76,6 +90,32 @@ fn render(format: &str, ext: &str) -> String {
     let text = std::fs::read_to_string(&out).expect("no output written");
     let _ = std::fs::remove_dir_all(&work);
     text
+}
+
+/// Every `embed-inline` span in the body, as (style, content).
+///
+/// Content, because a style's width is the port's measurement of whichever
+/// faces the run found and the module header forbids matching one. An
+/// embedded box in this fixture holds a bare string, so scanning to the next
+/// `</span>` is exact; were a nested element ever to appear the content would
+/// come back truncated and the equality below would fail rather than pass for
+/// the wrong reason.
+fn embed_inline_spans(body: &str) -> Vec<(String, String)> {
+    const OPEN: &str = "class=\"embed-inline\" style=\"";
+    let mut out = Vec::new();
+    let mut rest = body;
+    while let Some(at) = rest.find(OPEN) {
+        rest = &rest[at + OPEN.len()..];
+        let Some(style_end) = rest.find('"') else { break };
+        let style = rest[..style_end].to_string();
+        rest = &rest[style_end..];
+        let Some(gt) = rest.find('>') else { break };
+        rest = &rest[gt + 1..];
+        let Some(close) = rest.find("</span>") else { break };
+        out.push((style, rest[..close].to_string()));
+        rest = &rest[close..];
+    }
+    out
 }
 
 /// Markdown: a drawing's words are in it, as SVG `<text>`.
@@ -150,22 +190,46 @@ fn the_markdown_text_is_not_inside_the_flip() {
 /// The MULTI-line box is the control on the same line: there the width IS the
 /// document's wrapping instruction, and re-breaking at the reader's metrics is
 /// the whole premise of this backend.
+///
+/// The one-line boxes are found by the word in them, not by their width, for
+/// the reason in the module header — and finding them that way asserts the
+/// other half at the same time: the word is one whole string, which is what a
+/// reader searching the file for it actually needs.
 #[test]
 fn a_one_line_box_does_not_rebreak_but_a_multi_line_one_does() {
     let html = render("html", "html");
     let body = html.split_once("<body>").map(|(_, b)| b).unwrap_or(&html);
-    for w in ["37.828125", "51.55078125"] {
+    let spans = embed_inline_spans(body);
+    assert!(
+        !spans.is_empty(),
+        "no embedded box reached the page at all, so this test is measuring \
+         nothing: {body}",
+    );
+    for word in ["leftward", "boxedword"] {
+        let (style, _) = spans
+            .iter()
+            .find(|(_, content)| content.as_str() == word)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{word}` is not one whole string in a box of its own — a \
+                     soft hyphen split it, or it never reached the page: {body}"
+                )
+            });
         assert!(
-            body.contains(&format!(
-                "class=\"embed-inline\" style=\"width:{w}pt; white-space:nowrap;\""
-            )),
-            "the one-line box at {w}pt must not re-break at the reader's own \
-             metrics: {body}",
+            style.contains("white-space:nowrap"),
+            "the one-line box holding `{word}` must not re-break at the \
+             reader's own metrics, but its style is `{style}`: {body}",
         );
     }
+    let (style, _) = spans
+        .iter()
+        .find(|(style, _)| style.contains("width:30pt"))
+        .unwrap_or_else(|| {
+            panic!("the MULTI-line box is gone, so its control is vacuous: {body}")
+        });
     assert!(
-        body.contains("class=\"embed-inline\" style=\"width:30pt;\">"),
-        "the MULTI-line box's width is a wrapping instruction and must stay \
-         breakable: {body}",
+        !style.contains("nowrap"),
+        "the MULTI-line box's width is the document's own wrapping instruction \
+         and must stay breakable, but its style is `{style}`: {body}",
     );
 }

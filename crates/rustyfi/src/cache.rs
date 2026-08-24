@@ -483,7 +483,7 @@ mod tests {
             )
             .unwrap()
         };
-        let html = key_for(OutputFormat::Html(crate::format::MathMode::Outline));
+        let html = key_for(OutputFormat::Html(crate::format::MathMode::SvgOutline));
         assert_ne!(
             pdf, html,
             "--format pdf and --format html must hash to different keys"
@@ -495,7 +495,7 @@ mod tests {
         // format/mode pair is enumerated exactly once.
         let mut keys = vec![pdf];
         for math in [
-            crate::format::MathMode::Outline,
+            crate::format::MathMode::SvgOutline,
             crate::format::MathMode::Unicode,
             crate::format::MathMode::Katex,
         ] {

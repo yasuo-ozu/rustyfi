@@ -32,14 +32,20 @@
 /// Math is the one thing neither format can simply carry over — it is laid
 /// out during compilation, so what reaches a backend is positioned glyphs and
 /// no `\frac` node — and the right rendering depends on where the file will be
-/// READ rather than on what the document says. So it is a pair of flags
-/// (`--unicode-math`, `--katex`) rather than a heuristic.
+/// READ rather than on what the document says. So it is three flags
+/// (`--svg-outline-math`, `--svg-math`, `--katex`, `--unicode-math`) rather
+/// than a heuristic.
 ///
-/// It lives INSIDE the format rather than beside it because
-/// [`OutputFormat::cache_tag`] has to see it. The compile cache stores every
-/// format's payload as a bare `<key>.pdf`, so the tag is the only thing
-/// keeping two renders of one document apart, and three math modes are three
-/// different renders of it.
+/// It lives INSIDE the format rather than beside it for two reasons, and both
+/// are load-bearing:
+///
+/// - **the DEFAULT is per-format** (see [`OutputFormat::from_str`]), so
+///   "which format" and "which math" are not independent choices and pairing
+///   them in one value is what makes an unset flag mean the right thing;
+/// - **[`OutputFormat::cache_tag`] has to see it.** The compile cache stores
+///   every format's payload as a bare `<key>.pdf`, so the tag is the only
+///   thing keeping two renders of one document apart, and four math modes
+///   are four different renders of it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     #[default]
@@ -56,19 +62,41 @@ pub use rustyfi_html::MathMode;
 
 impl std::str::FromStr for OutputFormat {
     type Err = String;
-    /// Parses the `--format` VALUE only. The math mode is a separate pair of
-    /// flags, so this always yields the default ([`MathMode::Outline`]) and
-    /// `main.rs` replaces it through [`OutputFormat::with_math`] once it has
+    /// Parses the `--format` VALUE, and with it **the math mode that format
+    /// defaults to**. The three math flags are separate, and `main.rs`
+    /// replaces the default through [`OutputFormat::with_math`] once it has
     /// read them — which is also where a mode that makes no sense for the
     /// format is refused.
+    ///
+    /// ## The defaults differ by format, on purpose
+    ///
+    /// [`MathMode`] has no [`Default`] impl precisely so that this decision
+    /// has to be made HERE, once, where the format is known. The rule is
+    /// "what serves the typical reader of this format":
+    ///
+    /// - **`markdown` -> [`MathMode::SvgText`]**. A `.md` is read as source at
+    ///   least as often as it is rendered, and this is the mode whose source
+    ///   reads as what it is — `<text>` at measured positions, a fraction bar
+    ///   as a `<rect>` — at a fraction of the outline mode's bytes. It still
+    ///   draws the equation where the file is previewed.
+    /// - **`html` -> [`MathMode::SvgOutline`]**. A web page is self-contained
+    ///   and nothing strips its markup, so the outline costs nothing but size
+    ///   and is the only rendering that reproduces the PDF exactly — it does
+    ///   not depend on the reader having the document's faces. This is also
+    ///   what `--format html` has always done, which is why its output is
+    ///   byte-identical across this change.
+    ///
+    /// Either default can be overridden with the flag for any other mode, so
+    /// nothing here removes a choice; it only picks the one that is right
+    /// more often.
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "pdf" => Ok(OutputFormat::Pdf),
             // `html-reflow` was the name while a second, layout-faithful
             // backend held `html`; that backend is gone, but the alias is
             // kept so the rename breaks nobody.
-            "html" | "html-reflow" => Ok(OutputFormat::Html(MathMode::Outline)),
-            "markdown" | "md" => Ok(OutputFormat::Markdown(MathMode::Outline)),
+            "html" | "html-reflow" => Ok(OutputFormat::Html(MathMode::SvgOutline)),
+            "markdown" | "md" => Ok(OutputFormat::Markdown(MathMode::SvgText)),
             other => Err(format!(
                 "unknown --format {other:?} (expected pdf|html|markdown)"
             )),
@@ -129,42 +157,58 @@ impl OutputFormat {
     ///
     /// ## The math modes, and the rule the whole table follows
     ///
-    /// **A tag changes exactly when the BYTES change**, and every entry below
-    /// is that rule applied rather than a naming preference:
+    /// **A tag changes exactly when the BYTES change.** Two consequences, and
+    /// the second is the one that keeps this correct as the defaults move:
     ///
-    /// - `Html(Outline)` keeps the bare historical `html-reflow`. Its output
-    ///   is byte-identical to what every previous binary wrote, so an entry an
-    ///   older one left on disk is still a correct answer and re-tagging it
-    ///   would only throw away valid cache.
-    /// - `Html(Katex)` is a different document, so it is a different tag.
-    /// - **`Markdown(Outline)` does NOT keep the bare `markdown` tag, and that
-    ///   is the one entry here that would be a live bug if it did.** Markdown's
-    ///   DEFAULT changed with this flag: `--format markdown` used to write
-    ///   Unicode characters and now draws outlined SVG. Nothing else in the
-    ///   key would notice — the input files, the fonts and the language
-    ///   version are all unchanged, and `CARGO_PKG_VERSION` does not move on
-    ///   every commit — so a stale `markdown` entry from an older binary would
-    ///   be served, silently, for a request the new binary answers
-    ///   differently. Renaming it invalidates exactly those entries and
-    ///   nothing else.
-    /// - `Markdown(Unicode)` is what that old tag MEANT, but it does not
-    ///   inherit the name either: an entry written under `markdown` by an
-    ///   older binary is only PROBABLY this, and "probably" is not a cache
-    ///   invariant.
+    /// **1. The tag is a function of the (format, mode) PAIR — never of
+    /// "was a flag given".** The pair is what determines the output, so it is
+    /// what the discriminator is computed from. This is not a stylistic
+    /// choice: it is what makes a change of DEFAULT safe without editing the
+    /// table below, and this design has now survived two such changes. When
+    /// markdown's default moved to `SvgText`, a bare `--format markdown` began
+    /// computing `markdown-svgtext` automatically, because the parse yields a
+    /// different pair — while an entry written under `markdown-svgoutline`
+    /// stayed a correct answer for `--svg-outline-math`, which is exactly the
+    /// bytes it holds. Had the tag keyed on "the default", every such change
+    /// would silently re-point a live key at different content.
     ///
-    /// Pinned by `every_format_and_math_mode_has_its_own_cache_tag` and
-    /// `the_markdown_default_tag_changed_with_its_default` below.
+    /// **2. Nothing may share a tag.** Markdown output is a SUBSET of HTML's,
+    /// recovered from the same input by the same code, so every other field of
+    /// the key is identical between them; and the four math modes differ from
+    /// each other in NOTHING but this field. That is eight combinations, seven
+    /// of them reachable, and the stored payload is a bare `<key>.pdf`
+    /// whatever the format — so there is no extension, no header and no magic
+    /// number downstream to notice a wrong hit.
+    ///
+    /// Two entries are fixed by history rather than derived:
+    ///
+    /// - `Html(SvgOutline)` keeps the bare historical `html-reflow`, because
+    ///   it IS what every previous binary wrote — `--format html` is
+    ///   byte-identical across this change — so an entry left on disk is
+    ///   still a correct answer and re-tagging would throw away valid cache.
+    /// - **No mode may claim the bare `markdown` tag.** That name belongs to
+    ///   the pre-flag renderer, whose output only PROBABLY matches
+    ///   `Markdown(Unicode)` today, and "probably" is not a cache invariant.
+    ///   Nothing else in the key would catch the difference: the inputs, the
+    ///   fonts and the language version are unchanged, and
+    ///   `CARGO_PKG_VERSION` does not move on every commit.
+    ///
+    /// Pinned by `every_format_and_math_mode_has_its_own_cache_tag`,
+    /// `no_mode_claims_the_retired_markdown_tag` and
+    /// `each_formats_default_tags_itself_by_the_mode_it_resolves_to` below.
     pub(crate) fn cache_tag(self) -> &'static str {
         match self {
             OutputFormat::Pdf => "pdf",
-            OutputFormat::Html(MathMode::Outline) => "html-reflow",
+            OutputFormat::Html(MathMode::SvgOutline) => "html-reflow",
             // `Unicode` is refused for HTML by the CLI, so this arm is
             // unreachable through the binary; it is tagged distinctly anyway
             // rather than folded into another, since a shared tag is a cache
             // collision waiting for the day the restriction is lifted.
+            OutputFormat::Html(MathMode::SvgText) => "html-reflow-svgtext",
             OutputFormat::Html(MathMode::Unicode) => "html-reflow-unicode",
             OutputFormat::Html(MathMode::Katex) => "html-reflow-katex",
-            OutputFormat::Markdown(MathMode::Outline) => "markdown-outline",
+            OutputFormat::Markdown(MathMode::SvgOutline) => "markdown-svgoutline",
+            OutputFormat::Markdown(MathMode::SvgText) => "markdown-svgtext",
             OutputFormat::Markdown(MathMode::Unicode) => "markdown-unicode",
             OutputFormat::Markdown(MathMode::Katex) => "markdown-katex",
         }
@@ -182,7 +226,7 @@ mod tests {
     /// users' cache directories.
     #[test]
     fn the_html_cache_tag_is_not_the_removed_backends() {
-        let html = OutputFormat::Html(MathMode::Outline);
+        let html = OutputFormat::Html(MathMode::SvgOutline);
         assert_eq!(html.cache_tag(), "html-reflow");
         assert_ne!(html.cache_tag(), "html");
         assert_ne!(OutputFormat::Pdf.cache_tag(), html.cache_tag());
@@ -196,11 +240,11 @@ mod tests {
         assert!("html-fixed".parse::<OutputFormat>().is_err());
         assert_eq!(
             "html".parse::<OutputFormat>(),
-            Ok(OutputFormat::Html(MathMode::Outline))
+            Ok(OutputFormat::Html(MathMode::SvgOutline))
         );
         assert_eq!(
             "html-reflow".parse::<OutputFormat>(),
-            Ok(OutputFormat::Html(MathMode::Outline))
+            Ok(OutputFormat::Html(MathMode::SvgOutline))
         );
     }
 
@@ -215,7 +259,12 @@ mod tests {
     #[test]
     fn every_format_and_math_mode_has_its_own_cache_tag() {
         let mut tags = vec![OutputFormat::Pdf.cache_tag()];
-        for math in [MathMode::Outline, MathMode::Unicode, MathMode::Katex] {
+        for math in [
+            MathMode::SvgOutline,
+            MathMode::SvgText,
+            MathMode::Unicode,
+            MathMode::Katex,
+        ] {
             tags.push(OutputFormat::Html(math).cache_tag());
             tags.push(OutputFormat::Markdown(math).cache_tag());
         }
@@ -223,27 +272,76 @@ mod tests {
         assert_eq!(unique.len(), tags.len(), "cache tags collide: {tags:?}");
     }
 
-    /// The one entry that would be a live bug if it were left alone.
+    /// The bare `markdown` tag is RETIRED and no mode may claim it.
     ///
-    /// `--format markdown` with no math flag used to write Unicode characters
-    /// and now draws outlined SVG. Nothing else in the cache key moved — same
-    /// sources, same fonts, same language version, and `CARGO_PKG_VERSION`
-    /// does not change on every commit — so keeping the bare `markdown` tag
-    /// would serve an older binary's Unicode render for a request this one
-    /// answers with a drawing. Neither new mode may claim the old name.
+    /// It names the output of the pre-flag renderer, which only PROBABLY
+    /// matches `Markdown(Unicode)` today — and nothing else in the cache key
+    /// would catch the difference: same sources, same fonts, same language
+    /// version, and `CARGO_PKG_VERSION` does not change on every commit. An
+    /// older binary's entry served for a request this one answers differently
+    /// is exactly the failure the tag exists to prevent.
     #[test]
-    fn the_markdown_default_tag_changed_with_its_default() {
-        for math in [MathMode::Outline, MathMode::Unicode, MathMode::Katex] {
+    fn no_mode_claims_the_retired_markdown_tag() {
+        for math in [
+            MathMode::SvgOutline,
+            MathMode::SvgText,
+            MathMode::Unicode,
+            MathMode::Katex,
+        ] {
             assert_ne!(
                 OutputFormat::Markdown(math).cache_tag(),
                 "markdown",
                 "the retired tag names output no current mode produces",
             );
         }
-        // The default is the drawing, and it says so.
+    }
+
+    /// **The property that keeps the tag correct when a DEFAULT moves.**
+    ///
+    /// The tag is computed from the (format, mode) pair, never from "was a
+    /// flag given" — so a bare `--format markdown` tags itself by the mode it
+    /// actually resolves to, and changing which mode that is re-points it
+    /// automatically. This test states both defaults through the same path
+    /// the CLI uses (`FromStr`), so it fails if either the default or the tag
+    /// moves without the other.
+    ///
+    /// The two are checked TOGETHER rather than separately because the bug
+    /// being guarded against is precisely a disagreement between them: a
+    /// default that changed while its tag did not would serve the old bytes,
+    /// silently, forever.
+    #[test]
+    fn each_formats_default_tags_itself_by_the_mode_it_resolves_to() {
+        // Markdown defaults to the compact text drawing: a `.md` is read as
+        // source at least as often as it is rendered.
+        let md: OutputFormat = "markdown".parse().unwrap();
+        assert_eq!(md, OutputFormat::Markdown(MathMode::SvgText));
+        assert_eq!(md.cache_tag(), "markdown-svgtext");
+
+        // HTML defaults to the outline, which is what it has always done —
+        // hence the unchanged historical tag, and hence byte-identical output.
+        let html: OutputFormat = "html".parse().unwrap();
+        assert_eq!(html, OutputFormat::Html(MathMode::SvgOutline));
+        assert_eq!(html.cache_tag(), "html-reflow");
+
+        // The two formats' defaults are genuinely different modes; a single
+        // global default would make one of these wrong.
+        assert_ne!(md, OutputFormat::Markdown(MathMode::SvgOutline));
+        assert_ne!(md.cache_tag(), html.cache_tag());
+
+        // `--svg-outline-math` on markdown reaches the mode that was briefly
+        // its default, and tags itself as that — so an entry written then is
+        // still a correct answer for the flag rather than a stale one for the
+        // new default.
         assert_eq!(
-            OutputFormat::Markdown(MathMode::default()).cache_tag(),
-            "markdown-outline"
+            md.with_math(MathMode::SvgOutline).cache_tag(),
+            "markdown-svgoutline"
+        );
+        // …and every other mode this format can take is reachable and
+        // distinct, so no flag can collide with the default.
+        assert_eq!(md.with_math(MathMode::Katex).cache_tag(), "markdown-katex");
+        assert_eq!(
+            md.with_math(MathMode::Unicode).cache_tag(),
+            "markdown-unicode"
         );
     }
 
@@ -252,7 +350,7 @@ mod tests {
     /// other.
     #[test]
     fn with_math_replaces_only_the_math_mode() {
-        let md = OutputFormat::Markdown(MathMode::Outline).with_math(MathMode::Katex);
+        let md = OutputFormat::Markdown(MathMode::SvgOutline).with_math(MathMode::Katex);
         assert_eq!(md, OutputFormat::Markdown(MathMode::Katex));
         assert_eq!(md.extension(), "md");
         // PDF has no math mode to set, and asking for one does not make it
@@ -267,24 +365,24 @@ mod tests {
     fn markdown_parses_and_names_its_own_extension() {
         assert_eq!(
             "markdown".parse::<OutputFormat>(),
-            Ok(OutputFormat::Markdown(MathMode::Outline))
+            Ok(OutputFormat::Markdown(MathMode::SvgText))
         );
         assert_eq!(
             "md".parse::<OutputFormat>(),
-            Ok(OutputFormat::Markdown(MathMode::Outline))
+            Ok(OutputFormat::Markdown(MathMode::SvgText))
         );
-        assert_eq!(OutputFormat::Markdown(MathMode::Outline).extension(), "md");
+        assert_eq!(OutputFormat::Markdown(MathMode::SvgOutline).extension(), "md");
         // Every format's default output name differs, or `-o` omitted would
         // make two formats fight over one path. The math mode must NOT enter
         // into it: `--katex` writes a `.md`, not a `.md-katex`.
         let exts = [
             OutputFormat::Pdf.extension(),
-            OutputFormat::Html(MathMode::Outline).extension(),
-            OutputFormat::Markdown(MathMode::Outline).extension(),
+            OutputFormat::Html(MathMode::SvgOutline).extension(),
+            OutputFormat::Markdown(MathMode::SvgOutline).extension(),
         ];
         let unique: std::collections::HashSet<_> = exts.iter().collect();
         assert_eq!(unique.len(), exts.len(), "extensions collide: {exts:?}");
-        for math in [MathMode::Unicode, MathMode::Katex] {
+        for math in [MathMode::SvgText, MathMode::Unicode, MathMode::Katex] {
             assert_eq!(OutputFormat::Markdown(math).extension(), "md");
             assert_eq!(OutputFormat::Html(math).extension(), "html");
         }

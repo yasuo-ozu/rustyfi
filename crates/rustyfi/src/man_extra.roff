@@ -107,10 +107,64 @@ names the regular, bold, oblique and math defaults.
 .I <doc>.satysfi\-aux
 Cross-reference table, in the same JSON format upstream SATySFi writes, so the
 two interoperate.
+.SH MATH RENDERING
+A document's mathematics is parsed, elaborated, evaluated
+.I and laid out
+during compilation, so what reaches a non-PDF backend is positioned glyphs and
+a few filled paths \(em there is no
+.B \efrac
+node left to serialize. Every rendering below is therefore a recovery from
+geometry, and which one suits depends on where the file will be read. The four
+are mutually exclusive; all four are an error with
+.BR "\-\-format pdf" ,
+which typesets the equation itself.
+.TP
+.B \-\-svg\-outline\-math
+Each glyph as an SVG outline path from the document's own face, with the
+characters kept behind it as invisible selectable text. Reproduces the PDF
+exactly and needs nothing of the reader. Largest output.
+.B The default for \-\-format html.
+.TP
+.B \-\-svg\-math
+SVG
+.B <text>
+for the glyphs and
+.BR <rect> / <line>
+for fraction bars and rules, at the positions the layout computed. Compact,
+with real selectable text and a readable source; depends on the reader having
+the document's faces. A MATH-table variant glyph \(em a display-size
+summation, a stretched delimiter \(em has no character that names it and keeps
+an outline path.
+.B The default for \-\-format markdown.
+.TP
+.B \-\-katex
+LaTeX in math delimiters
+.RB ( $...$ / $$...$$
+in Markdown,
+.BR \e(...\e) / \e[...\e]
+in HTML \(em the delimiters KaTeX's auto-render and MathJax enable by
+default), for a reader whose renderer typesets it.
+.B Re-derived, not round-tripped:
+radicals, delimiters drawn as paths, matrices, nested fractions and nested
+scripts do not come back, and a symbol with no name in the table is written as
+its own character. Suitable where the equation's structure matters more than
+its exact appearance.
+.TP
+.B \-\-unicode\-math
+The characters in reading order, using Unicode's own super/subscripts where
+they exist and splitting a fraction at its bar. The only rendering that is
+plain
+.IR text :
+it survives any renderer, reads in a terminal and is greppable. Markdown only.
 .SH EXIT STATUS
 .B 0
-on success, non-zero if the document fails to load, typecheck, evaluate or
-render, or if a package operation fails.
+on success;
+.B 2
+for a usage error, including a math flag given with a format that has no
+reading for it;
+.B 1
+if the document fails to load, typecheck, evaluate or render; and a non-zero
+code if a package operation fails.
 .SH EXAMPLES
 Compile a document with the packages and fonts from an unpacked release:
 .PP
@@ -127,7 +181,7 @@ browser, and see where the time goes:
 .RS 4
 .EX
 $ rustyfi doc.saty \-\-format html
-$ rustyfi doc.saty \-\-format html\-fixed
+$ rustyfi doc.saty \-\-format markdown \-\-katex
 $ rustyfi doc.saty \-\-timing
 .EE
 .RE

@@ -84,6 +84,26 @@ pub(super) enum Piece {
     /// `plain` is the reading-order text, for a code fence — where `$x^2$`
     /// would be literal characters rather than an equation.
     Math { latex: String, plain: String },
+    /// An equation as an inline `<svg>` (`--svg-math`, `--svg-outline-math`),
+    /// in BOTH the shapes it may take.
+    ///
+    /// Two strings rather than one for the same reason [`Piece::Math`] holds
+    /// undelimited LaTeX: whether the drawing may be broken across lines is a
+    /// property of the PARAGRAPH, not of the equation, and is not known when
+    /// the box is walked. `inline` is one line, safe anywhere; `block` is
+    /// indented one element per line and is only legal where the drawing is
+    /// its own HTML block. `crate::mathsvg::Wrap` has the CommonMark argument
+    /// for why the distinction is forced rather than chosen.
+    ///
+    /// Both are built up front. The alternative — keeping the glyphs and
+    /// rendering at flush time — would put a lifetime on [`Para`] and thread
+    /// it through the whole block walker to save re-running a font lookup a
+    /// few dozen times per document.
+    MathSvg {
+        inline: String,
+        block: String,
+        plain: String,
+    },
     /// An emphasis delimiter. Kept distinct from [`Piece::Markup`] because a
     /// Markdown delimiter may not sit against the whitespace inside its own
     /// span (`* text *` is not emphasis) — see [`Para::render`], which moves
@@ -248,7 +268,11 @@ impl Para {
     /// A code block comes back WITHOUT its fence, flagged
     /// [`Rendered::code`]: the writer keeps consecutive ones together in a
     /// single fence, which it cannot do once they are already wrapped.
-    pub(super) fn render(&self, advance: Option<f64>) -> Option<Rendered> {
+    /// `in_cell` says this paragraph is a table cell's content rather than a
+    /// block of its own, which decides whether a lone equation may be
+    /// upgraded to a display block or pretty-printed — see
+    /// [`Para::display_math`].
+    pub(super) fn render(&self, advance: Option<f64>, in_cell: bool) -> Option<Rendered> {
         if !self.open {
             return None;
         }
@@ -256,7 +280,7 @@ impl Para {
         let body = if code {
             self.render_code(advance)
         } else {
-            self.render_prose()
+            self.render_prose(in_cell)
         };
         let trimmed = body.trim_matches(|c| c == ' ' || c == '\n');
         if trimmed.is_empty() {
@@ -308,29 +332,67 @@ impl Para {
     /// anything else. A LINK anywhere declines: its brackets have to be
     /// written around the content, and a display block cannot be a link's
     /// text.
-    fn display_math(&self) -> Option<Vec<&str>> {
+    ///
+    /// `in_cell` declines outright. A table cell whose only content is an
+    /// equation is not a displayed equation — it is a cell, and the paragraph
+    /// machinery simply has no other content to look at. Upgrading it puts a
+    /// centred `$$…$$` block inside a `|` row, which every renderer sets as a
+    /// full-width display block that breaks the table; five rows of
+    /// `easytable`'s own manual are this shape. "Alone in its block" only
+    /// means "displayed" when the block is a paragraph.
+    fn display_math(&self, in_cell: bool) -> Option<Vec<&str>> {
+        if in_cell {
+            return None;
+        }
         let mut maths = Vec::new();
         for piece in &self.pieces {
             match piece {
                 Piece::Math { latex, .. } => maths.push(latex.as_str()),
                 Piece::Text { s, .. } if !s.trim().is_empty() => return None,
                 Piece::Markup { md, .. } if !md.trim().is_empty() => return None,
-                Piece::LinkOpen(_) => return None,
+                Piece::MathSvg { .. } | Piece::LinkOpen(_) => return None,
                 _ => {}
             }
         }
         (!maths.is_empty()).then_some(maths)
     }
 
+    /// Is this paragraph one drawn equation and nothing else — i.e. may its
+    /// `<svg>` be pretty-printed?
+    ///
+    /// Same question as [`Para::display_math`] asks for LaTeX, and the same
+    /// answer for a cell: a drawing inside a `|` row must stay on one line,
+    /// because a table cell is not its own HTML block and a newline inside one
+    /// ends the row.
+    fn display_svg(&self, in_cell: bool) -> bool {
+        if in_cell {
+            return false;
+        }
+        let mut svgs = 0usize;
+        for piece in &self.pieces {
+            match piece {
+                Piece::MathSvg { .. } => svgs += 1,
+                Piece::Text { s, .. } if !s.trim().is_empty() => return false,
+                Piece::Markup { md, .. } if !md.trim().is_empty() => return false,
+                Piece::Math { .. } | Piece::LinkOpen(_) => return false,
+                _ => {}
+            }
+        }
+        svgs == 1
+    }
+
     /// The paragraph as one flowing line of prose.
-    fn render_prose(&self) -> String {
+    fn render_prose(&self, in_cell: bool) -> String {
         // A paragraph that is nothing but equations was a DISPLAYED one — see
         // [`Para::display_math`]. Written whole and returned here, before the
         // inline walk, because the pieces join into a single `$$…$$` rather
         // than each getting delimiters of its own.
-        if let Some(maths) = self.display_math() {
+        if let Some(maths) = self.display_math(in_cell) {
             return format!("$${}$$", maths.join(" "));
         }
+        // The same question for a drawn equation: alone in its own block, the
+        // `<svg>` may be broken across lines and indented.
+        let pretty_svg = self.display_svg(in_cell);
         let mut out = String::new();
         // An emphasis delimiter waiting for the first non-space character, so
         // it never ends up leaning against a space.
@@ -380,6 +442,14 @@ impl Para {
                 // Inline by construction: a paragraph whose only ink is
                 // equations returned above, so reaching here means there is
                 // prose beside this one.
+                // An equation drawn as an `<svg>`. Pretty-printed only when
+                // it is the whole paragraph — see `crate::mathsvg::Wrap`, and
+                // note the raw markup is never escaped.
+                Piece::MathSvg { inline, block, .. } => push_markup(
+                    &mut out,
+                    &mut pending_open,
+                    if pretty_svg { block } else { inline },
+                ),
                 Piece::Math { latex, .. } => {
                     // Two equations may sit side by side with nothing between
                     // them — one construction routinely produces several math
@@ -475,7 +545,9 @@ impl Para {
                 // Inside a fence there is no markup, only text — so a link
                 // contributes its URL-free text, an image its label, and an
                 // equation its characters rather than its LaTeX.
-                Piece::Markup { plain, .. } | Piece::Math { plain, .. } => out.push_str(plain),
+                Piece::Markup { plain, .. }
+                | Piece::Math { plain, .. }
+                | Piece::MathSvg { plain, .. } => out.push_str(plain),
                 Piece::EmphOpen(_)
                 | Piece::EmphClose(_)
                 | Piece::LinkOpen(_)
@@ -666,7 +738,7 @@ mod tests {
             open: true,
             ..Para::default()
         };
-        let rendered = para.render(None).expect("some content");
+        let rendered = para.render(None, false).expect("some content");
         assert!(!rendered.code, "expected prose, got code");
         rendered.text
     }
@@ -881,7 +953,7 @@ mod tests {
             mono: true,
             ..Para::default()
         };
-        let rendered = para.render(Some(3.0)).unwrap();
+        let rendered = para.render(Some(3.0), false).unwrap();
         assert!(rendered.code);
         assert_eq!(rendered.text, "if x:\n    return");
     }
@@ -900,7 +972,7 @@ mod tests {
             mono: true,
             ..Para::default()
         };
-        assert_eq!(para.render(Some(3.0)).unwrap().text, "a * b_c");
+        assert_eq!(para.render(Some(3.0), false).unwrap().text, "a * b_c");
     }
 
     #[test]
@@ -914,7 +986,7 @@ mod tests {
             heading_level: Some(1),
             ..Para::default()
         };
-        assert_eq!(para.render(None).unwrap().text, "## Introduction");
+        assert_eq!(para.render(None, false).unwrap().text, "## Introduction");
     }
 
     /// The gap arithmetic is a division, not a guess: `code.satyh` sizes its

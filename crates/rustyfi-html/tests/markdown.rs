@@ -75,7 +75,7 @@ fn render_full(
         extras,
         links,
         dests,
-        rustyfi_html::MathMode::Outline,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("markdown rendering must succeed")
 }
@@ -601,31 +601,74 @@ fn unicode_math_renders_characters_in_reading_order_with_unicode_scripts() {
     assert!(!md.contains('$'), "{md}");
 }
 
-/// The DEFAULT: an inline `<svg>`, on one line, carrying the equation as a
-/// drawing.
+/// **With no font store, both drawing modes fall back to characters.**
 ///
-/// Rendered with no font store, so every glyph takes the `<text>` fallback
-/// rather than an outline — which is exactly what should happen, and is the
-/// half of the behaviour that can be asserted without a bundled face.
-/// `crates/rustyfi/tests/markdown_math.rs` covers the outlined half against
-/// the real fonts, and skips when they are absent.
+/// A drawing needs a face — to outline, or at minimum to NAME so the reader's
+/// browser picks something with the right advances. Base-14 mode has neither,
+/// so a `<svg>` would be `<text>` at absolute coordinates in whatever the
+/// reader defaults to, and under the sanitizing pipeline a `.md` is usually
+/// read through, nothing at all. Reading-order characters are strictly better,
+/// and are what this backend wrote before any of these modes existed.
+///
+/// Not a corner case: it is CI's own state on `build · clippy · test`, which
+/// does not run `download-fonts.sh`.
 #[test]
-fn the_default_draws_math_as_a_single_line_inline_svg() {
-    let md = render_math(
-        &[x_squared_plus_one()],
-        rustyfi_html::MathMode::Outline,
-    );
-    assert!(md.contains("<svg"), "{md}");
-    // One line: a raw `<svg>` split across lines would have blank lines and
-    // `nl2br` inserted into the middle of it by the reader's own parser.
-    let svg_lines: Vec<&str> = md.lines().filter(|l| l.contains("<svg")).collect();
-    assert_eq!(svg_lines.len(), 1, "{md}");
-    assert!(svg_lines[0].contains("</svg>"), "not closed on its line: {md}");
-    // Sized to the box, sitting on the text baseline, and NOT positioned —
-    // there is no positioned ancestor in a Markdown file to position against.
-    assert!(svg_lines[0].contains("viewBox=\"0 0 30 12\""), "{md}");
-    assert!(svg_lines[0].contains("vertical-align:-2pt"), "{md}");
-    assert!(!md.contains("position:absolute"), "{md}");
+fn a_render_with_no_font_store_writes_characters_rather_than_an_empty_drawing() {
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+    ] {
+        let md = render_math(&[x_squared_plus_one()], mode);
+        assert_eq!(md.trim(), "x² + 1", "{mode:?}: {md}");
+        assert!(!md.contains("<svg"), "{mode:?}: {md}");
+    }
+}
+
+/// The trailing space after an inline equation survives.
+///
+/// **The bug this pins was in every drawing and LaTeX mode at once.** An
+/// equation is not an opaque box — `Ctx::open_opaque`, right for an image,
+/// clears `last_char`, and the glue that follows is then judged by
+/// `wants_space(None, …)`, which returns `false` and drops the space. The word
+/// after every equation ran into it: `ここで 𝑙 は線の太さ` came out as
+/// `…</svg>は線の太さ`. The space BEFORE always survived, which is what made
+/// it easy to miss.
+///
+/// Asserted in all four modes, because the fix is per-arm and three of the
+/// arms had to be changed.
+#[test]
+fn the_space_after_an_inline_equation_is_not_swallowed() {
+    for mode in [
+        rustyfi_html::MathMode::SvgOutline,
+        rustyfi_html::MathMode::SvgText,
+        rustyfi_html::MathMode::Katex,
+        rustyfi_html::MathMode::Unicode,
+    ] {
+        let md = render_math(
+            &[line_of(vec![
+                text_run("see"),
+                glue(4.0),
+                PureHorzBox::Math {
+                    width: Length::pt(10.0),
+                    height: Length::pt(10.0),
+                    depth: Length::pt(2.0),
+                    glyphs: vec![math_glyph("y", 0.0, 0.0, 10.0)],
+                    rules: Vec::new(),
+                },
+                glue(4.0),
+                text_run("then"),
+            ])],
+            mode,
+        );
+        // The word after the equation must not be glued to it. Checked on the
+        // rendered text rather than on a marker, so it holds however the
+        // equation itself is written.
+        assert!(
+            md.contains(" then"),
+            "{mode:?} lost the space before `then`:\n{md}"
+        );
+        assert!(md.contains("see "), "{mode:?} lost the space after `see`:\n{md}");
+    }
 }
 
 /// `--katex`: LaTeX in `$…$`, and `$$…$$` when the equation is the whole
@@ -769,7 +812,7 @@ fn a_missing_reflow_source_renders_an_empty_document() {
         &DocExtras::default(),
         &[],
         &[],
-        rustyfi_html::MathMode::Outline,
+        rustyfi_html::MathMode::SvgOutline,
     )
     .expect("must succeed");
     assert_eq!(md, "");
@@ -789,7 +832,7 @@ fn markdown_with_mono_font(vboxes: &[VertBox]) -> Option<String> {
             &DocExtras::default(),
             &[],
             &[],
-            rustyfi_html::MathMode::Outline,
+            rustyfi_html::MathMode::SvgOutline,
         )
         .expect("markdown rendering must succeed"),
     )

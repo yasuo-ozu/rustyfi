@@ -220,11 +220,6 @@ aside.footnote .para + .para {{ margin-top: 0.3em; }}\n\
     )
 }
 
-/// One `background-image` rule per image the flow placed more than once
-/// (`Ctx::shared_images`, filled during the body walk — so this must be
-/// called AFTER it). Each image's bytes appear once here instead of once per
-/// placement; see `inline.rs`'s `Image` arm for why that matters and what it
-/// costs.
 /// The two rules `--katex` needs, and nothing at all in any other mode.
 ///
 /// Emitted as a separate block rather than folded into [`stylesheet`] for one
@@ -247,6 +242,11 @@ pub(crate) fn math_tex_rules(ctx: &Ctx) -> String {
         .to_string()
 }
 
+/// One `background-image` rule per image the flow placed more than once
+/// (`Ctx::shared_images`, filled during the body walk — so this must be
+/// called AFTER it). Each image's bytes appear once here instead of once per
+/// placement; see `inline.rs`'s `Image` arm for why that matters and what it
+/// costs.
 pub(crate) fn shared_image_rules(ctx: &Ctx) -> String {
     let mut out = String::new();
     for id in ctx.shared_images.borrow().iter() {

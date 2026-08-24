@@ -149,42 +149,68 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
             // text followed by its limits as a drawing, which is legible and
             // whole, rather than as a broken `<svg>`.
             emit_nested_text(para, rules, ctx);
-            match ctx.math {
-                crate::MathMode::Outline => {
-                    if let Some(svg) = crate::mathsvg::math_block(
-                        width.0,
-                        height.0,
-                        depth.0,
-                        glyphs,
-                        rules,
-                        ctx.fonts,
-                    ) {
-                        ctx.open_opaque(para);
+            // Every mode below writes something with CHARACTERS in it, so the
+            // inline-flow state is carried across it from the equation's own
+            // reading-order text — see [`math_flow`]. Only the drawing modes
+            // could be tempted into `Ctx::open_opaque`, and that is exactly
+            // the bug it prevents.
+            let plain = math::math_text(glyphs, rules);
+            // **Nothing to draw with.** With no font store there is no face to
+            // outline and none to NAME, so a drawing degrades to `<text>` at
+            // absolute coordinates in whatever the reader's default is — and
+            // in the sanitizing pipeline this format is usually read through,
+            // to nothing at all. Reading-order characters are strictly better
+            // than a `<svg>` that may vanish, and are what this backend wrote
+            // before any of these modes existed. Reached in base-14 renders
+            // and on a checkout that has not run `download-fonts.sh`.
+            let mode = match ctx.math {
+                m @ (crate::MathMode::SvgOutline | crate::MathMode::SvgText)
+                    if ctx.fonts.is_none() =>
+                {
+                    let _ = m;
+                    crate::MathMode::Unicode
+                }
+                m => m,
+            };
+            match mode {
+                crate::MathMode::SvgOutline | crate::MathMode::SvgText => {
+                    // Built in BOTH shapes, because whether this equation is
+                    // displayed — and so whether its `<svg>` may be broken
+                    // across lines — is a property of the paragraph, which is
+                    // not finished yet. See `para.rs`'s `Piece::MathSvg`.
+                    let build = |wrap| {
+                        crate::mathsvg::math_block(
+                            width.0, height.0, depth.0, glyphs, rules, ctx.fonts, mode, wrap,
+                        )
+                    };
+                    if let Some(inline) = build(crate::mathsvg::Wrap::Inline) {
+                        let block = build(crate::mathsvg::Wrap::Block).unwrap_or_else(|| {
+                            unreachable!("the same box declined only one wrap")
+                        });
+                        math_flow(para, ctx, &plain);
                         // The reading-order text is the `plain` side: it is
                         // what a code fence writes instead of the markup, and
                         // what the plain-text half of the paragraph — the one
                         // content measurement and search read — gets. A wall
                         // of path data there would be worse than useless.
-                        para.push_markup(svg, math::math_text(glyphs, rules));
+                        para.pieces.push(Piece::MathSvg {
+                            inline,
+                            block,
+                            plain,
+                        });
                     }
                 }
                 crate::MathMode::Katex => {
                     let latex = crate::latex::math_latex(glyphs, rules);
                     if !latex.is_empty() {
-                        ctx.open_opaque(para);
-                        para.pieces.push(Piece::Math {
-                            latex,
-                            plain: math::math_text(glyphs, rules),
-                        });
+                        math_flow(para, ctx, &plain);
+                        para.pieces.push(Piece::Math { latex, plain });
                     }
                 }
                 crate::MathMode::Unicode => {
-                    let text = math::math_text(glyphs, rules);
-                    if !text.is_empty() {
-                        ctx.resolve_glue(para, text.chars().next());
-                        ctx.last_char.set(text.chars().next_back());
-                        para.push_text(&text, false);
-                        ctx.mono_run.set(false);
+                    if !plain.is_empty() {
+                        math_flow(para, ctx, &plain);
+                        para.push_text(&plain, false);
                     }
                 }
             }
@@ -293,6 +319,34 @@ pub(super) fn emit_inline(para: &mut Para, bx: &PureHorzBox, ctx: &Ctx) {
         // Zero-width markers and hooks: no meaning in any reflowed format.
         PureHorzBox::HookPageBreak { .. } | PureHorzBox::FrameMarker { .. } => {}
     }
+}
+
+/// Settle the inline-flow state across an equation, whatever it is written as.
+///
+/// **An equation is not an opaque box, and treating it as one loses the space
+/// after it.** `Ctx::open_opaque` — right for an image or a table, which have
+/// no characters — clears `last_char`, and the glue that follows is then
+/// judged by `recover::wants_space(None, …)`, whose first line is
+/// `let Some(p) = prev else { return false }`. So the space is discarded and
+/// the next word runs into the drawing: `ここで 𝑙 は線の太さ` came out as
+/// `…</svg>は線の太さ`, and `see ${y} then` as `see <SVG>then`.
+///
+/// The space BEFORE an equation always survived, which is what made this hard
+/// to see: `resolve_glue` is called with the equation's first character and
+/// answers correctly. Only the trailing side was lost, on 47 of `latexcmds`'
+/// 55 equations.
+///
+/// So the flow is carried across the equation from its own reading-order text
+/// (`math::math_text`) — the same characters `--unicode-math` would write — in
+/// every mode. The Unicode arm always did this; the others did not, and
+/// nothing covered it.
+///
+/// `mono_run` is cleared because an equation is never fixed-pitch, whatever
+/// the run before it was.
+fn math_flow(para: &mut Para, ctx: &Ctx, plain: &str) {
+    ctx.resolve_glue(para, plain.chars().next());
+    ctx.last_char.set(plain.chars().next_back());
+    ctx.mono_run.set(false);
 }
 
 /// A `FixedEmpty` (`inline-skip`) at least this wide (pt) is a deliberate gap

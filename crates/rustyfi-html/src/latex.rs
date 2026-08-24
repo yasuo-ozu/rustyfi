@@ -296,6 +296,19 @@ fn is_big_operator(base: &str) -> bool {
 /// out of math mode, where KaTeX warns about every character of it and sets
 /// them all in italics with no inter-word spacing.
 fn glyph_latex(g: &MathGlyph) -> String {
+    // A combining mark must never reach `\text{…}`: KaTeX cannot lex a brace
+    // with a diacritic on it and throws. Named marks become their accent
+    // command; an unnamed one is DROPPED, which loses a mark but keeps the
+    // equation renderable — see [`accent_command`].
+    if g.text.chars().all(is_combining) {
+        let mut out = String::new();
+        for c in g.text.chars() {
+            if let Some(accent) = accent_command(c) {
+                push_tok(&mut out, &format!("{accent}{{}}"));
+            }
+        }
+        return out;
+    }
     if is_prose_run(&g.text) {
         return format!("\\text{{{}}}", text_escape(&g.text));
     }
@@ -338,6 +351,12 @@ fn is_prose_run(text: &str) -> bool {
 /// inter-atom spacing of a variable, which is not what the PDF shows.
 fn needs_text_mode(c: char) -> bool {
     if c.is_ascii() {
+        return false;
+    }
+    // A combining mark is neither prose nor an atom: it is handled ahead of
+    // this by [`glyph_latex`], and must not be allowed to reach `\text{…}`
+    // even in a mixed record, where it would break the whole formula.
+    if is_combining(c) {
         return false;
     }
     let base = rustyfi_backend::math_alphanumeric_base(c);
@@ -452,9 +471,73 @@ fn ends_in_control_word(s: &str) -> bool {
     letters > 0 && s.len() > letters && s.as_bytes()[s.len() - letters - 1] == b'\\'
 }
 
+/// The LaTeX accent command a combining mark stands for, if this module knows
+/// one.
+///
+/// **The single largest defect this module had, measured**: 471 of 1358
+/// emitted formulas failed real KaTeX outright, and 233 of `azmath`'s 328 math
+/// spans — its whole accent chapter — rendered as red errors.
+///
+/// The mechanism is worth recording, because nothing about it is visible in
+/// the output. SATySFi's math places an accent as its OWN glyph record holding
+/// a lone combining mark (U+0300–U+036F), positioned over the character it
+/// accents. Such a record is not ASCII, has no `symbol_command` and is not a
+/// styled letter, so [`needs_text_mode`] correctly concluded "not
+/// mathematics" and [`glyph_latex`] wrapped it: `\text{̂}`. KaTeX's lexer then
+/// glues the `{` to the combining mark — a brace with a diacritic on it is not
+/// a token — and throws. lualatex ACCEPTS the same input and silently drops
+/// the glyph, so this is precisely the gap where KaTeX is narrower than LaTeX
+/// and a `lualatex` check cannot see it.
+///
+/// Mapped to the accent command rather than dropped, and applied to an EMPTY
+/// group (`\hat{}`) rather than to the preceding atom. That is deliberate:
+/// the mark arrives as a separate record with its own position, and this
+/// module's recovery has no notion of "the atom before me" that would survive
+/// a script or a fraction boundary — so `\hat{x}` is not reconstructible here
+/// without guessing. `x\hat{}` renders the base and the accent side by side
+/// rather than stacked: visibly approximate, which is the honest failure, and
+/// it PARSES, which is the point.
+///
+/// Anything in the range this table does not name falls through to
+/// [`needs_text_mode`] as before — but as a combining mark it would break
+/// KaTeX again, so [`glyph_latex`] drops an unnamed one instead.
+fn accent_command(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{300}' => "\\grave",
+        '\u{301}' => "\\acute",
+        '\u{302}' => "\\hat",
+        '\u{303}' => "\\tilde",
+        '\u{304}' => "\\bar",
+        '\u{306}' => "\\breve",
+        '\u{307}' => "\\dot",
+        '\u{308}' => "\\ddot",
+        '\u{30A}' => "\\mathring",
+        '\u{30C}' => "\\check",
+        '\u{20D7}' => "\\vec",
+        _ => return None,
+    })
+}
+
+/// Is `c` a combining mark — a character that composes with the one before it
+/// rather than standing on its own?
+///
+/// The Unicode "Combining Diacritical Marks" block plus the two combining
+/// ranges a math font actually reaches. Used to keep a mark out of `\text{…}`,
+/// where KaTeX cannot lex it; see [`accent_command`].
+fn is_combining(c: char) -> bool {
+    matches!(c as u32,
+        0x0300..=0x036F      // Combining Diacritical Marks
+        | 0x20D0..=0x20F0    // Combining Diacritical Marks for Symbols
+        | 0xFE20..=0xFE2F    // Combining Half Marks
+    )
+}
+
 /// One character as LaTeX: its style wrapper (when Unicode encoded one), then
 /// its command or its escaped self.
 fn char_latex(c: char) -> String {
+    if let Some(accent) = accent_command(c) {
+        return format!("{accent}{{}}");
+    }
     let base = rustyfi_backend::math_alphanumeric_base(c).unwrap_or(c);
     let body = symbol_command(base)
         .map(str::to_string)

@@ -198,11 +198,102 @@ pub(super) fn graphics_block(elems: &[GraphicsElem]) -> Option<String> {
 /// caller is responsible for their text.
 pub(super) fn emit_flipped_group(out: &mut String, elems: &[GraphicsElem], tx: f64, ty: f64) {
     let _ = write!(out, "<g transform=\"translate({tx},{ty}) scale(1,-1)\">");
+    emit_elems_simple(out, elems);
+    out.push_str("</g>");
+}
+
+/// [`emit_elems`] with no nested-box emitter and no `after` buffer — the walk
+/// for a caller that has already opened its own coordinate frame and has no
+/// HTML to place (`GraphicsElem::Text` sub-boxes are dropped, as they are in
+/// [`graphics_block`]).
+///
+/// Exposed for `crate::mathsvg`'s `--svg-math` rule emitter, which draws the
+/// shapes it can name itself and delegates the rest here rather than
+/// reimplementing clips and dash patterns.
+pub(super) fn emit_elems_simple(out: &mut String, elems: &[GraphicsElem]) {
     // Both `after` and the nested emitter are discarded: see the note above.
     let mut after = String::new();
     let mut nested = |_: &mut String, _: &PureHorzBox, _: f64, _: f64| {};
     emit_elems(out, &mut after, elems, 0.0, 0.0, &mut nested);
-    out.push_str("</g>");
+}
+
+/// `path` as `(x, y, width, height)` when it is a single axis-aligned
+/// rectangle, in the path's own y-up coordinates.
+///
+/// A fraction bar, a radical's overbar and every `\overline`/`\underline` in
+/// the corpus is exactly this shape — `layout_math_atom` draws them as a
+/// filled quadrilateral — so recognising it turns the great majority of a math
+/// box's rules into a `<rect>` a reader can understand at a glance.
+///
+/// Deliberately STRICT: four or five points (a closing point repeating the
+/// start is accepted), every segment a straight line, and each one purely
+/// horizontal or purely vertical. Anything else answers `None` and is drawn as
+/// the path it is. A near-rectangle silently squared off would move ink.
+pub(super) fn axis_aligned_rect(path: &Path) -> Option<(f64, f64, f64, f64)> {
+    let [sub] = &path.subpaths[..] else {
+        return None;
+    };
+    if sub.closing == Closing::Open {
+        return None;
+    }
+    let mut pts = vec![(sub.start.0 .0, sub.start.1 .0)];
+    for seg in &sub.segs {
+        match seg {
+            PathSeg::Line(p) => pts.push((p.0 .0, p.1 .0)),
+            PathSeg::Bezier(..) => return None,
+        }
+    }
+    // A path that returns to its start explicitly has one point too many.
+    if pts.len() == 5 && pts[0] == pts[4] {
+        pts.pop();
+    }
+    if pts.len() != 4 {
+        return None;
+    }
+    // Every edge, including the implicit closing one, must be axis-parallel.
+    for i in 0..4 {
+        let (ax, ay) = pts[i];
+        let (bx, by) = pts[(i + 1) % 4];
+        if ax != bx && ay != by {
+            return None;
+        }
+    }
+    let xs: Vec<f64> = pts.iter().map(|p| p.0).collect();
+    let ys: Vec<f64> = pts.iter().map(|p| p.1).collect();
+    let (x0, x1) = (
+        xs.iter().copied().fold(f64::INFINITY, f64::min),
+        xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    );
+    let (y0, y1) = (
+        ys.iter().copied().fold(f64::INFINITY, f64::min),
+        ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    );
+    // Exactly two distinct x and two distinct y, or it is some other
+    // quadrilateral that happens to have axis-parallel edges.
+    if xs.iter().any(|v| *v != x0 && *v != x1) || ys.iter().any(|v| *v != y0 && *v != y1) {
+        return None;
+    }
+    let (w, h) = (x1 - x0, y1 - y0);
+    (w > 0.0 && h > 0.0).then_some((x0, y0, w, h))
+}
+
+/// `path` as `(x1, y1, x2, y2)` when it is one straight line segment.
+///
+/// The `<line>` counterpart of [`axis_aligned_rect`], for a rule the document
+/// STROKED rather than filled — a user's own `\overline`-style drawing.
+/// Unlike the rectangle test this accepts any direction, since a `<line>`
+/// expresses a diagonal exactly as well as an axis-parallel one.
+pub(super) fn straight_segment(path: &Path) -> Option<(f64, f64, f64, f64)> {
+    let [sub] = &path.subpaths[..] else {
+        return None;
+    };
+    if sub.closing != Closing::Open {
+        return None;
+    }
+    let [PathSeg::Line(end)] = &sub.segs[..] else {
+        return None;
+    };
+    Some((sub.start.0 .0, sub.start.1 .0, end.0 .0, end.1 .0))
 }
 
 /// The recursive element walker (`Group`/`Clip` reenter this, not
@@ -330,7 +421,7 @@ fn next_clip_id() -> usize {
 /// PDF writer's `cm`; a per-coordinate flip here would double up (see the
 /// PDF writer's own "don't add one" warning, `lib.rs:699-700`, which applies
 /// verbatim here).
-fn path_d(path: &Path) -> String {
+pub(super) fn path_d(path: &Path) -> String {
     let mut d = String::new();
     for sub in &path.subpaths {
         let _ = write!(d, "M{} {} ", sub.start.0 .0, sub.start.1 .0);

@@ -174,8 +174,10 @@ url = "https://example.org/another-index"
 |---|---|
 | `-o <path>` | output path (default: the input with a `.pdf` extension) |
 | `--format <fmt>` | `pdf` (default), `html` or `markdown` — see [HTML output](#html-output) and [Markdown output](#markdown-output) |
-| `--unicode-math` | markdown only: equations as their characters (`x²`) instead of drawn SVG — see [How math is written](#how-math-is-written) |
+| `--svg-math` | html and markdown: equations as SVG `<text>` + `<rect>` — markdown's default; see [How math is written](#how-math-is-written) |
+| `--svg-outline-math` | html and markdown: equations as outline paths with selectable text behind them — html's default |
 | `--katex` | html and markdown: equations as LaTeX in math delimiters, for a KaTeX/MathJax reader |
+| `--unicode-math` | markdown only: equations as their characters (`x²`) |
 | `--lib-root <dir>` | where `@require:` looks for packages |
 | `--lang <v>` | `0.0` (default) or `0.1`; a `use` header auto-selects `0.1` |
 | `--font <file>` | use a TrueType/OpenType file as the regular face |
@@ -254,9 +256,12 @@ screen reader. It is what makes the output larger than it would otherwise be —
 about 40% on the most math-heavy document in the corpus, a couple of percent
 on the rest.
 
-`--katex` writes the equation as LaTeX in `\(…\)`/`\[…\]` instead, for a page
-that runs KaTeX or MathJax — see [How math is written](#how-math-is-written),
-including what a re-derivation from laid-out glyphs cannot give back.
+`--svg-math` draws the same equations with SVG `<text>` and `<rect>` instead,
+which is 0.70x the bytes raw and 0.57x gzipped and depends on the reader
+having the document's faces; `--katex` writes them as LaTeX in `\(…\)`/`\[…\]`
+for a page that runs KaTeX or MathJax. See
+[How math is written](#how-math-is-written), including what a re-derivation
+from laid-out glyphs cannot give back.
 
 Nothing is fetched and nothing is executed — no external stylesheet, no
 script, no remote font. Fonts are otherwise **named**, not embedded: a
@@ -391,41 +396,88 @@ short sentence that mentions a `\command`.
 
 `${\frac{a}{b}}` is parsed, elaborated, evaluated **and laid out** during
 compilation. What reaches a backend is a flat list of glyphs with coordinates
-plus a couple of filled paths for the fraction bar and the radical sign; there
-is no `\frac` node anywhere, and no backend can serialize one. So every
-rendering below is a *recovery* from geometry, and which one you want depends
-on where the file is going to be read.
+plus a few filled paths for the fraction bar and the radical sign; there is no
+`\frac` node anywhere, and no backend can serialize one. So every rendering
+below is a *recovery* from geometry, and which one you want depends on where
+the file is going to be read.
 
 | | markdown | html | what it emits |
 |---|---|---|---|
-| *(default)* | ✔ | ✔ | an inline `<svg>` of glyph outlines |
-| `--unicode-math` | ✔ | — | the characters, in reading order |
+| `--svg-math` | **default** | ✔ | SVG `<text>` + `<rect>`/`<line>`, positioned by the layout |
+| `--svg-outline-math` | ✔ | **default** | an outline `<path>` per glyph, characters kept behind it |
 | `--katex` | ✔ | ✔ | LaTeX in math delimiters |
+| `--unicode-math` | ✔ | — | the characters, in reading order |
 
-The two flags are mutually exclusive, and both are an error with
-`--format pdf`, which typesets the equation itself.
+The four are mutually exclusive, and all four are an error with
+`--format pdf`, which typesets the equation itself. **The defaults differ by
+format on purpose**: an HTML page is self-contained and nobody reads it as
+source, so it gets the rendering that reproduces the PDF exactly and depends
+on nothing the reader has; a `.md` is read as source at least as often as it
+is rendered, so it gets the compact one whose source says what it means.
 
-### Default: outlined SVG
+### `--svg-math`: text and shapes — Markdown's default
+
+Each glyph is an SVG `<tspan>` at the position the layout computed, all of them
+in one `<text>`; each fraction bar and rule is a `<rect>` or a `<line>`. The
+text is *real* text — it selects, copies, searches and reads aloud with no
+invisible layer behind it — and the source says what it means:
+
+```html
+<svg … viewBox="0 0 38.95 12.08" style="overflow:visible; vertical-align:-2.41pt;">
+  <rect x="0" y="4" width="20" height="0.48" fill="rgb(0,0,0)"/>
+  <text class="math-text" style="font-family:'Latin Modern Math', …;font-size:12px;">
+    <tspan x="0" y="8.54">∀</tspan><tspan x="7.99" y="8.54">𝜀</tspan> <tspan x="18.08" y="8.54">:</tspan>
+  </text>
+</svg>
+```
+
+Two costs, both real:
+
+- **it depends on the reader having the document's faces.** Every glyph is
+  positioned absolutely, so a substitute whose advances differ does not reflow
+  — it collides. The family is named inline, so a reader who has Latin Modern
+  Math gets exactly the PDF's glyphs and one who does not gets a near miss;
+- **a MATH-table variant glyph has no character that names it.** A display-size
+  `∑`, a stretched delimiter and an `ssty` script form are addressable only by
+  glyph id, and `<text>∑</text>` draws the *base* glyph — whose ink is a
+  different size, while the limits around it were centred on the variant's
+  advance. So those glyphs keep an outline `<path>`, with their character
+  carried invisibly beside it. On `latexcmds` that is 27 paths against 51
+  `<text>` runs: the exception is small, and skipping it would silently
+  reintroduce a measured misplacement in exactly the equations most likely to
+  be displayed.
+
+Verified against the mode below, which an audit compared glyph-for-glyph with
+the rasterised PDF: across the corpus's **100 math boxes, every glyph lands at
+the same coordinate and carries the same characters in both modes.**
+
+**Displayed equations are pretty-printed; inline ones are not**, and that is a
+CommonMark constraint rather than taste. A display equation is its own HTML
+block, so a multi-line `<svg>` satisfies rule 7 and passes through whole. An
+inline one sits mid-paragraph, where a renderer with `breaks: true` — many
+Markdown pipelines, including this repo's own playground preview — inserts a
+`<br>` at every newline, breaking the drawing. Neither shape ever contains a
+blank line, which would terminate the HTML block in every implementation.
+
+### `--svg-outline-math`: outlines — HTML's default
 
 Each glyph is drawn as a `<path>` taken from the document's **own** face, at
 the coordinates the layout computed. This is what the PDF draws, so it is the
 only mode that reproduces it — and because the outline travels with the file,
 it renders the same for a reader who has never heard of Latin Modern Math. A
-`<text>` naming the face would not: where the reader lacks it, the
-substitute's advances are not the ones each glyph's absolute offset was
-computed against, and the equation collides with itself (measured on
+`<text>` naming the face would not: measured on
 `\forall \epsilon \: \exists \delta` at 12pt, the port reserves 7.992pt for
-`∀` where a substituted face draws 12.000, so `ε` lands inside the
-quantifier).
+`∀` where a substituted face draws 12.000, so `ε` lands inside the quantifier.
 
 The characters are kept **behind** the drawing as invisible `<text>`, so an
 equation can still be selected, copied, searched with the browser's own
 in-page find, and read aloud by a screen reader. That is verified in a real
 headless browser rather than assumed.
 
-The cost, in Markdown, is real: a renderer that sanitizes HTML — GitHub's
-comment fields, most static-site pipelines — drops the `<svg>` and leaves
-nothing in its place. That is what the other two modes are for.
+The cost is size — an outline is hundreds of coordinates per glyph. On
+`latexcmds`, Markdown's math-heaviest document, it is **2.3× the default raw
+and 2.2× gzipped**. In HTML, where nothing strips markup and the page is meant
+to be self-contained, that is the right trade and it is the default.
 
 ### `--unicode-math`: the characters
 
@@ -444,11 +496,6 @@ reads in a terminal, `grep` finds it, and it needs nothing of the reader at
 all. Markdown-only, for the same reason — an HTML page is markup by
 definition and can always draw the real thing.
 
-**What is lost**: radicals (the sign is a path, not a glyph, so `√` is not
-written and `√(1-v²/c²)` reads as its contents alone), matrices and aligned
-environments, nested fractions beyond one level, and anything whose meaning is
-carried by position rather than by its characters.
-
 ### `--katex`: LaTeX in delimiters
 
 ```console
@@ -461,41 +508,41 @@ Typora read; `\(…\)` and `\[…\]` in HTML, which is what KaTeX's `auto-render
 and MathJax enable **by default** — neither turns on `$…$` for inline math
 without configuration, so emitting it into a web page would show a literal
 dollar sign on a reader's default setup. An equation that is the whole of its
-paragraph is written in the display form; nothing else can be alone in a
-block.
+paragraph is written in the display form.
 
-It is a **re-derivation, not a round trip**, and the difference is worth
-being precise about. What comes back: fractions (`\frac{a+b}{c}`), scripts and
-limits grouped correctly (`\sum\limits_{k=1}^{n}`, not the `\sum_{k}_{=}_{1}`
-that a naive per-glyph emitter produces and that KaTeX refuses to render),
-around 180 symbols by name, and the alphabet of a styled letter — `ℝ` really
-does come back as `\mathbb{R}`, because SATySFi writes the style into the
-codepoint rather than beside it.
+It is a **re-derivation, not a round trip.** What comes back: fractions,
+scripts and limits grouped correctly (`\sum\limits_{k=1}^{n}`), around 180
+symbols by name, accents as their commands, prose inside an equation as
+`\text{…}`, and the alphabet of a styled letter — `ℝ` really does come back as
+`\mathbb{R}`, because SATySFi writes the style into the codepoint.
 
-What does **not** come back, in every case because the information is not in
-the box stream rather than because it is unimplemented:
+### What `--katex` cannot recover
+
+Every item here is information the box stream does not carry, not a gap in the
+writer. **The first three are structural losses that change what the equation
+says**, and are the reason this mode is opt-in rather than a default:
 
 | construct | what you get instead | why |
 |---|---|---|
-| `\sqrt{x}` | the radicand, unwrapped | the radical sign is a drawn path, not a glyph; there is no `√` to key on |
-| matrices, `\begin{aligned}` | the cells, in x order | the arrangement is carried by position and no bar delimits it |
-| a fraction inside a fraction | flattened into the outer one | recovery is one bar deep |
-| `\text{…}` | its characters, in math mode | the run is folded into one glyph record with no mark that it was upright |
-| `\left(…\right)` | the delimiter characters | a grown delimiter arrives as one record per assembly part; the size is lost, the character is not |
-| `\,` `\;` `\quad` | approximated | all of them are "a gap wider than the threshold" by then |
-| colour | dropped | no `\color` is emitted for something that cannot be measured back |
+| `\paren{a+b}`, `\left(…\right)` | **the contents, with the delimiters gone** — `(x+y)^2` becomes `x+y^{2}` | `math-paren` draws a delimiter as a `Fill` path, not a glyph, so there is no character to recover |
+| `\sqrt{x}` inside a fraction | the radicand, and the denominator mis-split | the radical sign is likewise a path; its bar is read as a fraction bar |
+| a script inside a fraction | the wrong vertical sense about half the time — `\frac{1}{x^2}` → `\frac{1}{x_{2}}` | up/down is read from absolute `dy`, and a fraction half sits on a displaced baseline |
+| `\lim_{x\to 0}` | the operator and its limit interleaved | a centred limit over a multi-letter operator sorts into the middle of it. `\sum`/`\prod`/`\int` are correct |
+| `x^{2^{3}}` | `x^{23}` | nested scripts flatten |
+| `a/(b/c)` | `(a/b)/c` | a nested fraction inverts |
+| matrices, `\begin{aligned}` | the cells, in x order | the arrangement is carried by position, and no bar delimits it |
+| `\text{…}` | recovered only when the run holds a space | the layout splits a run at each glue, so a `\text` of separate words arrives as separate records |
+| `\,` `\;` `\quad` | approximated | all of them are "a gap over the threshold" by then |
+| colour | dropped | not measurable back |
 
 Anything whose name is not in the symbol table falls through as the character
-itself, escaped where LaTeX reserves it — so an unrecognised symbol renders as
-what the document set, never as a guess and never as nothing.
-
-One thing deliberately **not** re-emitted: the spacing around a binary
-operator or a relation. SATySFi's layout inserts it by the same rules LaTeX
-uses, so writing it back as `\ ` on top of the space LaTeX adds anyway would
-render the equation wider than the PDF. `x + 1` is emitted as `x+1`. The
-spacing that *is* kept is the kind LaTeX would not supply — the word spaces
-inside a `\text` run, which are otherwise the only trace that a space was set
-there at all.
+itself, escaped where LaTeX reserves it — never a guess, never nothing. Three
+things it deliberately does *not* do, each found by running it over the corpus
+rather than over fixtures: it does not re-emit the spacing LaTeX inserts
+itself (`x + 1` is emitted as `x+1`, which typesets as `x + 1`), it does not
+let a control word swallow the next letter (`\partial` + `t` would concatenate
+into an undefined command), and it does not let two inline formulas run their
+delimiters together into a stray `$$`.
 
 ## Editor support
 

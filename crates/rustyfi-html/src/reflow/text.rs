@@ -138,6 +138,10 @@ pub(crate) fn sole_math_tex(html: &str) -> Option<String> {
     let mut rest = html.trim();
     let mut parts: Vec<&str> = Vec::new();
     while !rest.is_empty() {
+        rest = strip_hskip(rest);
+        if rest.is_empty() {
+            break;
+        }
         let after_open = rest.strip_prefix(MATH_TEX_OPEN)?;
         let end = after_open.find(MATH_TEX_CLOSE)?;
         let inner = &after_open[..end];
@@ -150,6 +154,32 @@ pub(crate) fn sole_math_tex(html: &str) -> Option<String> {
         rest = after_open[end + MATH_TEX_CLOSE.len()..].trim_start();
     }
     (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// Drop any leading spacing struts, and the whitespace after them.
+///
+/// **Without this the display upgrade essentially never fires**, which is how
+/// it shipped: a DISPLAYED equation is centred, and `\align-center` is a pair
+/// of `inline-fil`s that reach this backend as `<span class="hskip">`. So the
+/// paragraph does not START with the math span, `strip_prefix` fails, and
+/// every displayed equation in the document is written with inline
+/// delimiters — the exact failure [`sole_math_tex`]'s own doc comment warns
+/// about. Measured across ten corpus documents: `\[` fired once.
+///
+/// The same strut is what [`has_visible_content`] skips, and for the same
+/// reason: it carries no ink, so it cannot be evidence that the paragraph
+/// holds anything besides the equation.
+fn strip_hskip(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start();
+        let Some(after) = s.strip_prefix("<span class=\"hskip\"") else {
+            return s;
+        };
+        match after.find("></span>") {
+            Some(end) => s = &after[end + "></span>".len()..],
+            None => return s,
+        }
+    }
 }
 
 /// The document's body text style: the `(font, size)` pair the most

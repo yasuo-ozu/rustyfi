@@ -1,27 +1,34 @@
-//! Drawing an equation: the face's own glyph outlines, with the characters
-//! kept behind them as invisible, selectable text.
+//! Drawing an equation into an `<svg>` — two ways, shared by both backends.
 //!
-//! **Shared by both backends, and that is the point.** `--format html` has
-//! drawn math this way since the outline change; `--format markdown` now does
-//! too, by default. Two copies of the geometry below would be two copies of
-//! the y-flip, the units-per-em scale, the pen-offset accumulation, the
-//! stretchy-delimiter dedup and the space-from-a-gap rule — each of which was
-//! got wrong at least once before it was got right, and each of which is
+//! **The sharing is the point.** Two copies of the geometry below would be two
+//! copies of the y-flip, the units-per-em scale, the pen-offset accumulation,
+//! the stretchy-delimiter dedup and the space-from-a-gap rule — each of which
+//! was got wrong at least once before it was got right, and each of which is
 //! invisible when it drifts (a glyph 4/3 too big still renders). So the
-//! machinery is here and each backend supplies only its own `<svg>` wrapper,
-//! which is the one thing they genuinely disagree about:
+//! machinery is here, and a backend supplies only its own `<svg>` wrapper:
 //!
 //! - the HTML backend positions its `<svg>` ABSOLUTELY inside a
 //!   `position:relative` wrapper `<span>` it also uses for the run's nested
 //!   flow content, and lets its stylesheet make the phantom text invisible;
 //! - Markdown has no ancestor to position against and no stylesheet at all,
-//!   so [`math_block`] emits ONE self-contained, intrinsically-sized,
-//!   single-line `<svg>` and writes `fill:none` inline.
+//!   so [`math_block`] emits ONE self-contained, intrinsically-sized `<svg>`
+//!   and writes every style, `fill:none` included, INLINE.
 //!
-//! Everything between those two wrappers — [`emit_glyph_layer`] — is one
-//! function producing one byte string.
+//! ## The two layers, and which format defaults to which
 //!
-//! ## Why an outline and not `<text>`
+//! [`emit_outline_layer`] (`--svg-outline-math`, **HTML's default**) draws
+//! each glyph from the face's own outline, with the characters kept behind it
+//! as invisible selectable text. It reproduces the PDF exactly and asks
+//! nothing of the reader — no font, no typesetter — and costs hundreds of
+//! coordinates per glyph.
+//!
+//! [`emit_text_layer`] (`--svg-math`, **Markdown's default**) writes SVG's own
+//! `<text>` at the same positions, with `<rect>`/`<line>` for the rules. Far
+//! smaller, and a source a person can read; it depends on the reader having
+//! the document's faces, and it keeps an outline `<path>` for the glyphs no
+//! character can address. That exception is not optional — see that function.
+//!
+//! ## Why an outline is worth its size
 //!
 //! A `<text>` names a face and hopes. Where the reader does not have it, the
 //! substitute's advances are not the ones the equation was laid out against,
@@ -30,22 +37,22 @@
 //! there is no flow to absorb the difference. Measured on
 //! `\forall \epsilon \: \exists \delta` at 12pt in Latin Modern Math, the port
 //! reserves 7.992pt for `∀` and a substituted face draws 12.000 — so `ε` lands
-//! inside the quantifier. Drawing the outline also makes the two backends
-//! agree with the PDF rather than approximately agree.
-//!
-//! `<text>` remains the FALLBACK, for a render with no font store (base-14
-//! mode) and for a face that will not parse or has no outline for a glyph.
+//! inside the quantifier. That is the trade the two modes make, and why the
+//! self-contained format defaults to the self-contained rendering.
 //!
 //! ## Why the characters have to survive anyway
 //!
 //! A `<path>` is a shape: it cannot be selected, copied, found with the
 //! browser's in-page search, or announced by a screen reader. Outlining
-//! without [`Phantom`] would trade one fidelity bug for four accessibility
+//! without [`TextRun`] would trade one fidelity bug for four accessibility
 //! ones. The technique is the one PDF viewers use for a scanned page with an
 //! OCR layer — paint the picture, and put the text behind it where the
 //! machinery that reads text can still find it. That it WORKS is a fact about
 //! browsers rather than about the standard, and is measured in a real one by
 //! `crates/rustyfi/tests/html_math_selection.rs`.
+//!
+//! The text layer needs no such thing, and deliberately emits none: its text
+//! is real, and a second invisible copy would be selected and searched twice.
 
 use std::fmt::Write as _;
 
@@ -157,47 +164,58 @@ pub(crate) fn rules_have_ink(rules: &[GraphicsElem]) -> bool {
     })
 }
 
-/// The glyph layer of a math `<svg>`: one `<path>` per inked glyph where the
-/// face gives an outline, a `<text>` where it does not, and the whole run's
-/// characters once more as a single invisible [`Phantom`] `<text>`.
+/// A glyph's SVG-native `(x, y)` pen position.
 ///
-/// `height` is the box's own height, and it is the ONLY geometry this needs:
-/// `MathGlyph.dx`/`dy` are box-local y-**up** offsets from the box's baseline
-/// (the same convention `GraphicsElem::Path` points use, confirmed by the PDF
-/// writer's own `anchor_y + glyph.dy` arithmetic in its y-up space,
-/// `rustyfi-pdf`'s `place_math`), so a local `(dx, dy)` lands at SVG-native
-/// `(dx, height - dy)`. That is computed BY HAND here rather than with a `<g
-/// transform>` flip, specifically so `<text>` glyphs are never inside a
-/// `scale(1,-1)` group, which would render them MIRRORED upside-down (SVG text
-/// has no orientation-independence the way a filled path does).
+/// This is the ONLY geometry either layer needs: `MathGlyph.dx`/`dy` are
+/// box-local y-**up** offsets from the box's baseline (the same convention
+/// `GraphicsElem::Path` points use, confirmed by the PDF writer's own
+/// `anchor_y + glyph.dy` arithmetic in its y-up space, `rustyfi-pdf`'s
+/// `place_math`), so a local `(dx, dy)` lands at SVG-native
+/// `(dx, height - dy)`.
 ///
-/// `phantom_fill_none` writes `fill:none` into the phantom `<text>`'s own
-/// style instead of leaving it to a stylesheet. The HTML backend has one
+/// Computed BY HAND rather than with a `<g transform>` flip, specifically so
+/// `<text>` glyphs are never inside a `scale(1,-1)` group, which would render
+/// them MIRRORED upside-down — SVG text has no orientation-independence the
+/// way a filled path does. Shared by both layers so the two modes cannot
+/// place the same equation differently.
+fn pen(g: &MathGlyph, height: f64) -> (f64, f64) {
+    (g.dx.0, height - g.dy.0 - g.info.rising.0)
+}
+
+/// **`--svg-outline-math`**: every glyph as an outline `<path>`, with the
+/// whole run's characters once more as a single invisible [`TextRun`].
+///
+/// `inline_hidden` writes `fill:none` into the phantom `<text>`'s own style
+/// instead of leaving it to a stylesheet. The HTML backend has one
 /// (`css.rs`'s `.math-glyphs .mphantom`) and passes `false`; a Markdown file
 /// has nowhere to put a rule, and without this the phantom characters would be
 /// painted in black ON TOP of the outlines they stand behind — every equation
 /// drawn twice, once as shapes and once as the reader's own substitute face.
-pub(crate) fn emit_glyph_layer(
+///
+/// Each element ends in a newline, which is what the HTML backend has always
+/// written and what [`math_block`] folds out for Markdown. That shape is load
+/// bearing: `--format html` output is byte-identical across the introduction
+/// of these modes, and this function is why.
+pub(crate) fn emit_outline_layer(
     out: &mut String,
     glyphs: &[MathGlyph],
     height: f64,
     fonts: Option<&TtfFontStore>,
-    phantom_fill_none: bool,
+    inline_hidden: bool,
 ) {
-    let mut phantom = Phantom::default();
+    let mut phantom = TextRun::default();
     for (i, g) in glyphs.iter().enumerate() {
-        let x = g.dx.0;
-        let y = height - g.dy.0 - g.info.rising.0;
+        let (x, y) = pen(g, height);
         // Every glyph is drawn from the face's own outline where one can be
         // had, so the equation does not depend on the reader having the face
         // — see [`emit_math_glyph_path`] and [`math_glyph_outline`]. The
         // characters themselves survive as invisible, selectable text
-        // ([`Phantom`]); without it a `<path>` would be uncopyable,
+        // ([`TextRun`]); without it a `<path>` would be uncopyable,
         // unsearchable and unreadable to a screen reader.
         if let Some(outline) = math_glyph_outline(fonts, g) {
             emit_math_glyph_path(out, &outline, g, x, y);
             if let Some(text) = phantom_text(glyphs, i) {
-                phantom.push(text, g, x, y);
+                phantom.push(text, g, x, y, false);
             }
             continue;
         }
@@ -214,12 +232,144 @@ pub(crate) fn emit_glyph_layer(
             crate::escape_html(&g.text),
         );
     }
-    phantom.finish(out, phantom_fill_none);
+    let prefix = if inline_hidden { "fill:none;" } else { "" };
+    phantom.finish_trailing(out, "mphantom", prefix);
 }
 
-/// One drawing of a whole math box as a SELF-CONTAINED `<svg>`, on a single
-/// line, in normal flow — Markdown's counterpart to the HTML backend's
-/// absolutely-positioned pair of `<svg>`s.
+/// **`--svg-math`**: the equation as SVG's own `<text>`, one `<tspan>` per
+/// glyph at the position the layout computed — plus an outline `<path>` for
+/// the glyphs no character can name.
+///
+/// ## Why this is a HYBRID and not pure `<text>`
+///
+/// `MathGlyph::gid` is `Some` exactly when the glyph the document laid out is
+/// NOT the one its `text` cmaps to: an OpenType MATH `MathVariants` record — a
+/// display-size big operator, a stretchy delimiter, one part of a
+/// `GlyphAssembly` — or an `ssty` script form. An SVG `<text>` can address a
+/// CHARACTER and not a glyph id, so there is no spelling of `∑` that produces
+/// the display-size one; writing the character gets the base-size glyph, which
+/// is the bug `28144b3`/`ce2f73c` were written to fix. It is not cosmetic:
+/// `layout_math_list` centres a big operator's limits on the VARIANT's advance
+/// (17.328pt for `∑` at 12pt, against the base glyph's 12.672), so drawing the
+/// base leaves every limit 2.334pt to the right of the operator it belongs to,
+/// and `∫`'s subscript 4pt clear of it.
+///
+/// So this mode draws `<text>` for everything a character CAN address — which
+/// is the overwhelming majority, and the whole size win — and keeps an outline
+/// `<path>` for the handful that it cannot. Pure `<text>` was the alternative
+/// and is rejected: it would silently reintroduce a fixed, measured
+/// misplacement in exactly the equations most likely to be displayed.
+///
+/// ## One `<text>`, and no phantom
+///
+/// There is no separate invisible layer here, because the visible text IS the
+/// text — two copies of every character would be selected and searched twice.
+/// A variant glyph's character would otherwise be lost from the selection
+/// altogether, so it rides in the SAME `<text>` run as a `fill="none"`
+/// `<tspan>` at its own position. That keeps three properties at once: every
+/// character appears exactly once, document order stays reading order (a
+/// trailing phantom block would copy the operator after its own limits), and
+/// nothing is painted twice.
+///
+/// All of it in ONE `<text>` with a `<tspan>` per glyph rather than a `<text>`
+/// each: Chrome serialises a selection spanning several `<text>` elements with
+/// a newline between every one, so an equation copied out of a per-glyph
+/// emitter arrives one character per line.
+///
+/// ## Styling is INLINE
+///
+/// Markdown has no stylesheet, so the face and size go in the element's own
+/// `style`. The run's first glyph sets both on the `<text>`; a glyph that
+/// departs from it overrides on its own `<tspan>`, which for ordinary
+/// mathematics is a handful of script-sized characters.
+///
+/// `sep` precedes every element — `"\n  "` to pretty-print, `""` to keep the
+/// drawing on one line. See [`math_block`] for which is used when and why the
+/// choice is not free in Markdown.
+pub(crate) fn emit_text_layer(
+    out: &mut String,
+    glyphs: &[MathGlyph],
+    height: f64,
+    fonts: Option<&TtfFontStore>,
+    sep: &str,
+) {
+    let mut run = TextRun {
+        paints: true,
+        ..TextRun::default()
+    };
+    for (i, g) in glyphs.iter().enumerate() {
+        let (x, y) = pen(g, height);
+        // The one case a character cannot name — see this function's own doc
+        // comment. Drawn as ink, and its character carried invisibly at the
+        // same position so the selection still has it.
+        if g.gid.is_some() {
+            if let Some(outline) = math_glyph_outline(fonts, g) {
+                out.push_str(sep);
+                emit_math_glyph_path_inline(out, &outline, g, x, y);
+                if let Some(text) = phantom_text(glyphs, i) {
+                    run.push(text, g, x, y, true);
+                }
+                continue;
+            }
+            // No outline to be had (base-14 mode, an unparseable face): fall
+            // through to the character, which is the best available and is
+            // what this backend did before outlines existed.
+        }
+        if let Some(text) = phantom_text(glyphs, i) {
+            run.push(text, g, x, y, false);
+        }
+    }
+    let family = glyphs
+        .first()
+        .and_then(|g| font_family_for(fonts, g.info.font))
+        .map(|stack| format!("font-family:{stack};"))
+        .unwrap_or_default();
+    run.finish_leading(out, sep, "math-text", &family);
+}
+
+/// Whether a Markdown drawing may be broken across lines.
+///
+/// **This is not a formatting preference, it is a CommonMark constraint, and
+/// the two cases genuinely differ.**
+///
+/// - **[`Wrap::Block`] — display math**, which stands alone as its own HTML
+///   block with a blank line before and after. A multi-line `<svg>` there
+///   satisfies CommonMark's HTML-block rule 7 and is passed through whole, so
+///   it can be indented and read.
+/// - **[`Wrap::Inline`] — an equation mid-paragraph.** CommonMark permits raw
+///   inline HTML to span lines, but a renderer with hard line breaks enabled
+///   (`breaks: true` — many Markdown pipelines, and this repo's own
+///   `playground/vendor/markdown.js`) inserts a `<br>` at every newline,
+///   INCLUDING the ones inside the `<svg>`, which breaks the drawing. So an
+///   inline equation stays on one line.
+///
+/// **Neither shape may ever contain a BLANK line.** That terminates the HTML
+/// block in every CommonMark implementation and leaves the remainder of the
+/// drawing as literal text in the document. Nothing here emits one — the
+/// separator is a single newline plus indentation — and
+/// `a_pretty_printed_drawing_has_no_blank_line` pins it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Wrap {
+    /// One line, whatever the mode. Safe anywhere.
+    Inline,
+    /// One element per line, indented. Only for a drawing that is its own
+    /// block.
+    Block,
+}
+
+impl Wrap {
+    /// What precedes each element inside the `<svg>`.
+    fn sep(self) -> &'static str {
+        match self {
+            Wrap::Inline => "",
+            Wrap::Block => "\n  ",
+        }
+    }
+}
+
+/// One drawing of a whole math box as a SELF-CONTAINED `<svg>` in normal flow
+/// — Markdown's counterpart to the HTML backend's absolutely-positioned pair
+/// of `<svg>`s.
 ///
 /// **Not [`crate::svg::emit_graphics`]-shaped, for the reason
 /// [`crate::svg::graphics_block`] is not either**: that helper writes
@@ -238,16 +388,21 @@ pub(crate) fn emit_glyph_layer(
 /// depth so an inline equation sits ON the text baseline rather than hanging
 /// from it.
 ///
-/// **Single-line by construction**, as `graphics_block` is: a Markdown
-/// paragraph is one line, and a raw `<svg>` broken across lines would have
-/// blank lines and `nl2br` inserted into the middle of it by the reader's own
-/// parser.
+/// `mode` picks the layer ([`emit_outline_layer`] or [`emit_text_layer`]) and,
+/// with it, how the rules are drawn: paths under the outline mode, `<rect>`
+/// and `<line>` under the text mode, whose whole point is a source a person
+/// can read. `wrap` decides whether the result is one line — see [`Wrap`],
+/// where the choice is a CommonMark constraint rather than taste.
 ///
 /// `None` when the box draws nothing this can name — no glyphs and no inked
 /// rules, which is what a `\paren`-style decoration built entirely out of
 /// `draw-text` looks like. The caller has already emitted those contents as
 /// text; an empty `<svg>` here would reserve the box's size a second time on
 /// top of them.
+// Eight arguments, and six of them are just `PureHorzBox::Math`'s own fields
+// forwarded verbatim. A struct to carry them would be a second spelling of a
+// variant that already exists, and every call site would have to build one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn math_block(
     width: f64,
     height: f64,
@@ -255,6 +410,8 @@ pub(crate) fn math_block(
     glyphs: &[MathGlyph],
     rules: &[GraphicsElem],
     fonts: Option<&TtfFontStore>,
+    mode: crate::MathMode,
+    wrap: Wrap,
 ) -> Option<String> {
     if glyphs.is_empty() && !rules_have_ink(rules) {
         return None;
@@ -263,6 +420,8 @@ pub(crate) fn math_block(
     if !(width.is_finite() && total_h.is_finite()) || width <= 0.0 || total_h <= 0.0 {
         return None;
     }
+    let text_mode = mode == crate::MathMode::SvgText;
+    let sep = wrap.sep();
     let mut out = String::new();
     let _ = write!(
         out,
@@ -271,20 +430,132 @@ pub(crate) fn math_block(
          style=\"overflow:visible; vertical-align:{}pt;\">",
         -depth,
     );
-    // The fraction bars and radical signs, which are y-UP paths and so need
-    // the flip the glyph layer does by hand. Emitted first so a glyph is never
-    // painted under its own bar.
+    // The fraction bars and radical signs, which are y-UP and so need the flip
+    // the glyph layer does by hand. Emitted first so a glyph is never painted
+    // under its own bar.
     if rules_have_ink(rules) {
-        crate::svg::emit_flipped_group(&mut out, rules, 0.0, height);
+        if text_mode {
+            emit_rules_as_shapes(&mut out, rules, height, sep);
+        } else {
+            crate::svg::emit_flipped_group(&mut out, rules, 0.0, height);
+        }
     }
-    emit_glyph_layer(&mut out, glyphs, height, fonts, true);
+    if text_mode {
+        emit_text_layer(&mut out, glyphs, height, fonts, sep);
+        if wrap == Wrap::Block {
+            out.push('\n');
+        }
+        out.push_str("</svg>");
+        return Some(out);
+    }
+    emit_outline_layer(&mut out, glyphs, height, fonts, true);
     out.push_str("</svg>");
-    // `emit_glyph_layer` ends each element with a newline; a Markdown
-    // paragraph is one line, so they are folded out rather than left to be
-    // reflowed by whatever reads the file. Nothing else in the buffer can
-    // contain one: a `MathGlyph`'s `text` is characters the math layout
-    // placed, and the phantom layer writes no whitespace of its own.
+    // The outline layer ends each element with a newline; an inline drawing is
+    // one line, so they are folded out rather than left to be reflowed by
+    // whatever reads the file. Nothing else in the buffer can contain one: a
+    // `MathGlyph`'s `text` is characters the math layout placed, and the
+    // phantom layer writes no whitespace of its own.
+    //
+    // The outline mode is never pretty-printed. Its content is glyph outlines
+    // — one `<path>` whose `d` runs to hundreds of coordinates — so a line per
+    // element buys a reader nothing and costs one newline per glyph.
     Some(out.replace('\n', ""))
+}
+
+/// A math box's `rules` as `<rect>`/`<line>` where the shape allows, for
+/// `--svg-math`.
+///
+/// **Why not just [`crate::svg::emit_flipped_group`], which already draws
+/// them.** That writes every rule as a `<path>` with an explicit `d`, which is
+/// correct and unreadable: a fraction bar comes out as
+/// `M0 4 L20 4 L20 4.5 L0 4.5 Z` where what it IS is a rectangle 20 wide and
+/// half a point high. This mode exists to produce a source a person can read
+/// and a downstream tool can understand, so the shapes that have a name get
+/// their name. Anything else — a radical sign, a curve, a clip — falls back to
+/// the general emitter unchanged, because being readable is not worth being
+/// wrong.
+///
+/// The whole layer sits inside one `<g transform="translate(0,H) scale(1,-1)">`
+/// for the same reason the path emitter does: rule coordinates are box-local
+/// and y-up, and doing the flip once per box is what keeps them writable as
+/// the bare `Length`s they already are.
+fn emit_rules_as_shapes(out: &mut String, rules: &[GraphicsElem], height: f64, sep: &str) {
+    let _ = write!(out, "{sep}<g transform=\"translate(0,{height}) scale(1,-1)\">");
+    let inner_sep = if sep.is_empty() {
+        String::new()
+    } else {
+        format!("{sep}  ")
+    };
+    emit_shape_elems(out, rules, &inner_sep);
+    let _ = write!(out, "{sep}</g>");
+}
+
+fn emit_shape_elems(out: &mut String, elems: &[GraphicsElem], sep: &str) {
+    for elem in elems {
+        match elem {
+            GraphicsElem::Fill(color, path) => match crate::svg::axis_aligned_rect(path) {
+                Some((x, y, w, h)) => {
+                    let _ = write!(
+                        out,
+                        "{sep}<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" \
+                         fill=\"{}\"/>",
+                        crate::svg::css_color(*color),
+                    );
+                }
+                None => {
+                    let _ = write!(
+                        out,
+                        "{sep}<path d=\"{}\" fill=\"{}\" fill-rule=\"evenodd\" stroke=\"none\"/>",
+                        crate::svg::path_d(path),
+                        crate::svg::css_color(*color),
+                    );
+                }
+            },
+            GraphicsElem::Stroke(width, color, path) => {
+                match crate::svg::straight_segment(path) {
+                    Some((x1, y1, x2, y2)) => {
+                        let _ = write!(
+                            out,
+                            "{sep}<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" \
+                             stroke=\"{}\" stroke-width=\"{}\"/>",
+                            crate::svg::css_color(*color),
+                            width.0,
+                        );
+                    }
+                    None => {
+                        let _ = write!(
+                            out,
+                            "{sep}<path d=\"{}\" fill=\"none\" stroke=\"{}\" \
+                             stroke-width=\"{}\"/>",
+                            crate::svg::path_d(path),
+                            crate::svg::css_color(*color),
+                            width.0,
+                        );
+                    }
+                }
+            }
+            GraphicsElem::Group(inner) => {
+                let _ = write!(out, "{sep}<g>");
+                let deeper = if sep.is_empty() {
+                    String::new()
+                } else {
+                    format!("{sep}  ")
+                };
+                emit_shape_elems(out, inner, &deeper);
+                let _ = write!(out, "{sep}</g>");
+            }
+            // A clip, a dashed stroke, a `draw-text` or a destination marker:
+            // handed to the general emitter, which already gets each of them
+            // right. Readability is a bonus, not a reason to reimplement.
+            other => {
+                let mut buf = String::new();
+                crate::svg::emit_elems_simple(&mut buf, std::slice::from_ref(other));
+                for line in buf.lines().filter(|l| !l.trim().is_empty()) {
+                    let _ = write!(out, "{sep}{line}");
+                }
+            }
+        }
+    }
 }
 
 /// One `MathGlyph`'s ink, as SVG `<path>`s of the face's own outlines —
@@ -357,6 +628,24 @@ fn emit_math_glyph_path(out: &mut String, outline: &GlyphOutline, g: &MathGlyph,
     }
 }
 
+/// [`emit_math_glyph_path`] with no trailing newline, for the text layer,
+/// whose caller writes its own separators.
+///
+/// A separate entry point rather than a flag on the other, because the other
+/// one's exact bytes — trailing newline included — are what keep
+/// `--format html` output identical across this change.
+fn emit_math_glyph_path_inline(
+    out: &mut String,
+    outline: &GlyphOutline,
+    g: &MathGlyph,
+    x: f64,
+    y: f64,
+) {
+    let mut buf = String::new();
+    emit_math_glyph_path(&mut buf, outline, g, x, y);
+    out.push_str(buf.trim_end_matches('\n'));
+}
+
 /// The characters `glyphs[i]` should contribute to the document's TEXT, or
 /// `None` when it should contribute none.
 ///
@@ -385,9 +674,14 @@ fn phantom_text(glyphs: &[MathGlyph], i: usize) -> Option<&str> {
     Some(&g.text)
 }
 
-/// The invisible, SELECTABLE text that rides with a run of outlined glyphs,
-/// carrying the characters the `<path>`s beside them draw. See this module's
-/// doc comment for why it is not a nicety.
+/// A run of positioned characters inside a math `<svg>` — ONE `<text>` with a
+/// `<tspan>` per glyph, each at its own pen position.
+///
+/// Both modes build one. Under `--svg-outline-math` every span is invisible
+/// and rides behind the outlines that draw the equation; under `--svg-math`
+/// the spans ARE the equation, except for the handful of variant glyphs whose
+/// character no `<text>` can address, which are hidden individually. The
+/// accumulator is shared so a gap becomes a space by the same rule in both.
 ///
 /// **`fill: none`, and specifically NOT `visibility: hidden` or
 /// `display: none`.** The latter two remove the element from the accessibility
@@ -415,7 +709,7 @@ fn phantom_text(glyphs: &[MathGlyph], i: usize) -> Option<&str> {
 /// under SVG's default `xml:space` a newline there collapses to a real space
 /// and would show up in the copied text.
 ///
-/// **Document order is reading order**, because [`emit_glyph_layer`]'s loop
+/// **Document order is reading order**, because [`emit_outline_layer`]'s and [`emit_text_layer`]'s loops
 /// walks `glyphs` in the order the math layout produced them — a base before
 /// its scripts, a numerator before its denominator — and this preserves that
 /// order.
@@ -426,15 +720,20 @@ fn phantom_text(glyphs: &[MathGlyph], i: usize) -> Option<&str> {
 /// text is never drawn, so naming a face would buy nothing and cost ~110
 /// bytes on every glyph in the document.
 #[derive(Default)]
-struct Phantom {
+struct TextRun {
     /// The `<tspan>`s so far, concatenated with no separator but the
-    /// occasional deliberate space (see [`Phantom::push`]).
+    /// occasional deliberate space (see [`TextRun::push`]).
     spans: String,
     /// The first glyph's size, hoisted onto the enclosing `<text>`.
     size: Option<f64>,
     /// The previous glyph's right edge (`dx + width`) and baseline `y`, which
     /// is what decides whether a space belongs between it and the next.
     prev: Option<(f64, f64)>,
+    /// This run is DRAWN (`--svg-math`) rather than invisible
+    /// (`--svg-outline-math`), so a glyph's colour is worth carrying. An
+    /// invisible run paints nothing and must not grow the attribute — see
+    /// [`TextRun::push`].
+    paints: bool,
 }
 
 /// Two phantom glyphs are on the SAME ROW when their baselines agree to
@@ -449,7 +748,7 @@ const PHANTOM_ROW_EPS: f64 = 0.5;
 /// kerns alone.
 const PHANTOM_SPACE_EM: f64 = 0.2;
 
-impl Phantom {
+impl TextRun {
     /// Add one glyph record's characters, at the pen position the `<path>`
     /// beside it uses.
     ///
@@ -469,7 +768,14 @@ impl Phantom {
     /// relative to the glyph before it (`∑` at 0, its subscript at 0.46, its
     /// superscript back at 5.70), so a gap across rows means nothing about
     /// reading order and must not manufacture a space.
-    fn push(&mut self, text: &str, g: &MathGlyph, x: f64, y: f64) {
+    ///
+    /// `hidden` paints nothing for this span while leaving it in the text — it
+    /// is how `--svg-math` carries the character of a glyph it drew as an
+    /// outline `<path>`, so the selection still has it and has it exactly
+    /// once. Under `--svg-outline-math` no span is individually hidden, the
+    /// whole element is, and passing `false` throughout is what keeps that
+    /// mode's bytes unchanged.
+    fn push(&mut self, text: &str, g: &MathGlyph, x: f64, y: f64, hidden: bool) {
         let size = g.info.size.0;
         if let Some((prev_right, prev_y)) = self.prev {
             if (prev_y - y).abs() < PHANTOM_ROW_EPS && x - prev_right >= size * PHANTOM_SPACE_EM {
@@ -477,14 +783,24 @@ impl Phantom {
             }
         }
         self.prev = Some((x + g.width.0, y));
-        let attr = match self.size {
-            None => {
-                self.size = Some(size);
-                String::new()
+        let mut attr = String::new();
+        if hidden {
+            attr.push_str(" fill=\"none\"");
+        }
+        match self.size {
+            None => self.size = Some(size),
+            Some(run) if (run - size).abs() < 1e-9 => {}
+            Some(_) => {
+                attr.push_str(&format!(" style=\"font-size:{};\"", math_font_size_uu(size)))
             }
-            Some(run) if (run - size).abs() < 1e-9 => String::new(),
-            Some(_) => format!(" style=\"font-size:{};\"", math_font_size_uu(size)),
-        };
+        }
+        // Colour is carried per span, but ONLY by a run that actually paints.
+        // The phantom layer must not grow a `fill` it never had: it is
+        // invisible by construction, the attribute would do nothing, and its
+        // absence is part of what makes `--format html` byte-identical.
+        if self.paints && g.info.color != Color::Gray(0.0) {
+            attr.push_str(&format!(" fill=\"{}\"", crate::svg::css_color(g.info.color)));
+        }
         let _ = write!(
             self.spans,
             "<tspan x=\"{x}\" y=\"{y}\"{attr}>{}</tspan>",
@@ -492,22 +808,45 @@ impl Phantom {
         );
     }
 
-    /// Write the run's phantom layer, if it has one.
+    /// Write the run's `<text>` element, if it collected anything.
     ///
-    /// `fill_none` prepends the invisibility to the element's own `style`
-    /// instead of relying on a stylesheet — see [`emit_glyph_layer`]. It comes
-    /// FIRST in the declaration list so that the `false` case produces exactly
-    /// the byte string the HTML backend emitted before this was shared, which
-    /// is what keeps `--format html` output identical.
-    fn finish(self, out: &mut String, fill_none: bool) {
-        let Some(size) = self.size else { return };
-        let _ = writeln!(
-            out,
-            "<text class=\"mphantom\" style=\"{}font-size:{};\">{}</text>",
-            if fill_none { "fill:none;" } else { "" },
+    /// `style_prefix` goes FIRST in the declaration list, before the run's
+    /// `font-size`. Under `--svg-outline-math` it is `fill:none;` (Markdown,
+    /// which has no stylesheet) or empty (HTML, where `css.rs`'s
+    /// `.math-glyphs .mphantom` carries it); under `--svg-math` it is the
+    /// face. Empty prefix plus `sep = "\n"` reproduces byte-for-byte what the
+    /// HTML backend wrote before either mode existed, which is what keeps
+    /// `--format html` output identical.
+    ///
+    /// The element itself, without either separator — the one place its bytes
+    /// are decided, so the two callers below cannot drift in anything but
+    /// where the newlines go.
+    fn element(&self, class: &str, style_prefix: &str) -> Option<String> {
+        let size = self.size?;
+        Some(format!(
+            "<text class=\"{class}\" style=\"{style_prefix}font-size:{};\">{}</text>",
             math_font_size_uu(size),
             self.spans,
-        );
+        ))
+    }
+
+    /// The outline layer's historical shape: element, then a newline. Every
+    /// element that layer writes is newline-TERMINATED, and that is exactly
+    /// what `--format html` has always emitted.
+    fn finish_trailing(self, out: &mut String, class: &str, style_prefix: &str) {
+        if let Some(el) = self.element(class, style_prefix) {
+            let _ = writeln!(out, "{el}");
+        }
+    }
+
+    /// The text layer's shape: a caller-supplied separator, then the element.
+    /// Leading rather than trailing so that `sep` can be `""` for a one-line
+    /// drawing without leaving a stray newline before `</svg>`.
+    fn finish_leading(self, out: &mut String, sep: &str, class: &str, style_prefix: &str) {
+        if let Some(el) = self.element(class, style_prefix) {
+            out.push_str(sep);
+            out.push_str(&el);
+        }
     }
 }
 
@@ -566,6 +905,11 @@ pub(crate) fn math_font_size_uu(size_pt: f64) -> String {
 mod tests {
     use super::*;
     use crate::mathrec::tests::glyph;
+    use crate::MathMode;
+
+    fn outlined(w: f64, h: f64, d: f64, gs: &[MathGlyph], wrap: Wrap) -> Option<String> {
+        math_block(w, h, d, gs, &[], None, MathMode::SvgOutline, wrap)
+    }
 
     /// With no font store there is no face to outline, so every glyph takes
     /// the `<text>` fallback — and the phantom layer must then NOT be written,
@@ -573,7 +917,7 @@ mod tests {
     #[test]
     fn base_14_mode_falls_back_to_text_and_writes_no_phantom_layer() {
         let mut out = String::new();
-        emit_glyph_layer(&mut out, &[glyph("x", 0.0, 0.0, 10.0)], 10.0, None, true);
+        emit_outline_layer(&mut out, &[glyph("x", 0.0, 0.0, 10.0)], 10.0, None, true);
         assert!(out.contains("<text x="), "{out}");
         assert!(!out.contains("mphantom"), "{out}");
         assert!(!out.contains("<path"), "{out}");
@@ -583,19 +927,19 @@ mod tests {
     /// second time on top of the nested text the caller already emitted.
     #[test]
     fn a_box_with_no_ink_produces_no_svg() {
-        assert!(math_block(10.0, 10.0, 2.0, &[], &[], None).is_none());
+        assert!(outlined(10.0, 10.0, 2.0, &[], Wrap::Inline).is_none());
         // …and a degenerate viewport is declined too, since a zero-width
         // `<svg>` renders as nothing anyway.
         let g = [glyph("x", 0.0, 0.0, 10.0)];
-        assert!(math_block(0.0, 10.0, 2.0, &g, &[], None).is_none());
-        assert!(math_block(10.0, 0.0, 0.0, &g, &[], None).is_none());
+        assert!(outlined(0.0, 10.0, 2.0, &g, Wrap::Inline).is_none());
+        assert!(outlined(10.0, 0.0, 0.0, &g, Wrap::Inline).is_none());
     }
 
-    /// The Markdown wrapper's three load-bearing properties, and its
-    /// single-line-ness.
+    /// The Markdown wrapper's three load-bearing properties, and — for an
+    /// INLINE drawing — its single-line-ness.
     #[test]
     fn the_markdown_wrapper_is_one_line_and_sits_on_the_baseline() {
-        let svg = math_block(30.0, 10.0, 2.0, &[glyph("x", 0.0, 0.0, 10.0)], &[], None)
+        let svg = outlined(30.0, 10.0, 2.0, &[glyph("x", 0.0, 0.0, 10.0)], Wrap::Inline)
             .expect("a glyph is ink");
         assert!(!svg.contains('\n'), "must be one line: {svg}");
         assert!(!svg.contains("position:absolute"), "{svg}");
@@ -604,28 +948,220 @@ mod tests {
         assert!(svg.contains("overflow:visible"), "{svg}");
     }
 
-    /// The one difference the two wrappers make to the shared layer: with no
+    /// The one difference the two wrappers make to the outline layer: with no
     /// stylesheet, the phantom text must carry its own invisibility, and the
     /// HTML spelling must be unchanged so its output stays byte-identical.
     #[test]
     fn the_phantom_layer_carries_fill_none_only_when_asked() {
-        let mut inline = String::new();
-        Phantom {
+        let run = || TextRun {
             spans: "<tspan>x</tspan>".into(),
             size: Some(10.0),
             prev: None,
-        }
-        .finish(&mut inline, true);
-        assert!(inline.contains("style=\"fill:none;font-size:10px;\""), "{inline}");
+            paints: false,
+        };
+        let mut inline = String::new();
+        run().finish_trailing(&mut inline, "mphantom", "fill:none;");
+        assert!(
+            inline.contains("style=\"fill:none;font-size:10px;\""),
+            "{inline}"
+        );
 
         let mut styled = String::new();
-        Phantom {
-            spans: "<tspan>x</tspan>".into(),
-            size: Some(10.0),
-            prev: None,
-        }
-        .finish(&mut styled, false);
+        run().finish_trailing(&mut styled, "mphantom", "");
         assert!(styled.contains("style=\"font-size:10px;\""), "{styled}");
         assert!(!styled.contains("fill:none"), "{styled}");
+    }
+
+    // -----------------------------------------------------------------
+    // `--svg-math`: the text layer
+    // -----------------------------------------------------------------
+
+    /// The text mode writes real `<text>`, and writes NO phantom: the text is
+    /// the equation, and a second invisible copy would be selected and
+    /// searched twice.
+    #[test]
+    fn the_text_layer_writes_real_text_and_no_phantom() {
+        let mut out = String::new();
+        // Greek, so that counting occurrences below measures the CONTENT: an
+        // `x` would also match the `x="0"` position attributes.
+        emit_text_layer(
+            &mut out,
+            &[
+                glyph("\u{3B1}", 0.0, 0.0, 10.0),
+                glyph("\u{3B2}", 6.0, 0.0, 10.0),
+            ],
+            10.0,
+            None,
+            "",
+        );
+        assert!(out.contains("class=\"math-text\""), "{out}");
+        assert!(!out.contains("mphantom"), "{out}");
+        assert!(!out.contains("fill=\"none\""), "{out}");
+        // One `<text>` holding both glyphs, not one element each: Chrome puts
+        // a newline between separate `<text>`s when a selection spans them.
+        assert_eq!(out.matches("<text ").count(), 1, "{out}");
+        assert_eq!(out.matches("<tspan ").count(), 2, "{out}");
+        // Each character appears exactly once — no phantom duplicate.
+        assert_eq!(out.matches('\u{3B1}').count(), 1, "{out}");
+        assert_eq!(out.matches('\u{3B2}').count(), 1, "{out}");
+    }
+
+    /// A MATH-table variant glyph has no character that names it, so the text
+    /// mode draws its OUTLINE — and carries its character invisibly, in the
+    /// same run and at its own position, so the selection still holds it
+    /// exactly once and in reading order.
+    ///
+    /// This is the hybrid the mode's doc comment argues for; pure `<text>`
+    /// would draw a base-size operator with its limits centred on the
+    /// variant's advance, which is the measured bug `ce2f73c` fixed.
+    #[test]
+    fn a_variant_glyph_without_an_outline_still_writes_its_character() {
+        // No font store, so no outline can be had — the documented fallback is
+        // to write the character, which is better than nothing.
+        let mut g = glyph("\u{2211}", 0.0, 0.0, 12.0);
+        g.gid = Some(42);
+        let mut out = String::new();
+        emit_text_layer(&mut out, std::slice::from_ref(&g), 12.0, None, "");
+        assert!(
+            out.contains('\u{2211}'),
+            "with no outline available the character must still be written: {out}"
+        );
+        assert!(!out.contains("fill=\"none\""), "{out}");
+    }
+
+    /// A fraction bar is a rectangle, and in the text mode it is written as
+    /// one — that is the point of the mode: a source that says what it means.
+    #[test]
+    fn a_fraction_bar_becomes_a_rect_not_a_path() {
+        use rustyfi_backend::{Closing, Color, Length, Path, PathSeg, Subpath};
+        let bar = GraphicsElem::Fill(
+            Color::Gray(0.0),
+            Path {
+                subpaths: vec![Subpath {
+                    start: (Length(0.0), Length(4.0)),
+                    segs: vec![
+                        PathSeg::Line((Length(20.0), Length(4.0))),
+                        PathSeg::Line((Length(20.0), Length(4.5))),
+                        PathSeg::Line((Length(0.0), Length(4.5))),
+                    ],
+                    closing: Closing::Line,
+                }],
+            },
+        );
+        let draw = |mode| {
+            math_block(
+                20.0,
+                10.0,
+                2.0,
+                &[glyph("a", 2.0, 8.0, 10.0)],
+                std::slice::from_ref(&bar),
+                None,
+                mode,
+                Wrap::Inline,
+            )
+            .expect("ink")
+        };
+        let text = draw(MathMode::SvgText);
+        assert!(text.contains("<rect "), "the bar is not a rect:\n{text}");
+        assert!(text.contains("width=\"20\""), "{text}");
+        assert!(!text.contains("<path "), "{text}");
+
+        // …and the outline mode still draws it as the path it always did.
+        let outline = draw(MathMode::SvgOutline);
+        assert!(outline.contains("<path "), "{outline}");
+        assert!(!outline.contains("<rect "), "{outline}");
+    }
+
+    /// Pretty-printing is one element per line — and NEVER a blank line, which
+    /// would end the HTML block in every CommonMark implementation and dump
+    /// the rest of the drawing into the document as literal text.
+    #[test]
+    fn a_pretty_printed_drawing_has_no_blank_line() {
+        let draw = |wrap| {
+            math_block(
+                30.0,
+                10.0,
+                2.0,
+                &[glyph("x", 0.0, 0.0, 10.0), glyph("y", 6.0, 0.0, 10.0)],
+                &[],
+                None,
+                MathMode::SvgText,
+                wrap,
+            )
+            .expect("ink")
+        };
+        let svg = draw(Wrap::Block);
+        assert!(svg.contains('\n'), "block wrap should break lines:\n{svg}");
+        assert!(
+            !svg.contains("\n\n"),
+            "a blank line ends the HTML block:\n{svg}"
+        );
+        // Every line after the first is indented, and the last closes it.
+        assert!(svg.ends_with("</svg>"), "{svg}");
+        for line in svg.lines().skip(1) {
+            assert!(
+                line.starts_with("  ") || line == "</svg>",
+                "unindented line in a pretty drawing: {line:?}"
+            );
+        }
+
+        // The inline shape of the same box is one line and says the same
+        // things — the two differ in whitespace only.
+        let flat = draw(Wrap::Inline);
+        assert!(!flat.contains('\n'), "{flat}");
+        assert_eq!(
+            flat,
+            svg.replace("\n  ", "").replace('\n', ""),
+            "the two wraps must differ only in whitespace"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Geometry the extraction moved but nothing covered
+    // -----------------------------------------------------------------
+
+    /// The y-flip: a glyph's `dy` is measured UP from the baseline and SVG
+    /// measures down, so the pen sits at `height - dy`. Mutating that sign
+    /// left the whole suite green before this test, because every corpus
+    /// equation still renders *somewhere* and only a rendered comparison
+    /// notices.
+    #[test]
+    fn the_pen_flips_dy_rather_than_adding_it() {
+        // A superscript sits ABOVE the baseline, so its y is SMALLER.
+        let base = glyph("x", 0.0, 0.0, 10.0);
+        let sup = glyph("2", 5.0, 4.0, 7.0);
+        let (_, base_y) = pen(&base, 10.0);
+        let (_, sup_y) = pen(&sup, 10.0);
+        assert_eq!(base_y, 10.0);
+        assert_eq!(sup_y, 6.0);
+        assert!(sup_y < base_y, "a raised glyph must get a smaller y");
+        // `rising` shifts the same way.
+        let mut risen = glyph("x", 0.0, 0.0, 10.0);
+        risen.info.rising = rustyfi_backend::Length(3.0);
+        assert_eq!(pen(&risen, 10.0).1, 7.0);
+    }
+
+    /// A stretchy delimiter is one `MathGlyph` per assembly PART, all with the
+    /// same `text` and the same `dx`. Only the first contributes a character,
+    /// or a reader copying one tall bracket gets `(((((`. Removing the dedup
+    /// also left the suite green.
+    #[test]
+    fn a_stretchy_delimiters_parts_contribute_one_character() {
+        let parts = [
+            glyph("(", 4.0, 0.0, 10.0),
+            glyph("(", 4.0, 6.0, 10.0),
+            glyph("(", 4.0, 12.0, 10.0),
+        ];
+        assert_eq!(phantom_text(&parts, 0), Some("("));
+        assert_eq!(phantom_text(&parts, 1), None);
+        assert_eq!(phantom_text(&parts, 2), None);
+        // A genuinely repeated character at a DIFFERENT x is two characters.
+        let twice = [glyph("(", 0.0, 0.0, 10.0), glyph("(", 9.0, 0.0, 10.0)];
+        assert_eq!(phantom_text(&twice, 1), Some("("));
+
+        // End to end: the text layer writes the bracket once.
+        let mut out = String::new();
+        emit_text_layer(&mut out, &parts, 20.0, None, "");
+        assert_eq!(out.matches("<tspan ").count(), 1, "{out}");
     }
 }

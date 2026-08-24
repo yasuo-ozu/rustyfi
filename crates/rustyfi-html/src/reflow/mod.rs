@@ -137,7 +137,7 @@ pub(crate) struct Ctx<'a> {
     /// that strips markup, and an HTML document is markup by definition; the
     /// CLI refuses `--unicode-math` with `--format html` rather than letting
     /// it mean something arbitrary, and `inline.rs` treats it as
-    /// [`crate::MathMode::Outline`] should it ever arrive anyway.
+    /// [`crate::MathMode::SvgOutline`] should it ever arrive anyway.
     pub(crate) math: crate::MathMode,
     /// S2 ("Links/metadata"): `DecoId -> action` for every
     /// `register-link-to-uri`/`-to-location` call the compile driver
@@ -435,7 +435,7 @@ pub fn render_html_reflow(
         dests,
         &[],
         None,
-        crate::MathMode::Outline,
+        crate::MathMode::SvgOutline,
     )
 }
 
@@ -447,7 +447,7 @@ pub fn render_html_reflow(
 /// the other two**, which is asymmetric on purpose. These are the ones the CLI
 /// drives, so they are the ones a `--katex` has to reach; the plain
 /// [`render_html_reflow`]/[`render_html_reflow_ttf_with`] are the simple
-/// library-facing pair and mean [`crate::MathMode::Outline`], which is both
+/// library-facing pair and mean [`crate::MathMode::SvgOutline`], which is both
 /// the default and what they have always done. Threading a mode through all
 /// four would have added a parameter to a dozen call sites to say "unchanged".
 #[allow(clippy::too_many_arguments)]
@@ -493,7 +493,7 @@ pub fn render_html_reflow_ttf_with(
         dests,
         &[],
         Some(store),
-        crate::MathMode::Outline,
+        crate::MathMode::SvgOutline,
     )
 }
 

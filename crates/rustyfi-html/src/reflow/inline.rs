@@ -1021,6 +1021,21 @@ fn emit_math_svg(
     // because none of them applies — there is no viewport to size, nothing to
     // flip and no phantom layer to hide, only a string in delimiters.
     if ctx.math == crate::MathMode::Katex {
+        // A `draw-text` inside the rules is ordinary inline content (a big
+        // operator built out of `text-in-math`, a `\paren` decoration) and its
+        // characters are not in `glyphs`, so it has to be emitted separately
+        // or the operator disappears — there is no LaTeX for "some HTML,
+        // here".
+        //
+        // FIRST, matching the Markdown backend: a `draw-text` operator sits at
+        // the box's own origin, so `\sum_a^b` is a sigma followed by its
+        // limits, and emitting it afterwards reads as `ₐᵇ∑`. The two
+        // backends disagreed about this until an audit measured it.
+        if !rules.is_empty() {
+            let mut nested = String::new();
+            emit_text_only(&mut nested, rules, ctx);
+            out.push_str(&nested);
+        }
         let latex = crate::latex::math_latex(glyphs, rules);
         if !latex.is_empty() {
             open_opaque(out, ctx);
@@ -1035,16 +1050,6 @@ fn emit_math_svg(
                 crate::escape_html(&latex),
                 super::text::MATH_TEX_CLOSE,
             );
-        }
-        // A `draw-text` inside the rules is ordinary inline content (a big
-        // operator built out of `text-in-math`, a `\paren` decoration) and its
-        // characters are not in `glyphs`, so it still has to be emitted or the
-        // operator disappears. It flows after the formula rather than inside
-        // it: there is no LaTeX for "some HTML, here".
-        if !rules.is_empty() {
-            let mut nested = String::new();
-            emit_text_only(&mut nested, rules, ctx);
-            out.push_str(&nested);
         }
         return;
     }
@@ -1082,12 +1087,19 @@ fn emit_math_svg(
         "<svg class=\"math-glyphs\" style=\"position:absolute; left:0; top:0; overflow:visible;\" \
          width=\"{width}pt\" height=\"{total_h}pt\" viewBox=\"0 0 {width} {total_h}\">",
     );
-    // The glyph outlines, the `<text>` fallbacks and the phantom layer — all
-    // of it shared with the Markdown backend, which draws the same equation
-    // into a differently-shaped `<svg>`. `false`: this document HAS a
-    // stylesheet, and `css.rs`'s `.math-glyphs .mphantom` is where the
-    // invisibility lives.
-    crate::mathsvg::emit_glyph_layer(&mut drawing, glyphs, height, ctx.fonts, false);
+    // The glyph layer — all of it shared with the Markdown backend, which
+    // draws the same equation into a differently-shaped `<svg>`.
+    //
+    // `--svg-math` writes SVG's own `<text>` and needs no phantom, since the
+    // text is real; the default `--svg-outline-math` writes outline paths with
+    // the characters behind them. `false`: this document HAS a stylesheet, and
+    // `css.rs`'s `.math-glyphs .mphantom` is where that invisibility lives.
+    if ctx.math == crate::MathMode::SvgText {
+        crate::mathsvg::emit_text_layer(&mut drawing, glyphs, height, ctx.fonts, "\n");
+        drawing.push('\n');
+    } else {
+        crate::mathsvg::emit_outline_layer(&mut drawing, glyphs, height, ctx.fonts, false);
+    }
     drawing.push_str("</svg>\n");
     let mut nested = String::new();
     if !rules.is_empty() {

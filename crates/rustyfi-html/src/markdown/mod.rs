@@ -269,7 +269,7 @@ pub fn render_markdown(
 /// [`render_markdown`] under a real [`TtfFontStore`] — the full-fidelity
 /// entry point the CLI uses. The store is read for two things: whether a
 /// run's face is fixed-pitch, which is what tells a code block from a wrapped
-/// paragraph, and — under [`crate::MathMode::Outline`] — the glyph outlines
+/// paragraph, and — under [`crate::MathMode::SvgOutline`] — the glyph outlines
 /// an equation is drawn from. No font FILE is embedded; there is nowhere in
 /// Markdown to embed one, which is also why the outlines are drawn as paths
 /// rather than named as a face.

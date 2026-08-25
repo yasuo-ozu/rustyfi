@@ -16,7 +16,7 @@
 
 use rustyfi_lsp::jsonrpc::{self, code};
 use rustyfi_lsp::server::{self, Options};
-use rustyfi_lsp::RustyfiVersion;
+use rustyfi_lsp::{LineIndex, Position, RustyfiVersion};
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
@@ -146,6 +146,7 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
             },
             "documentSymbolProvider": true,
             "workspaceSymbolProvider": true,
+            "documentFormattingProvider": true,
             "positionEncoding": "utf-16",
         }),
     );
@@ -227,9 +228,14 @@ fn an_unknown_request_is_method_not_found_and_the_session_survives() {
 fn every_advertised_capability_answers_in_one_session() {
     let uri = "file:///all.saty";
     let src = "let-inline \\emph it = it\nlet greeting = 1\nlet doc = {\\emph{hi}} greeting\n";
+    // Formatting asks about a *second* buffer, because the first one is
+    // already tidy and a formatter with nothing to do answers `[]` — which is
+    // the very shape this test reads as "advertised but does nothing".
+    let untidy = "file:///untidy.saty";
     let (out, code_) = session(&[
         initialize(1),
         did_open(uri, src),
+        did_open(untidy, "let x = 1   \n\n\n\n\n"),
         at(2, "hover", uri, 2, 12),
         at(3, "definition", uri, 2, 23),
         at(4, "completion", uri, 2, 12),
@@ -238,6 +244,7 @@ fn every_advertised_capability_answers_in_one_session() {
             "jsonrpc": "2.0", "id": 6, "method": "workspace/symbol",
             "params": { "query": "greeting" },
         }),
+        formatting(8, untidy),
         shutdown(7),
         exit(),
     ]);
@@ -255,6 +262,7 @@ fn every_advertised_capability_answers_in_one_session() {
         [
             "completionProvider",
             "definitionProvider",
+            "documentFormattingProvider",
             "documentSymbolProvider",
             "hoverProvider",
             "workspaceSymbolProvider",
@@ -271,6 +279,7 @@ fn every_advertised_capability_answers_in_one_session() {
         (4, "completion"),
         (5, "documentSymbol"),
         (6, "workspace/symbol"),
+        (8, "formatting"),
     ] {
         let r = reply(&out, id);
         assert!(r.get("error").is_none(), "{what} errored: {r:#?}");
@@ -937,4 +946,219 @@ fn document_symbol_obeys_an_explicit_lang() {
         },
     );
     assert_eq!(reply(&pinned, 2)["result"], json!([]));
+}
+
+// ---------------------------------------------------------------------------
+// textDocument/formatting
+// ---------------------------------------------------------------------------
+
+fn formatting(id: i64, uri: &str) -> Value {
+    formatting_with(id, uri, json!({ "tabSize": 4, "insertSpaces": true }))
+}
+
+/// A formatting request carrying an explicit `FormattingOptions`.
+fn formatting_with(id: i64, uri: &str, options: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/formatting",
+        "params": { "textDocument": { "uri": uri }, "options": options },
+    })
+}
+
+/// Apply the reply's edits to `text` the way a client would, so the tests
+/// assert the *document the user ends up with* rather than the arithmetic in
+/// the range. A wrong range that still reads plausibly in an `assert_eq!` on
+/// the JSON would corrupt a buffer here.
+fn apply(text: &str, edits: &Value) -> String {
+    let index = LineIndex::new(text);
+    let mut out = text.to_string();
+    // Applied back to front so an earlier edit's offsets stay valid. This
+    // server only ever sends one, which the tests below pin separately.
+    let mut edits: Vec<&Value> = edits
+        .as_array()
+        .expect("an array of edits")
+        .iter()
+        .collect();
+    edits.reverse();
+    for e in edits {
+        let at = |which: &str| {
+            let p = &e["range"][which];
+            index.offset(Position {
+                line: p["line"].as_u64().unwrap() as u32,
+                character: p["character"].as_u64().unwrap() as u32,
+            })
+        };
+        out.replace_range(at("start")..at("end"), e["newText"].as_str().unwrap());
+    }
+    out
+}
+
+/// The edit an editor actually receives, asserted as JSON.
+///
+/// The range is checked literally as well as through [`apply`], because the
+/// narrowing in `minimal_edit` is exactly the kind of arithmetic that is right
+/// on the buffer and wrong on the wire.
+#[test]
+fn formatting_answers_one_narrow_edit_rather_than_replacing_the_file() {
+    let uri = "file:///untidy.saty";
+    // Twenty tidy lines and one untidy one: a whole-document replacement would
+    // name a range covering all of them.
+    let mut src = String::new();
+    for i in 0..20 {
+        src.push_str(&format!("let x{i} = {i}\n"));
+    }
+    src.push_str("let last = 1   \n");
+    let (out, _) = session(&[initialize(1), did_open(uri, &src), formatting(2, uri)]);
+
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(edits.as_array().map(Vec::len), Some(1), "{edits:#?}");
+    assert_eq!(
+        edits[0]["range"],
+        json!({
+            "start": { "line": 20, "character": 12 },
+            "end":   { "line": 20, "character": 15 },
+        }),
+        "the edit must cover the trailing spaces and nothing else"
+    );
+    assert_eq!(edits[0]["newText"], "");
+    assert_eq!(apply(&src, edits), src.replace("= 1   \n", "= 1\n"));
+}
+
+/// An already-formatted buffer answers `[]`, and one that cannot be formatted
+/// answers `null`. The difference matters on every save: a format-on-save that
+/// saw `null` for a tidy file would report it as unformattable.
+#[test]
+fn a_tidy_buffer_gets_no_edits_and_a_broken_one_gets_null() {
+    let tidy = "file:///tidy.saty";
+    let broken = "file:///broken.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(tidy, "let x = 1\n"),
+        // An unterminated inline area: no area map, so no format.
+        did_open(broken, "let doc = {hello\n"),
+        formatting(2, tidy),
+        formatting(3, broken),
+        formatting(4, "file:///never-opened.saty"),
+    ]);
+    assert_eq!(reply(&out, 2)["result"], json!([]));
+    assert!(reply(&out, 3)["result"].is_null());
+    assert!(reply(&out, 4)["result"].is_null(), "an unknown URI");
+    for id in [2, 3, 4] {
+        assert!(
+            reply(&out, id).get("error").is_none(),
+            "declining is not an error: {:#?}",
+            reply(&out, id)
+        );
+    }
+}
+
+/// Inline text is content, and the wire path must not be the place that
+/// forgets it. This buffer holds doubled spaces and a trailing run inside
+/// `{ … }` and neither is touched; the trailing run on the *program* line is.
+#[test]
+fn formatting_over_the_wire_leaves_prose_alone() {
+    let uri = "file:///prose.saty";
+    let src = "let doc = {hello  world   \n\n  and  more}   \n";
+    let (out, _) = session(&[initialize(1), did_open(uri, src), formatting(2, uri)]);
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(
+        apply(src, edits),
+        "let doc = {hello  world   \n\n  and  more}\n",
+        "only the spaces after the closing brace are program text"
+    );
+}
+
+/// UTF-16 again, on the formatting path: the edit's range is only right if the
+/// server counts code units, and Japanese before the edit is what separates
+/// that from counting bytes.
+#[test]
+fn formatting_ranges_are_utf16_over_the_wire() {
+    let uri = "file:///jp.saty";
+    let src = "let title = `日本語のタイトル`   \n";
+    assert_eq!(src.find("   \n"), Some(38), "byte offset, for contrast");
+    let (out, _) = session(&[initialize(1), did_open(uri, src), formatting(2, uri)]);
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(
+        edits[0]["range"]["start"],
+        json!({ "line": 0, "character": 22 }),
+        "22 UTF-16 units, not 38 bytes"
+    );
+    assert_eq!(apply(src, edits), "let title = `日本語のタイトル`\n");
+}
+
+/// The client's `FormattingOptions` reach the formatter. `insertSpaces: false`
+/// is the one that is easy to accept and then ignore, because ignoring it
+/// still produces valid output — just not the output that was asked for.
+#[test]
+fn the_clients_formatting_options_are_honoured() {
+    let uri = "file:///tabs.saty";
+    let src = "let f x =\n\tx\n";
+    let msgs = |options: Value| {
+        [
+            initialize(1),
+            did_open(uri, src),
+            formatting_with(2, uri, options),
+        ]
+    };
+
+    let (spaces, _) = session(&msgs(json!({ "tabSize": 2, "insertSpaces": true })));
+    assert_eq!(apply(src, &reply(&spaces, 2)["result"]), "let f x =\n  x\n");
+
+    let (tabs, _) = session(&msgs(json!({ "tabSize": 2, "insertSpaces": false })));
+    assert_eq!(reply(&tabs, 2)["result"], json!([]), "tabs were asked for");
+
+    // The optional members turn individual rules off.
+    let uri2 = "file:///opts.saty";
+    let (kept, _) = session(&[
+        initialize(1),
+        did_open(uri2, "let x = 1   \n"),
+        formatting_with(
+            2,
+            uri2,
+            json!({ "tabSize": 4, "insertSpaces": true, "trimTrailingWhitespace": false }),
+        ),
+    ]);
+    assert_eq!(reply(&kept, 2)["result"], json!([]));
+}
+
+/// `--lang` pins the generation for formatting too. `@stage:` is a header 0.1
+/// deleted outright, so the pin is visible as a decline rather than as a
+/// different tidy-up.
+#[test]
+fn formatting_obeys_an_explicit_lang() {
+    let uri = "file:///lib.satyh";
+    let src = "@stage: 1\nlet x = 1   \n";
+    let msgs = [initialize(1), did_open(uri, src), formatting(2, uri)];
+
+    let (auto, _) = session(&msgs);
+    assert_eq!(
+        apply(src, &reply(&auto, 2)["result"]),
+        "@stage: 1\nlet x = 1\n"
+    );
+
+    let (pinned, _) = session_with(
+        &msgs,
+        Options {
+            lang: Some(RustyfiVersion::V0_1),
+            ..Options::default()
+        },
+    );
+    assert!(
+        reply(&pinned, 2)["result"].is_null(),
+        "0.1 has no `@stage:` header, so this buffer does not lex as 0.1"
+    );
+}
+
+/// Formatting reads the stored buffer, so it follows `didChange` rather than
+/// the text the file was opened with.
+#[test]
+fn formatting_follows_did_change() {
+    let uri = "file:///doc.saty";
+    let edited = "let after = 1   \n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let before = 1\n"),
+        did_change(uri, 2, edited),
+        formatting(3, uri),
+    ]);
+    assert_eq!(apply(edited, &reply(&out, 3)["result"]), "let after = 1\n");
 }

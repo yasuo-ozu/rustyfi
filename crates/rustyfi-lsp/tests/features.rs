@@ -310,6 +310,50 @@ let f : len
     assert_eq!(got, vec!["length-pair"], "after `:` only type names belong");
 }
 
+/// A header being typed offers the header keywords.
+///
+/// `@re` does not lex — the lexer wants a whole `@require:` and reports an
+/// illegal token otherwise — so this is read from the text, and the test says
+/// so by asking at exactly that half-typed state.
+#[test]
+fn completion_offers_the_file_headers_while_one_is_being_typed() {
+    assert_eq!(labels("@re\n", 3, None), vec!["@require:"]);
+    assert_eq!(
+        labels("@\n", 1, None),
+        vec!["@require:", "@import:", "@stage:"]
+    );
+    // A word that is no header answers nothing, rather than falling through to
+    // the value namespaces and offering a name where only a header can go.
+    assert!(labels("@zz\n", 3, None).is_empty());
+}
+
+/// `@stage:` is 0.0.6 only, so 0.1 must not offer it.
+///
+/// Not a nicety: SATySFi 0.1 dropped the whole-file header for a per-binding
+/// `val persistent ~x`, and its lexer treats `@stage:` as a DIRECT error. An
+/// editor offering it there would be offering a compile failure.
+#[test]
+fn completion_does_not_offer_the_stage_header_in_v01() {
+    let v01 = Some(RustyfiVersion::V0_1);
+    assert_eq!(labels("@\n", 1, v01), vec!["@require:", "@import:"]);
+    assert!(labels("@st\n", 3, v01).is_empty());
+    // …and still does under 0.0.6, so the test above is a contrast and not a
+    // statement that `@stage:` is never offered.
+    assert_eq!(labels("@st\n", 3, None), vec!["@stage:"]);
+}
+
+/// An `@` that is not a header answers nothing.
+///
+/// The guard is two-sided — only whitespace before the `@`, only letters after
+/// it — because an address in prose and an already-written header are both
+/// ordinary things to have in a buffer.
+#[test]
+fn completion_does_not_read_an_at_sign_in_prose_as_a_header() {
+    let src = "@require: stdja\ndocument (||) \'<\n  +p { mail@ex }\n>\n";
+    let at = src.find("mail@ex").unwrap() + "mail@e".len();
+    assert!(labels(src, at, None).is_empty(), "an address is not a header");
+}
+
 /// A record LABEL slot offers labels, and nothing else.
 ///
 /// Both halves matter. Before this, the slot offered every VALUE in scope —

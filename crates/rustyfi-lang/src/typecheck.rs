@@ -748,6 +748,59 @@ fn name_to_mono(name: &str, version: RustyfiVersion) -> MonoType {
     }
 }
 
+/// Every BASE type name [`name_to_mono`] recognises under `version` — the type
+/// vocabulary a document may write without declaring anything.
+///
+/// Exists for completion. A base type is built into the checker and appears in
+/// no `.satyh`, so an index assembled by walking package SOURCES — which is
+/// what the browser playground's own vocabulary is — can never contain
+/// `inline-text` or `context`, and a type position offered nothing at all.
+///
+/// **This is a second list, and the test below is what keeps it honest.**
+/// `name_to_mono` is a `match`, so there is nothing to enumerate; deriving the
+/// names from primitive SIGNATURES instead was tried and is unsound — walking
+/// the printed types picks up the record labels and math-class constructors
+/// that appear inside them (`footer-content`, `bold-italic`), and offering a
+/// label where a type goes is exactly the plausible-but-wrong answer this
+/// crate avoids elsewhere.
+///
+/// `base_type_names_are_all_recognised` asserts every name here lowers to
+/// something other than the nominal `Variant` fallback, which catches a
+/// rename or a removal. It cannot catch an ADDITION — a new base type not
+/// listed here — and that asymmetry is the safe one: the cost is a missing
+/// completion, never a wrong one.
+pub fn base_type_names(version: RustyfiVersion) -> Vec<&'static str> {
+    let mut names = vec![
+        "unit",
+        "bool",
+        "int",
+        "float",
+        "length",
+        "string",
+        "inline-text",
+        "block-text",
+        "inline-boxes",
+        "block-boxes",
+        "context",
+        "document",
+        "text-info",
+        "pre-path",
+        "path",
+        "graphics",
+        "image",
+    ];
+    if version.math_is_split() {
+        names.extend(["math-text", "math-boxes"]);
+    } else {
+        names.push("math");
+    }
+    if version == RustyfiVersion::V0_1 {
+        names.extend(["deco", "deco-set", "font", "paren"]);
+    }
+    names.sort_unstable();
+    names
+}
+
 // ============================================================================
 // Forked-name guard: builtin TYPE
 // names that resolve differently — or not at all — between `V0_0` and
@@ -3544,6 +3597,34 @@ pub fn typecheck_with_version<'s>(
 // ============================================================================
 #[cfg(test)]
 mod l3_per_binding_tests {
+
+    /// Every name [`base_type_names`] lists really is a base type.
+    ///
+    /// The guard on a hand-kept list beside a `match`: `name_to_mono` answers
+    /// with the nominal `Variant(name, [])` fallback for anything it does not
+    /// know, so a name that was renamed or removed surfaces here rather than
+    /// as a silently useless completion candidate.
+    ///
+    /// Both generations, because four of the names are 0.1-only and `math`
+    /// forks into `math-text`/`math-boxes` across the split — a list checked
+    /// under one version only would miss exactly the version-gated half.
+    #[test]
+    fn base_type_names_are_all_recognised() {
+        for version in [RustyfiVersion::V0_0, RustyfiVersion::V0_1] {
+            for name in base_type_names(version) {
+                let lowered = name_to_mono(name, version);
+                assert!(
+                    !matches!(&lowered, MonoType::Variant(n, args) if n == name && args.is_empty()),
+                    "`{name}` is listed as a base type under {version:?} but lowers \
+                     to the nominal fallback, so it is not one"
+                );
+            }
+        }
+        // A control, or the assertion above could hold vacuously.
+        let made_up = name_to_mono("definitely-not-a-base-type", RustyfiVersion::V0_0);
+        assert!(matches!(&made_up, MonoType::Variant(n, _) if n == "definitely-not-a-base-type"));
+    }
+
     use super::*;
     use crate::{elaborate, primitives};
 

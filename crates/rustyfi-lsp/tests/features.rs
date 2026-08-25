@@ -6,8 +6,8 @@
 //! editor.
 
 use rustyfi_lsp::{
-    build_model, completions, definition, hover, record_label_slot, Definition, LineIndex,
-    Position, RustyfiVersion,
+    build_model, completions, definition, hover, record_label_slot, type_position_slot,
+    Definition, LineIndex, Position, RustyfiVersion,
 };
 
 /// Ask a question the way a client does: by line and UTF-16 character.
@@ -461,6 +461,34 @@ let z = cfg#zz
         !labels(src, after(src, "cfg#zz", 0), None).contains(&"zz".to_string()),
         "the word under the cursor is not a candidate for itself"
     );
+}
+
+/// The type-position question, exported for a caller with no token stream.
+///
+/// Same reason as [`record_label_slot`]: the browser playground decides
+/// namespaces twice and merges the answers, so a second copy of the backward
+/// scan would drift and the drift would show only as one half of a popup
+/// disagreeing with the other.
+#[test]
+fn the_type_position_is_answerable_from_a_bare_cursor() {
+    let ann = "let f : leng\n";
+    assert!(type_position_slot(ann, RustyfiVersion::V0_0, after(ann, ": leng", 0)));
+
+    let syn = "type t = leng\n";
+    assert!(type_position_slot(syn, RustyfiVersion::V0_0, after(syn, "= leng", 0)));
+
+    // An expression is not a type position, however similar it looks.
+    let expr = "let z = leng\n";
+    assert!(!type_position_slot(expr, RustyfiVersion::V0_0, after(expr, "= leng", 0)));
+
+    // Neither is prose.
+    let prose = "let doc = {a leng}\n";
+    assert!(!type_position_slot(prose, RustyfiVersion::V0_0, after(prose, "a leng", 0)));
+
+    // It agrees with what `completions` itself decides: a type is offered in
+    // the first and a value in the third.
+    let src = "type config = int\nlet configured = 1\nlet f : conf\n";
+    assert_eq!(labels(src, after(src, ": conf", 0), None), vec!["config"]);
 }
 
 /// The exported form of the same question, for a caller with no token stream.

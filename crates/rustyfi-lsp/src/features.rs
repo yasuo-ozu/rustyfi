@@ -235,6 +235,14 @@ enum Area {
 pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
     let source = model.source();
     let byte = crate::line_index::floor_boundary(source, byte);
+    // A header being typed, before anything below can look at a token stream:
+    // `@re` does not lex at all — the lexer wants a whole `@require:` and
+    // reports an illegal token otherwise — which is precisely the state a
+    // header is in while it is being written. Read from the TEXT for the same
+    // reason [`word_before`] is.
+    if let Some(items) = header_keywords(source, byte, model.version()) {
+        return items;
+    }
     let word = word_before(source, byte);
     // `lex_partial`, not `lex_with_version`: the buffer being completed into
     // is half-typed by definition, and its two most important shapes —
@@ -481,6 +489,58 @@ fn area_at(before: &[&Atom]) -> Area {
 /// would read `let f : τ | x = …` — upstream's `nonrecdecargpart`, which real
 /// packages write — as a type at `x`, and getting an ordinary parameter wrong
 /// is worse than missing a row variable.
+/// LSP `CompletionItemKind::Keyword`. Not in [`completion_kind`], which maps a
+/// [`Ns`] — a header keyword is not a name in any namespace, which is exactly
+/// why it had no candidates before.
+const KEYWORD_KIND: u8 = 14;
+
+/// The file headers, when the cursor is typing one.
+///
+/// `Some` — including `Some(empty)` — means the cursor IS in a header word, so
+/// nothing else can be meant there and the caller must not fall through to the
+/// name namespaces. `None` means it is not, and the ordinary machinery applies.
+///
+/// **`@stage:` is 0.0.6 only.** SATySFi 0.1 dropped the whole-file header for a
+/// per-binding `val persistent ~x`, and its lexer treats `@stage:` as a direct
+/// error rather than an unknown name (`lexer.rs`'s `"stage"` arm says so), so
+/// offering it under 0.1 would be offering a compile error.
+///
+/// The guard is narrow on purpose: only whitespace may precede the `@`, and
+/// what follows it must be bare letters. An `@` inside prose — `+p { mail@ex }`
+/// — fails the first test, and a written-out `@require: a @b` fails the second.
+fn header_keywords(source: &str, byte: usize, version: RustyfiVersion) -> Option<Vec<Completion>> {
+    let line_start = source[..byte].rfind('\n').map_or(0, |i| i + 1);
+    let typed = &source[line_start..byte];
+    let at = typed.find('@')?;
+    if !typed[..at].chars().all(|c| c == ' ' || c == '\t') {
+        return None;
+    }
+    if !typed[at + 1..].chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let range = ByteRange::new(line_start + at, byte);
+    let needle = &source[range.start..byte];
+    let mut out = Vec::new();
+    for (label, detail) in [
+        ("@require:", "Package, searched for under the library root."),
+        ("@import:", "File, resolved relative to this file's own directory."),
+        ("@stage:", "This file's stage: `0`, `1` or `persistent`."),
+    ] {
+        if label == "@stage:" && version != RustyfiVersion::V0_0 {
+            continue;
+        }
+        if label.starts_with(needle) {
+            out.push(Completion {
+                label: label.to_string(),
+                detail: detail.to_string(),
+                kind: KEYWORD_KIND,
+                range,
+            });
+        }
+    }
+    Some(out)
+}
+
 /// Is the cursor where a record LABEL goes, rather than where a value does?
 ///
 /// True immediately after `(|`, and after a `;` whose enclosing bracket is a

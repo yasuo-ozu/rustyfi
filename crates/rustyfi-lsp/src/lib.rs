@@ -110,7 +110,9 @@ pub mod server;
 mod workspace;
 
 pub use analysis::{analyze, analyze_auto, analyze_detected, detect_version, Diag, Severity};
-pub use features::{completions, definition, hover, Completion, Definition, Hover};
+pub use features::{
+    completions, definition, hover, record_label_slot, Completion, Definition, Hover,
+};
 pub use line_index::{LineIndex, Position};
 pub use model::{build_model, ByteRange, Def, HeaderKind, HeaderRef, Hit, Model, Ns, Opaque, Ref};
 pub use symbols::{

@@ -22,7 +22,7 @@
 //!   is what makes a completion popup something to dismiss rather than read.
 
 use crate::model::{ByteRange, Def, HeaderKind, Hit, Model, Ns, Ref};
-use rustyfi_syntax::{Atom, Token};
+use rustyfi_syntax::{Atom, RustyfiVersion, Token};
 
 // ---------------------------------------------------------------------------
 // Hover
@@ -259,15 +259,25 @@ pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
         (Some('\\'), Area::Inline | Area::Math) => Some('\\'),
         (Some('+'), Area::Block) => Some('+'),
         (Some('#'), Area::Inline | Area::Block | Area::Math) => Some('#'),
+        // `#` in PROGRAM text is field access — `cfg#title` — not an embed.
+        // The same character, a different namespace, decided by the area
+        // exactly as `\` and `+` already are.
+        (Some('#'), Area::Program) => Some('#'),
         _ => None,
     };
     let namespaces: &[Ns] = match (sigil, area) {
         (Some('\\'), Area::Math) => &[Ns::MathCmd],
         (Some('\\'), _) => &[Ns::InlineCmd],
         (Some('+'), _) => &[Ns::BlockCmd],
+        (Some('#'), Area::Program) => &[Ns::Field],
         (Some('#'), _) => &[Ns::Value],
         (None, Area::Program) => match in_type_position(&before) {
             true => &[Ns::Type, Ns::TypeVar],
+            // A record LABEL slot takes labels and nothing else. Offering the
+            // values in scope here — which is what this did — puts a list of
+            // every binding in the file where only a field name can go, and
+            // hides the one answer that is useful.
+            false if record_label_position(&before) => &[Ns::Field],
             false => &[Ns::Value, Ns::Ctor, Ns::Module],
         },
         // Prose.
@@ -286,6 +296,25 @@ pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
 
     let mut out: Vec<Completion> = Vec::new();
     for ns in namespaces {
+        // Labels come from mentions rather than bindings — see
+        // [`field_labels`] — so they cannot go through `in_scope`, and a
+        // qualified `M.` prefix means nothing for one either: a label is not a
+        // module member.
+        if *ns == Ns::Field {
+            if word.quals.is_empty() {
+                for name in field_labels(model, range) {
+                    if name.starts_with(needle) {
+                        out.push(Completion {
+                            label: name.to_string(),
+                            detail: "record label".to_string(),
+                            kind: completion_kind(Ns::Field),
+                            range,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
         let candidates: Vec<&Def> = match word.quals.is_empty() {
             true => model.in_scope(*ns, byte),
             false => match model.module_at(&word.quals, byte) {
@@ -452,6 +481,109 @@ fn area_at(before: &[&Atom]) -> Area {
 /// would read `let f : τ | x = …` — upstream's `nonrecdecargpart`, which real
 /// packages write — as a type at `x`, and getting an ordinary parameter wrong
 /// is worse than missing a row variable.
+/// Is the cursor where a record LABEL goes, rather than where a value does?
+///
+/// True immediately after `(|`, and after a `;` whose enclosing bracket is a
+/// `(|` — the two places a field name may be written in `(| a = 1; b = 2 |)`.
+/// False once a `=` has been passed at that level, because everything after it
+/// is the field's VALUE and offering labels there would be as wrong as
+/// offering values in the label slot.
+///
+/// Token-stream rather than tree, for [`Area`]'s reason: a record being typed
+/// into has no closing `|)` yet, so it does not parse, and this has to answer
+/// anyway. The backward scan is bracket-aware so that a nested construct
+/// (`(| a = f (x; y) |)`, a list, an inline group) is skipped whole rather
+/// than voting with its own punctuation.
+///
+/// A depth-0 `;` sets `saw_sep`, after which a `=` no longer decides: that `=`
+/// belongs to the PREVIOUS field, which the `;` already closed. Without it,
+/// `(| a = 1; b` would read the first field's `=` and answer "value".
+fn record_label_position(before: &[&Atom]) -> bool {
+    let mut depth = 0usize;
+    let mut saw_sep = false;
+    for a in before.iter().rev() {
+        match &a.slot {
+            Token::RParen
+            | Token::ERecord
+            | Token::EList
+            | Token::EHorzGrp
+            | Token::EVertGrp
+            | Token::EMathGrp
+            | Token::EPath => depth += 1,
+            Token::LParen
+            | Token::BRecord
+            | Token::BList
+            | Token::BHorzGrp
+            | Token::BVertGrp
+            | Token::BMathGrp
+            | Token::BPath => {
+                if depth == 0 {
+                    // The bracket the cursor is directly inside. Only a record
+                    // opens a label position.
+                    return matches!(a.slot, Token::BRecord);
+                }
+                depth -= 1;
+            }
+            Token::DefEq if depth == 0 && !saw_sep => return false,
+            Token::ListPunct if depth == 0 => saw_sep = true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// [`record_label_position`] asked about a cursor in a buffer, for a caller
+/// that has no token stream of its own.
+///
+/// Exported because the browser playground decides namespaces TWICE — once
+/// here for the buffer's own names, and once in its own `Word::namespaces` for
+/// the compiled-in package corpus, which this crate knows nothing about. Those
+/// two decisions have to agree, and a second copy of the backward scan is
+/// exactly the fork that would drift.
+pub fn record_label_slot(source: &str, version: RustyfiVersion, byte: usize) -> bool {
+    let byte = crate::line_index::floor_boundary(source, byte);
+    let word = word_before(source, byte);
+    let (atoms, _) = rustyfi_syntax::lex_partial(source, version);
+    let before: Vec<&Atom> = atoms
+        .iter()
+        .filter(|a| a.slot != Token::Eoi && a.span.end.byte <= word.sigil_start)
+        .collect();
+    area_at(&before) == Area::Program && record_label_position(&before)
+}
+
+/// Every record label the buffer mentions, in first-seen order.
+///
+/// Labels are the one namespace with no [`Def`] to enumerate: a label binds
+/// nothing (see `Model::scope_index`), so it exists only as a REFERENCE — in a
+/// record literal, in a record type, in an optional argument. Harvesting the
+/// mentions is therefore the only candidate source there is, and it is a
+/// genuinely useful one: the labels a document needs are overwhelmingly ones
+/// its own dependencies already write, and a resolved `@require:` graph puts
+/// those type declarations in this model.
+///
+/// Deliberately NOT scope-filtered. A label has no scope to filter by, and
+/// pretending otherwise would drop the useful case — `document (| ti`, where
+/// the only mention of `title` is in the doc class's own type text, far
+/// outside any scope containing the cursor.
+/// `typing` is the range the client is about to replace. The mention under the
+/// cursor is skipped, or a half-typed label suggests ITSELF: `cfg#ti` parses,
+/// so `ti` is already a recorded reference by the time this is asked. (In an
+/// unclosed `(| ti` it is not, because nothing there parses — which is exactly
+/// the inconsistency that makes filtering by range the right test rather than
+/// trusting the parse.)
+fn field_labels<'m>(model: &'m Model<'_>, typing: ByteRange) -> Vec<&'m str> {
+    let mut out: Vec<&str> = Vec::new();
+    for r in model.refs.iter().filter(|r| r.ns == Ns::Field) {
+        if r.span.start < typing.end && typing.start < r.span.end {
+            continue;
+        }
+        if !out.contains(&r.name.as_str()) {
+            out.push(&r.name);
+        }
+    }
+    out
+}
+
 fn in_type_position(before: &[&Atom]) -> bool {
     for a in before.iter().rev() {
         match &a.slot {

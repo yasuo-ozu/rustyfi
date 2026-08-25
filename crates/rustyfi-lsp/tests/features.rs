@@ -6,7 +6,8 @@
 //! editor.
 
 use rustyfi_lsp::{
-    build_model, completions, definition, hover, Definition, LineIndex, Position, RustyfiVersion,
+    build_model, completions, definition, hover, record_label_slot, Definition, LineIndex,
+    Position, RustyfiVersion,
 };
 
 /// Ask a question the way a client does: by line and UTF-16 character.
@@ -307,6 +308,145 @@ let f : len
 ";
     let got = labels(src, after(src, "let f : len", 0), None);
     assert_eq!(got, vec!["length-pair"], "after `:` only type names belong");
+}
+
+/// A record LABEL slot offers labels, and nothing else.
+///
+/// Both halves matter. Before this, the slot offered every VALUE in scope —
+/// a list of bindings where only a field name can go — and offered nothing at
+/// all once a prefix was typed, because no value happened to start with it.
+/// So the assertion is an equality, not a `contains`: the values must be gone.
+#[test]
+fn completion_in_a_record_label_slot_offers_labels_and_not_values() {
+    let src = "\
+type config = (| title : string; author : string |)
+let titular = 1
+let z = (| ti
+";
+    assert_eq!(labels(src, after(src, "let z = (| ti", 0), None), vec!["title"]);
+
+    // An empty label slot offers every label the buffer knows.
+    let mut all = labels(src, after(src, "let z = (| ", 0), None);
+    all.sort();
+    assert_eq!(all, vec!["author", "title"]);
+    assert!(
+        !all.contains(&"titular".to_string()),
+        "a value cannot go in a label slot: {all:?}"
+    );
+}
+
+/// After the `=`, the same record is an ordinary expression again.
+///
+/// The label slot and the value slot are one line apart and take disjoint
+/// namespaces, so getting the boundary wrong in either direction is silent.
+#[test]
+fn completion_after_a_records_equals_is_a_value_position_again() {
+    let src = "\
+type config = (| title : string |)
+let titular = 1
+let z = (| title = ti
+";
+    assert_eq!(
+        labels(src, after(src, "title = ti", 0), None),
+        vec!["titular"],
+        "past the `=` a field's VALUE is being written, not its name"
+    );
+}
+
+/// A second field, after a `;`, is a label slot again.
+///
+/// The backward scan has to see that the `;` closed the previous field —
+/// otherwise it finds that field's `=` and reports a value position, which is
+/// the shape every record after the first field has.
+#[test]
+fn completion_after_a_semicolon_is_a_label_slot_again() {
+    let src = "\
+type config = (| title : string; author : string |)
+let authorial = 1
+let z = (| title = `x`; au
+";
+    assert_eq!(labels(src, after(src, "`x`; au", 0), None), vec!["author"]);
+}
+
+/// A nested construct inside a field's value does not vote.
+///
+/// `(| a = f (x) ; ` — the inner `(` and `)` are balanced and belong to the
+/// value, so the scan must skip them whole rather than stopping at the inner
+/// bracket and calling it the enclosing one.
+#[test]
+fn completion_sees_through_a_nested_group_in_a_field_value() {
+    let src = "\
+type config = (| title : string; author : string |)
+let f x = x
+let z = (| title = f (1 + 2); au
+";
+    assert_eq!(labels(src, after(src, "2); au", 0), None), vec!["author"]);
+}
+
+/// Field ACCESS offers labels: `#` means something different in program text.
+///
+/// In inline or block text `#` embeds a value; in program text `cfg#title` is
+/// a field access. Same character, decided by the area — as `\\` and `+`
+/// already are.
+#[test]
+fn completion_after_a_hash_in_program_text_offers_labels() {
+    let src = "\
+let cfg = (| title = `a`; author = `b` |)
+let titular = 1
+let z = cfg#ti
+";
+    assert_eq!(
+        labels(src, after(src, "cfg#ti", 0), None),
+        vec!["title"],
+        "`#` in program text is field access, not an embed"
+    );
+}
+
+/// A half-typed label does not suggest itself.
+///
+/// Labels are harvested from MENTIONS, because a label binds nothing — so the
+/// one being typed is already a mention by the time completion is asked, in
+/// every context that still parses.
+#[test]
+fn completion_does_not_offer_the_label_being_typed() {
+    let src = "\
+let cfg = (| title = `a` |)
+let z = cfg#zz
+";
+    assert!(
+        !labels(src, after(src, "cfg#zz", 0), None).contains(&"zz".to_string()),
+        "the word under the cursor is not a candidate for itself"
+    );
+}
+
+/// The exported form of the same question, for a caller with no token stream.
+///
+/// The browser playground decides namespaces twice — once inside `completions`
+/// for the buffer's own names, once in its own corpus lookup — so this is
+/// exported rather than duplicated. Pinned here because a fork would show up
+/// only as the corpus half disagreeing with the buffer half, in a browser.
+#[test]
+fn the_record_label_slot_is_answerable_from_a_bare_cursor() {
+    let src = "\
+type config = (| title : string |)
+let z = (| ti
+";
+    let v = None;
+    assert!(record_label_slot(src, RustyfiVersion::V0_0, after(src, "let z = (| ti", 0)));
+    assert!(record_label_slot(src, RustyfiVersion::V0_0, after(src, "let z = (| ", 0)));
+
+    let val = "let z = (| title = ti\n";
+    assert!(
+        !record_label_slot(val, RustyfiVersion::V0_0, after(val, "title = ti", 0)),
+        "past the `=` this is a value position"
+    );
+
+    // Prose is never a label slot, whatever punctuation it contains.
+    let prose = "let doc = {a (| b}\n";
+    assert!(!record_label_slot(prose, RustyfiVersion::V0_0, after(prose, "(| b", 0)));
+
+    // It agrees with what `completions` itself does.
+    assert_eq!(labels(src, after(src, "let z = (| ti", 0), v), vec!["title"]);
 }
 
 #[test]

@@ -358,8 +358,15 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
                 false => line.lead.to_string(),
             };
             match line.comment {
-                // A comment keeps its own text; only what trails it goes.
-                Some(c) => format!("{lead}{}", rtrim(c)),
+                // A comment keeps its own text; only what trails it goes —
+                // and only if the client asked for trailing whitespace to go
+                // at all. This arm used to trim unconditionally while the
+                // blank-line arm below honoured the flag, so `trim_trailing_
+                // whitespace: false` was obeyed everywhere except after a
+                // `%`, which is exactly where a reader is most likely to have
+                // lined something up.
+                Some(c) if opts.trim_trailing_whitespace => format!("{lead}{}", rtrim(c)),
+                Some(c) => format!("{lead}{c}"),
                 // The last line of the gap has no terminator, so its leading
                 // run is the indentation of the token that follows — unless
                 // there is no such token, in which case it is whitespace at

@@ -906,3 +906,46 @@ fn a_stray_path_closer_pops_nothing() {
     let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats");
     assert_eq!(out, src, "bytes inside `${{ … }}` were rewritten");
 }
+
+/// The blank-line cap is not an LSP option, and no LSP option may switch it
+/// off through the back door.
+///
+/// It used to, and the route was invisible: a blank line was recognised by
+/// whether it RENDERED empty, so with `trim_trailing_whitespace` off a line
+/// carrying a single space rendered as that space, counted as content, and the
+/// run was never capped. `server.rs`'s `format_options` documents the opposite
+/// — that capping applies whatever the client's flags say — and once an absent
+/// optional member came to mean "off", this was what an ordinary VS Code
+/// format-on-save got.
+///
+/// Both halves are asserted, because the fix must not overshoot: the run is
+/// capped, AND the lines that survive keep the whitespace the client asked to
+/// keep. Capping removes whole lines; the flag governs what is stripped from
+/// the lines that remain.
+#[test]
+fn the_blank_line_cap_survives_a_client_that_declines_trailing_whitespace() {
+    let keep = FormatOptions {
+        trim_trailing_whitespace: false,
+        insert_final_newline: false,
+        trim_final_newlines: false,
+        ..FormatOptions::default()
+    };
+    let out = format("let x = 1\n \n \n \n \n \nlet y = 2\n", RustyfiVersion::V0_0, &keep)
+        .expect("a program-text buffer formats");
+    assert_eq!(
+        out, "let x = 1\n \n \nlet y = 2\n",
+        "the cap must apply, and the surviving blank lines must keep their space",
+    );
+
+    // The control: identical but with the blank lines genuinely empty. Both
+    // must cap to the same COUNT, which is what says the rule is about lines
+    // rather than about what is on them.
+    let empty = format("let x = 1\n\n\n\n\n\nlet y = 2\n", RustyfiVersion::V0_0, &keep)
+        .expect("a program-text buffer formats");
+    assert_eq!(empty, "let x = 1\n\n\nlet y = 2\n");
+    assert_eq!(
+        out.lines().count(),
+        empty.lines().count(),
+        "whitespace on a blank line must not change how many survive",
+    );
+}

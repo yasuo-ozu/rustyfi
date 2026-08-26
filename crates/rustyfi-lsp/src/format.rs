@@ -415,7 +415,16 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
         // is not one even when it renders empty: it is the tail of the line
         // the previous token sits on, and its terminator ends that line rather
         // than an empty one — unless the gap started a line of its own.
-        let is_blank = text.is_empty() && !line.term.is_empty() && (i > 0 || at_line_start);
+        // Blankness is a property of the INPUT line, not of how it renders.
+        // Reading it off `text` tied it to `trim_trailing_whitespace`: with
+        // trimming off a whitespace-only line renders as its own whitespace,
+        // so it counted as content and the cap never saw it — five blank lines
+        // carrying a space each survived where five empty ones were capped to
+        // two. That made an LSP flag silently switch off a rule that has no
+        // LSP option of its own, and after absent-means-off it was what an
+        // ordinary client got by default.
+        let is_blank =
+            line.comment.is_none() && !line.term.is_empty() && (i > 0 || at_line_start);
         if is_blank {
             blank_run += 1;
             // Nothing has been written yet and the gap starts the file, so

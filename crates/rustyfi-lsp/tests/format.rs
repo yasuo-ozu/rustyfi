@@ -611,6 +611,8 @@ fn sweep(files: &[PathBuf], version: RustyfiVersion, max_skipped: usize) -> (usi
             continue;
         }
         let (out, r) = round_trip(&src, version, &what);
+        assert_only_whitespace_differs(&src, &out, &what);
+        assert_indentation_preserved(&src, &out, &what);
         formatted += 1;
         regions += r;
         changed += usize::from(out != src);
@@ -645,8 +647,17 @@ fn the_bundled_and_third_party_v006_corpus_round_trips() {
 #[test]
 fn the_bundled_v01_corpus_round_trips() {
     let files = corpus_v01();
-    let (formatted, _) = sweep(&files, RustyfiVersion::V0_1, 0);
+    let (formatted, changed) = sweep(&files, RustyfiVersion::V0_1, 0);
     assert!(formatted > 20, "only {formatted} 0.1 files were formatted");
+    // The same guard its 0.0.6 sibling carries, and it matters *more* here:
+    // only one of these 47 files is untidy, so the day somebody tidies that
+    // one this sweep would silently become an assertion that the identity
+    // function is idempotent. If this fires, the fix is to make a corpus file
+    // untidy again on purpose — not to delete the guard.
+    assert!(
+        changed > 0,
+        "{formatted} 0.1 files formatted and none of them changed"
+    );
 }
 
 #[test]
@@ -670,6 +681,8 @@ fn the_corpus_round_trips_with_the_generation_detected_per_file() {
         let what = path.display().to_string();
         assert_same_tokens(&src, &once, version, &what);
         assert_text_areas_untouched(&src, &once, version, &what);
+        assert_only_whitespace_differs(&src, &once, &what);
+        assert_indentation_preserved(&src, &once, &what);
         assert_eq!(
             format_auto(&once, &opts).as_deref(),
             Some(once.as_str()),
@@ -682,4 +695,210 @@ fn the_corpus_round_trips_with_the_generation_detected_per_file() {
         "only {formatted} of {} corpus files formatted under detection",
         files.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Two properties the three above are structurally blind to
+//
+// Properties 1-3 all quantify over *tokens* or over text/math *regions*, and a
+// program-area gap is neither: the lexer emits no token for it, so any rewrite
+// confined to program whitespace is invisible to all three at once. That is not
+// a hypothetical hole — turn `format.rs`'s `is_indentation` arm into
+// `" ".to_string()` and the formatter becomes a destructive re-indenter that
+// flattens every hand-aligned continuation in the corpus, while all three
+// sweeps still pass. So the sweep also holds the two promises the module doc
+// and the README actually make about those gaps.
+// ---------------------------------------------------------------------------
+
+/// Every byte that differs between input and output is **whitespace**.
+///
+/// Deleting all whitespace from both must give the same string. This is the
+/// check that covers what the token stream cannot see at all: `%` comments are
+/// skipped by the lexer, so a formatter that dropped one, truncated one, or
+/// moved a token past one would satisfy [`assert_same_tokens`] exactly.
+fn assert_only_whitespace_differs(original: &str, formatted: &str, what: &str) {
+    let squeeze = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+    let (b, a) = (squeeze(original), squeeze(formatted));
+    if b != a {
+        let at = b
+            .char_indices()
+            .zip(a.chars())
+            .find(|((_, x), y)| x != y)
+            .map(|((i, _), _)| i)
+            .unwrap_or_else(|| b.len().min(a.len()));
+        let window = |s: &String| -> String {
+            s.chars()
+                .skip(at.saturating_sub(30))
+                .take(70)
+                .collect::<String>()
+        };
+        panic!(
+            "{what}: a non-whitespace byte changed at position {at} of the squeezed text\n  \
+             before: …{}…\n   after: …{}…",
+            window(&b),
+            window(&a)
+        );
+    }
+}
+
+/// The leading whitespace of a line, and the rest of it.
+fn split_indent(line: &str) -> (&str, &str) {
+    let end = line
+        .find(|c: char| c != ' ' && c != '\t')
+        .unwrap_or(line.len());
+    line.split_at(end)
+}
+
+/// The lines of `s` that carry something other than whitespace, `\r` stripped.
+///
+/// Blank lines are dropped because the formatter is *allowed* to add and remove
+/// them (the blank-line cap, the leading and trailing ones, the final newline);
+/// what it is not allowed to do is add, remove, merge or re-indent a line that
+/// has content on it.
+fn content_lines(s: &str) -> Vec<&str> {
+    s.split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .filter(|l| !l.trim().is_empty())
+        .collect()
+}
+
+/// **"It does not re-indent", executable.**
+///
+/// The formatter's five normalisations are all *deletions* of whitespace, with
+/// exactly one exception: `normalise_indent` rewrites a leading run that
+/// contains a **tab**, and only then (`format.rs`'s `if !opts.insert_spaces ||
+/// !lead.contains('\t') { return lead.to_string(); }`). So for every line whose
+/// source indentation is spaces alone, the output's indentation must be
+/// byte-identical — not merely whitespace, *identical*. Lines whose source
+/// indentation contains a tab are exempted from the indentation comparison and
+/// still checked for content.
+///
+/// Trailing whitespace is compared with `trim_end` on both sides rather than
+/// asserted equal: the formatter trims it in program areas and preserves it
+/// inside a text area (where it is a `Token::Space`), and
+/// [`assert_text_areas_untouched`] is what holds the second of those.
+fn assert_indentation_preserved(original: &str, formatted: &str, what: &str) {
+    let (before, after) = (content_lines(original), content_lines(formatted));
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "{what}: the number of lines with content on them changed ({} -> {}) — the formatter \
+         neither adds, removes nor merges such a line",
+        before.len(),
+        after.len()
+    );
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        let (bi, bc) = split_indent(b);
+        let (ai, ac) = split_indent(a);
+        assert_eq!(
+            bc.trim_end(),
+            ac.trim_end(),
+            "{what}: the content of content-line {i} changed"
+        );
+        if !bi.contains('\t') {
+            assert_eq!(
+                bi, ai,
+                "{what}: content-line {i} was re-indented ({:?} -> {:?}); the only indentation \
+                 the formatter may rewrite is one containing a tab",
+                bi, ai
+            );
+        }
+    }
+}
+
+#[test]
+fn a_formatter_that_re_indented_would_fail_the_indentation_check() {
+    // The falsification for `assert_indentation_preserved`, in the same shape
+    // as the text-area check's own: a check nobody has seen fail is a check
+    // nobody knows can.
+    let src = "let x =\n      f 1\n";
+    let reindented = "let x =\n f 1\n";
+    assert_same_tokens(src, reindented, RustyfiVersion::V0_0, "re-indent");
+    assert_text_areas_untouched(src, reindented, RustyfiVersion::V0_0, "re-indent");
+    assert_only_whitespace_differs(src, reindented, "re-indent");
+    let caught = std::panic::catch_unwind(|| {
+        assert_indentation_preserved(src, reindented, "re-indent");
+    });
+    assert!(caught.is_err(), "the indentation check cannot fail");
+}
+
+#[test]
+fn a_formatter_that_ate_a_comment_would_fail_the_whitespace_only_check() {
+    // Comments are invisible to the lexer, so this is the one of the two that
+    // properties 1-3 cannot substitute for even in principle.
+    let src = "let x = 1 % why\n";
+    let eaten = "let x = 1 %\n";
+    assert_same_tokens(src, eaten, RustyfiVersion::V0_0, "eaten comment");
+    let caught = std::panic::catch_unwind(|| {
+        assert_only_whitespace_differs(src, eaten, "eaten comment");
+    });
+    assert!(caught.is_err(), "the whitespace-only check cannot fail");
+}
+
+// ---------------------------------------------------------------------------
+// `<[ … ]>` — the path literal that used to walk the area replay out of math
+// ---------------------------------------------------------------------------
+
+/// An unmatched `<[` inside a program sub-area of math used to pop the wrong
+/// entry and hand the rest of the math to the formatter as program text.
+///
+/// `rustyfi_syntax`'s lexer emits `Token::BPath` (`lexer.rs:712`) and
+/// `Token::EPath` (`:550`) with **no** `push_mode`/`pop_mode`, and nothing
+/// requires the two to pair — an unmatched `<[` is not a lex error. When
+/// `crate::area` pushed on `BPath` anyway, the `)` below popped the path's
+/// phantom `Program` instead of the `!(`'s, leaving the replay in `Program`
+/// while the lexer was back in `Math`; the blank lines that follow are inside
+/// `${ … }` and were capped.
+#[test]
+fn an_unmatched_path_opener_does_not_let_the_formatter_into_the_math() {
+    let src = "let m = ${ \\frac!( 1 <[ 2 )\n\n\n\n\n} in m\n";
+    let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats");
+    assert_eq!(out, src, "bytes inside `${{ … }}` were rewritten");
+    round_trip(src, RustyfiVersion::V0_0, "unmatched `<[` in math");
+}
+
+/// The conservative twin of the same bug, in the same buffer: once the `}`
+/// popped, the replay was left believing it was still in `Math`, so the
+/// program text *after* the math was never tidied — including the final
+/// newline the client asked for.
+#[test]
+fn an_unmatched_path_opener_does_not_leave_the_replay_stuck_in_math() {
+    let src = "let m = ${ \\frac!( <[ 1 ) } in m   \n\n\n\n\n";
+    let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats");
+    assert_eq!(out, "let m = ${ \\frac!( <[ 1 ) } in m\n");
+    round_trip(src, RustyfiVersion::V0_0, "stuck-in-math `<[`");
+}
+
+/// A *matched* path literal is program text throughout, and stays so — the
+/// fix must not have cost the ordinary case anything. This is also the
+/// completion side of the change: `area_at` answered `Program` inside a
+/// balanced `<[ … ]>` before (a `Program` pushed onto a `Program`) and answers
+/// `Program` now, so no namespace moved.
+#[test]
+fn a_matched_path_literal_is_program_text_and_its_whitespace_is_tidied() {
+    let src = "let p = <[ (0pt, 0pt) -- (1pt, 1pt) ]>   \nin p   \n\n\n\n";
+    let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats");
+    assert_eq!(out, "let p = <[ (0pt, 0pt) -- (1pt, 1pt) ]>\nin p\n");
+    round_trip(src, RustyfiVersion::V0_0, "matched path literal");
+    // The whitespace *inside* the literal is tidied too, which is the same
+    // fact `area_at` reports to completion: `Program` at every point in a
+    // balanced `<[ … ]>`, before the fix and after it.
+    let src = "let p = <[ (0pt, 0pt)   \n   -- (1pt, 1pt) ]> in p\n";
+    assert_eq!(
+        format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats"),
+        "let p = <[ (0pt, 0pt)\n   -- (1pt, 1pt) ]> in p\n"
+    );
+}
+
+/// The other half of the pair, and the reason the deviation could never have
+/// been repaired by "matching them up": a stray `]>` is not a lex error
+/// either (the `']'` arm emits `Token::EPath` with no `pop_mode`). Here it
+/// pops the `!(`'s `Program` a token early, so the real `)` pops the `Math`
+/// and the rest of the math becomes rewritable — the same corruption reached
+/// from the closing side.
+#[test]
+fn a_stray_path_closer_pops_nothing() {
+    let src = "let m = ${ \\frac!( ]> 1 )\n\n\n\n\n} in m\n";
+    let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("formats");
+    assert_eq!(out, src, "bytes inside `${{ … }}` were rewritten");
 }

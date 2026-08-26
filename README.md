@@ -997,10 +997,19 @@ tidy a document; it re-typesets it.
 
 So the formatter rewrites the whitespace **between two program-mode tokens**
 and copies every other byte across untouched. It never alters a byte inside a
-text or math area, or inside any token's span, and that is a property of how it
-is built rather than a rule it tries to follow: the areas come from replaying
-the lexer's own mode stack over the token stream, and only the gaps that
-replay leaves in program text are candidates at all.
+token's span, and that much is span arithmetic rather than care: a candidate
+range runs from one token's last byte to the next token's first, so prose
+characters, string bodies and the whitespace the lexer folded into a token are
+unreachable whatever else goes wrong. It never alters a byte inside a text or
+math area either, but that second half is a property of the *area map* — the
+lexer's own mode stack, replayed over the token stream — and is only as good
+as that replay's fidelity, because inline text, block text and math have
+whitespace and comment gaps of their own that the map is what excludes. So the
+replay is held to being exact (it diverges from the lexer in one bounded,
+deliberately conservative place, documented in `crates/rustyfi-lsp/src/area.rs`),
+a gap holding anything but whitespace and `%` comments makes the whole format
+decline rather than guess, and the corpus sweep checks per file that every byte
+that differs is whitespace the lexer discards.
 
 What it normalises, all of it whitespace the lexer discards:
 
@@ -1043,8 +1052,10 @@ starts in.
 
 The whole bundled and third-party corpus is swept in
 `crates/rustyfi-lsp/tests/format.rs`: every file is formatted and checked for
-idempotence, an identical token stream, and byte-identical text and math
-regions.
+idempotence, an identical token stream, byte-identical text and math regions,
+and — the property the other three are blind to — that source and output agree
+once all whitespace is deleted, so no edit can have landed anywhere but in
+whitespace.
 
 ### Configuration
 

@@ -24,13 +24,41 @@
 //! > any token's span is ever altered.** Only the whitespace *between* two
 //! > program-mode tokens is rewritten.
 //!
-//! It is kept by construction rather than by care. [`program_gaps`] replays
-//! the lexer's own mode stack ([`crate::area`]) and yields only the byte ranges
-//! that (a) lie strictly between two tokens and (b) are in [`Area::Program`]
-//! at that point; every other byte of the file is copied across verbatim. A
-//! gap that turns out to hold anything but whitespace and `%` comments — which
-//! would mean the replay had drifted from the lexer — makes the whole format
-//! decline rather than guess.
+//! [`program_gaps`] yields only the byte ranges that (a) lie strictly between
+//! two tokens' spans and (b) are in [`Area::Program`] at that point; every
+//! other byte of the file is copied across verbatim.
+//!
+//! **The two halves of that invariant are not guaranteed equally, and saying
+//! so is the point of this paragraph.**
+//!
+//! - *No byte inside a token's span is altered* is guaranteed **by
+//!   construction**, and by span arithmetic alone: a gap runs from the
+//!   previous token's `span.end.byte` to the next token's `span.start.byte`,
+//!   so a `Token::Char` run, a `Token::Literal` body, and the whitespace the
+//!   lexer folded into a `Token::Space` or into a `Token::BHorzGrp`'s span are
+//!   out of reach no matter what the area fold believes. This half holds even
+//!   if [`crate::area`] is wrong.
+//! - *No byte inside a text or math area is altered* rests on the area fold
+//!   being **faithful to the lexer**, and that is a property of
+//!   [`crate::area`] that has to be argued rather than read off this
+//!   function. Inline, block and math areas do have gaps of their own — the
+//!   lexer skips whitespace inside `${ … }` outright, and skips `%` comments
+//!   in every area — so it is the `Area::Program` test, not the span
+//!   arithmetic, that keeps this half. It was in fact **false until the
+//!   `<[`/`]>` deviation in [`crate::area`] was removed**: an unmatched path
+//!   opener offset the replay from the lexer and let the whitespace inside a
+//!   `${ … }` be rewritten. The failure was latent rather than corrupting,
+//!   because the first half still held and every gap the formatter can reach
+//!   is bytes the lexer *skipped*, so the token stream came out identical
+//!   either way — which is exactly why nothing caught it.
+//!
+//! Two runtime backstops sit under the second half. A gap that turns out to
+//! hold anything but whitespace and `%` comments — which would mean the replay
+//! had drifted from the lexer far enough to land inside real content — makes
+//! the whole format decline rather than guess ([`split_gap`]). And the corpus
+//! sweep in `tests/format.rs` checks, per file, that every byte range where
+//! input and output differ is whitespace the lexer discards, which is the
+//! check that would have caught the `<[` bug.
 //!
 //! # What is normalised
 //!

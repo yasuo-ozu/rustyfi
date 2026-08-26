@@ -698,34 +698,87 @@ fn lsp_range(text: &str, range: ByteRange) -> Value {
     })
 }
 
+/// The largest `tabSize` this server will honour.
+///
+/// `tabSize` is a `uinteger` on the wire, so it is unbounded client input, and
+/// `format::normalise_indent` turns it into that many spaces per indentation
+/// run — a client-controlled allocation, on a request an editor sends on every
+/// save. Measured: `tabSize: 40_000_000` on a file with one tab-indented line
+/// produced a 120 MB `newText` in 0.45 s.
+///
+/// 256 is the bound because it is far past any editor's own tab stop (8 is the
+/// widest anybody defaults to, and the settings UIs present single digits)
+/// while still being wider than any line a person reads, so no setting a user
+/// could plausibly have chosen is clipped; and because it keeps the worst case
+/// proportional to the file — an indentation run of `n` tabs can grow to at
+/// most `256n` bytes. `0` is clamped *up* to `1` for the reason
+/// `normalise_indent` already had: a tab stop every zero columns names no
+/// column.
+const MAX_TAB_SIZE: u64 = 256;
+
 /// LSP's `FormattingOptions` object, as far as this formatter reads it.
 ///
-/// `tabSize` and `insertSpaces` are required by the specification and every
-/// other member is optional, so an absent one falls back to
-/// [`crate::FormatOptions`]'s default rather than to "off": a client that
-/// sends only the two required members wants the ordinary behaviour, not a
-/// formatter with all its rules disabled.
+/// **An absent optional member means "off", not "the library default".**
+/// `tabSize` and `insertSpaces` are required by the specification;
+/// `trimTrailingWhitespace`, `insertFinalNewline` and `trimFinalNewlines` are
+/// optional, and the common clients send them *only when the user's
+/// corresponding editor setting is on*. VS Code's
+/// `files.trimTrailingWhitespace`, `files.insertFinalNewline` and
+/// `files.trimFinalNewlines` all default to false, and the client then omits
+/// the member entirely rather than sending `false`; nvim behaves the same. So
+/// an ordinary format-on-save arrives as `{"tabSize":4,"insertSpaces":true}`,
+/// and reading that as "all three on" deletes trailing whitespace and final
+/// newlines the user explicitly turned off. Silence from a client is not a
+/// request.
+///
+/// This is deliberately **not** [`crate::FormatOptions`]'s own [`Default`],
+/// and the two must not be collapsed into one. `FormatOptions::default()` is
+/// for the library and playground callers, who pass no options because there
+/// is no client in the picture at all, and for whom "tidy everything" is the
+/// right answer. Here the silence belongs to somebody, and it carries
+/// information. Only the two *required* members fall back to the library
+/// default, and that fallback is unreachable for a conforming client — it
+/// exists so a malformed request still gets an answer instead of an error.
+///
+/// # The contract that results
+///
+/// Two of the formatter's rules are not LSP options, so they have no member to
+/// be absent and do **not** switch off with these flags — they always apply:
+///
+/// - a run of blank lines in program text is capped at
+///   [`crate::FormatOptions::max_blank_lines`];
+/// - a file's *leading* blank lines are dropped.
+///
+/// That is not an inconsistency with "absence means off". The protocol has no
+/// vocabulary for either rule, so a client cannot ask for them or decline them
+/// either way; and a formatter that did nothing whatever when the three
+/// optional members were missing would answer `[]` to every ordinary
+/// format-on-save, which is an advertised capability that never does anything.
+/// The visible consequence is at the end of a file: with `trimFinalNewlines`
+/// off, a file ending in six newlines still comes back with that run capped,
+/// so "off" means *this formatter does not collapse the tail to a single
+/// newline*, not *the tail is untouched*.
 ///
 /// `FormattingOptions` also carries arbitrary client-defined members, which
 /// are ignored — acting on a key this server does not document would be acting
 /// on a guess about what the client meant.
 fn format_options(options: Option<&Value>) -> crate::FormatOptions {
     let default = crate::FormatOptions::default();
-    let Some(o) = options else {
-        return default;
-    };
-    let flag =
-        |name: &str, fallback: bool| o.get(name).and_then(Value::as_bool).unwrap_or(fallback);
+    // A missing `options` object is treated exactly as an empty one rather
+    // than as the library default: the three optional members are absent
+    // either way, and the two required ones fall back below.
+    let get = |name: &str| options.and_then(|o| o.get(name));
+    let flag = |name: &str| get(name).and_then(Value::as_bool).unwrap_or(false);
     crate::FormatOptions {
-        tab_size: o
-            .get("tabSize")
+        tab_size: get("tabSize")
             .and_then(Value::as_u64)
-            .map(|n| n as usize)
-            .unwrap_or(default.tab_size),
-        insert_spaces: flag("insertSpaces", default.insert_spaces),
-        trim_trailing_whitespace: flag("trimTrailingWhitespace", default.trim_trailing_whitespace),
-        insert_final_newline: flag("insertFinalNewline", default.insert_final_newline),
-        trim_final_newlines: flag("trimFinalNewlines", default.trim_final_newlines),
+            .map_or(default.tab_size, |n| n.clamp(1, MAX_TAB_SIZE) as usize),
+        insert_spaces: get("insertSpaces")
+            .and_then(Value::as_bool)
+            .unwrap_or(default.insert_spaces),
+        trim_trailing_whitespace: flag("trimTrailingWhitespace"),
+        insert_final_newline: flag("insertFinalNewline"),
+        trim_final_newlines: flag("trimFinalNewlines"),
         max_blank_lines: default.max_blank_lines,
     }
 }

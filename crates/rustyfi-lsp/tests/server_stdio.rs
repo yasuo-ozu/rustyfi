@@ -952,8 +952,27 @@ fn document_symbol_obeys_an_explicit_lang() {
 // textDocument/formatting
 // ---------------------------------------------------------------------------
 
+/// A formatting request from a client whose three optional whitespace
+/// settings are all *on* — which is what the tests below mean when they say
+/// "format this buffer".
+///
+/// It has to say so explicitly, because the members are optional and their
+/// absence means "off" on the wire (`server.rs`'s `format_options`). A client
+/// with the editor defaults sends none of them; that case is the subject of
+/// its own tests further down rather than the silent baseline for every test
+/// here.
 fn formatting(id: i64, uri: &str) -> Value {
-    formatting_with(id, uri, json!({ "tabSize": 4, "insertSpaces": true }))
+    formatting_with(
+        id,
+        uri,
+        json!({
+            "tabSize": 4,
+            "insertSpaces": true,
+            "trimTrailingWhitespace": true,
+            "insertFinalNewline": true,
+            "trimFinalNewlines": true,
+        }),
+    )
 }
 
 /// A formatting request carrying an explicit `FormattingOptions`.
@@ -1161,4 +1180,217 @@ fn formatting_follows_did_change() {
         formatting(3, uri),
     ]);
     assert_eq!(apply(edited, &reply(&out, 3)["result"]), "let after = 1\n");
+}
+
+// ---------------------------------------------------------------------------
+// textDocument/formatting: the optional `FormattingOptions` members
+//
+// LSP marks `trimTrailingWhitespace`, `insertFinalNewline` and
+// `trimFinalNewlines` optional, and VS Code and nvim send them only when the
+// user's `files.trimTrailingWhitespace` / `files.insertFinalNewline` /
+// `files.trimFinalNewlines` are on — all three default to false, and the
+// member is then *omitted*, not sent as `false`. So the wire shape this group
+// cares about most is the one an ordinary format-on-save actually has:
+// `{"tabSize":4,"insertSpaces":true}` and nothing else.
+//
+// Every case is asserted through `apply`, on the document the user ends up
+// with. Asserting `result == []` alone would pass against a formatter that
+// had stopped doing anything at all, which is exactly the failure "absence
+// means off" could turn into if it were taken one step too far.
+// ---------------------------------------------------------------------------
+
+/// The document a client ends up with after formatting `src` under `options`.
+fn formatted(src: &str, options: Value) -> String {
+    let uri = "file:///opts.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        formatting_with(2, uri, options),
+    ]);
+    let result = &reply(&out, 2)["result"];
+    assert!(
+        !result.is_null(),
+        "the server declined to format {src:?}: {:#?}",
+        reply(&out, 2)
+    );
+    apply(src, result)
+}
+
+/// The three optional members, one at a time, in all three wire states:
+/// absent, `false`, `true`. Absent and `false` must agree — that is the whole
+/// claim — and `true` must differ from both, which is what stops the test
+/// passing against a formatter that has simply gone inert.
+#[test]
+fn an_absent_optional_formatting_member_means_off_exactly_as_false_does() {
+    // (member, buffer, what the buffer becomes when the member is on)
+    let cases = [
+        (
+            "trimTrailingWhitespace",
+            "let x = 1   \nlet y = 2  \n",
+            "let x = 1\nlet y = 2\n",
+        ),
+        ("insertFinalNewline", "let x = 1", "let x = 1\n"),
+        // Six terminators after the token. With the member on they collapse
+        // to one; with it off the blank-line cap still applies, so the run
+        // stops at two blank lines rather than staying at five. See the
+        // contract in `format_options`.
+        (
+            "trimFinalNewlines",
+            "let x = 1\n\n\n\n\n\n",
+            "let x = 1\n",
+        ),
+    ];
+
+    for (member, src, on) in cases {
+        let base = json!({ "tabSize": 4, "insertSpaces": true });
+        let with = |value: bool| {
+            let mut o = base.clone();
+            o[member] = json!(value);
+            o
+        };
+
+        let absent = formatted(src, base.clone());
+        let off = formatted(src, with(false));
+        let onward = formatted(src, with(true));
+
+        assert_eq!(
+            absent, off,
+            "{member}: an absent member must mean what `false` means"
+        );
+        assert_eq!(onward, on, "{member}: sent as `true`");
+        assert_ne!(
+            absent, onward,
+            "{member}: `true` and absent must not agree, or this test proves nothing"
+        );
+    }
+}
+
+/// What "off" leaves behind, spelled out rather than inferred from an
+/// inequality: the buffer each member declines to touch.
+#[test]
+fn the_optional_members_left_off_leave_their_own_whitespace_alone() {
+    let base = json!({ "tabSize": 4, "insertSpaces": true });
+
+    assert_eq!(
+        formatted("let x = 1   \nlet y = 2  \n", base.clone()),
+        "let x = 1   \nlet y = 2  \n",
+        "trailing whitespace the user chose to keep"
+    );
+    assert_eq!(
+        formatted("let x = 1", base.clone()),
+        "let x = 1",
+        "a file the user chose to end without a newline"
+    );
+    assert_eq!(
+        formatted("let x = 1\n\n\n\n\n\n", base.clone()),
+        "let x = 1\n\n\n",
+        "the tail is capped by `max_blank_lines`, which is not an LSP option, \
+         but it is not collapsed to a single newline"
+    );
+}
+
+/// The two rules with no LSP member behind them apply whatever the flags say.
+/// This is the part of the contract that reads as an inconsistency if it is
+/// not written down: "the client asked for nothing" is not "the formatter does
+/// nothing".
+#[test]
+fn the_rules_that_are_not_lsp_options_apply_with_every_member_off() {
+    let all_off = json!({
+        "tabSize": 4,
+        "insertSpaces": true,
+        "trimTrailingWhitespace": false,
+        "insertFinalNewline": false,
+        "trimFinalNewlines": false,
+    });
+    assert_eq!(
+        formatted("\n\n\nlet x = 1\n\n\n\n\n\nlet y = 2\n", all_off),
+        "let x = 1\n\n\nlet y = 2\n",
+        "leading blank lines are dropped and the interior run is capped at two"
+    );
+}
+
+/// Turning one member on does not turn the others on with it.
+#[test]
+fn the_optional_members_are_independent() {
+    let only = |member: &str| {
+        let mut o = json!({ "tabSize": 4, "insertSpaces": true });
+        o[member] = json!(true);
+        o
+    };
+    let src = "let x = 1   \n\n\n\n\nlet y = 2   ";
+
+    assert_eq!(
+        formatted(src, only("trimTrailingWhitespace")),
+        "let x = 1\n\n\nlet y = 2",
+        "the trailing runs go; no final newline is invented"
+    );
+    assert_eq!(
+        formatted(src, only("insertFinalNewline")),
+        "let x = 1   \n\n\nlet y = 2   \n",
+        "a final newline is added and the trailing runs stay"
+    );
+}
+
+/// A request with no `options` object at all is malformed rather than
+/// meaningful, and must not be an error or a panic: the optional members are
+/// absent there like anywhere else, so it behaves as "all off".
+#[test]
+fn a_formatting_request_with_no_options_object_is_answered_not_refused() {
+    let uri = "file:///no-options.saty";
+    let src = "let x = 1   \n\n\n\n\n\n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        json!({
+            "jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting",
+            "params": { "textDocument": { "uri": uri } },
+        }),
+    ]);
+    assert!(reply(&out, 2).get("error").is_none(), "{:#?}", reply(&out, 2));
+    assert_eq!(
+        apply(src, &reply(&out, 2)["result"]),
+        "let x = 1   \n\n\n",
+        "the trailing run stays; only the option-less blank-line cap fires"
+    );
+}
+
+/// `tabSize` is unbounded `uinteger` input and each tab becomes that many
+/// spaces, so it is clamped. Unclamped, a measured `tabSize: 40_000_000`
+/// turned one tab-indented line into a 120 MB `newText`.
+#[test]
+fn an_absurd_tab_size_is_clamped_rather_than_allocated() {
+    let src = "let f x =\n\tx\n";
+    let with = |n: u64| json!({ "tabSize": n, "insertSpaces": true });
+
+    assert_eq!(
+        formatted(src, with(8)),
+        "let f x =\n        x\n",
+        "an ordinary tab size passes through untouched"
+    );
+    assert_eq!(
+        formatted(src, with(0)),
+        "let f x =\n x\n",
+        "zero clamps up to one: a tab stop every zero columns names no column"
+    );
+
+    let huge = formatted(src, with(40_000_000));
+    assert_eq!(
+        huge,
+        format!("let f x =\n{}x\n", " ".repeat(256)),
+        "clamped to the 256-column bound"
+    );
+
+    // The point of the clamp is the size of what goes over the wire, so read
+    // that off the reply rather than off the applied document.
+    let uri = "file:///huge-tab.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        formatting_with(2, uri, with(40_000_000)),
+    ]);
+    let text = reply(&out, 2)["result"][0]["newText"]
+        .as_str()
+        .expect("one edit")
+        .len();
+    assert!(text <= 1024, "the edit carried {text} bytes");
 }

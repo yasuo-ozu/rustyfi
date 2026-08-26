@@ -262,6 +262,62 @@ let doc = {${\\fr}}
     assert_eq!(got, vec!["\\frac"], "an inline command cannot go in math");
 }
 
+/// A path literal's brackets must not move the area, because the lexer does
+/// not move its mode for them.
+///
+/// `<[ … ]>` is program text throughout: `lexer.rs`'s `<[` arm and its `']'`
+/// arm emit `BPath`/`EPath` with no `push_mode`/`pop_mode` at all, matching
+/// upstream's `lexer.mll:192-193`. `area_at` pushed and popped on them anyway,
+/// justified as a no-op because it pushed `Program` onto `Program` — true only
+/// while the two pair up, and nothing enforces that: an unmatched `<[` or `]>`
+/// is not a lex error. One unpaired bracket offset the replay from the lexer
+/// permanently, and every later closer then popped the wrong entry.
+#[test]
+fn a_path_literals_brackets_do_not_move_the_lexical_area() {
+    // A path literal being TYPED: `<[` written, the closing `]>` not yet. The
+    // extra push meant the `}` that really ended the math area popped it
+    // instead, so the replay was still in math after the lexer had returned to
+    // inline text — and math commands were offered in prose.
+    let half_typed = "\
+let-math \\frac a b = a
+let-inline \\frame it = it
+let doc = {${!(<[ (0pt,0pt) )} \\fr}
+";
+    assert_eq!(
+        labels(half_typed, after(half_typed, "\\fr", 2), None),
+        vec!["\\frame"],
+        "an unmatched `<[` must not keep the area inside math"
+    );
+
+    // The mirror. A stray `]>` popped an entry the lexer never pushed, so the
+    // replay left the math area one closer early and offered an INLINE command
+    // where only a math one can go — the reported symptom.
+    let stray_close = "\
+let-math \\frac a b = a
+let-inline \\frame it = it
+let doc = {${!(]>) \\fr}}
+";
+    assert_eq!(
+        labels(stray_close, after(stray_close, "\\fr", 2), None),
+        vec!["\\frac"],
+        "an unmatched `]>` must not walk the area out of math"
+    );
+
+    // The control, so that neither answer above is the mere PRESENCE of a path
+    // literal: written in full, it is program text inside math's `!( … )` and
+    // leaves the cursor in math exactly as an empty `!( … )` would.
+    let balanced = "\
+let-math \\frac a b = a
+let-inline \\frame it = it
+let doc = {${!(<[ (0pt,0pt) -- (10pt,0pt) ]>) \\fr}}
+";
+    assert_eq!(
+        labels(balanced, after(balanced, "\\fr", 2), None),
+        vec!["\\frac"],
+        "a well-formed path literal is program text and ends where it began"
+    );
+}
+
 #[test]
 fn completion_in_prose_offers_nothing() {
     // The single most annoying thing a language server can do is pop a list of

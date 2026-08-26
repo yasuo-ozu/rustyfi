@@ -446,6 +446,24 @@ fn is_name_byte(b: u8) -> bool {
 /// decides the area with the same stack: `{` after program text is an inline
 /// group and `{` inside math is a math group, and the token it produced
 /// already records which.
+///
+/// That faithfulness is the whole correctness argument, so the arms below are
+/// not "the brackets" — they are **exactly the tokens `lexer.rs` calls
+/// `push_mode`/`pop_mode` on**, and nothing else may appear here. A token that
+/// merely looks like a bracket buys a permanent offset between this stack and
+/// the lexer's the first time it goes unpaired, and from there every later
+/// closer pops the wrong entry.
+///
+/// The pair that reads like an exception and is not is `<[ … ]>`, a path
+/// literal. It is a bracket in the *grammar* (`parser.mly:819`,
+/// `BPATH path EPATH`) but program text throughout, and neither lexer changes
+/// mode for it: `lexer.rs`'s `<[` arm emits [`Token::BPath`] and its `']'`
+/// arm emits [`Token::EPath`] with no `push_mode`/`pop_mode` at all — matching
+/// upstream's `lexer.mll:192-193`. Pushing `Program` onto `Program` here reads
+/// as a no-op, and is one only while the two pair up; nothing enforces that,
+/// because an unmatched `<[` or `]>` is not a lex error. So they are simply
+/// not delimiters as far as this fold is concerned. (Compare
+/// [`record_label_position`], which counts them and is right to.)
 fn area_at(before: &[&Atom]) -> Area {
     let mut stack = vec![Area::Program];
     for a in before {
@@ -453,7 +471,7 @@ fn area_at(before: &[&Atom]) -> Area {
             Token::BHorzGrp => stack.push(Area::Inline),
             Token::BVertGrp => stack.push(Area::Block),
             Token::BMathGrp => stack.push(Area::Math),
-            Token::LParen | Token::BList | Token::BRecord | Token::BPath | Token::OpenModule(_) => {
+            Token::LParen | Token::BList | Token::BRecord | Token::OpenModule(_) => {
                 stack.push(Area::Program)
             }
             Token::EHorzGrp
@@ -461,8 +479,7 @@ fn area_at(before: &[&Atom]) -> Area {
             | Token::EMathGrp
             | Token::RParen
             | Token::EList
-            | Token::ERecord
-            | Token::EPath => {
+            | Token::ERecord => {
                 if stack.len() > 1 {
                     stack.pop();
                 }
@@ -558,6 +575,23 @@ fn header_keywords(source: &str, byte: usize, version: RustyfiVersion) -> Option
 /// A depth-0 `;` sets `saw_sep`, after which a `=` no longer decides: that `=`
 /// belongs to the PREVIOUS field, which the `;` already closed. Without it,
 /// `(| a = 1; b` would read the first field's `=` and answer "value".
+///
+/// **`<[ … ]>` counts here, though it deliberately does not in [`area_at`],**
+/// and the difference is which oracle each answers to. [`area_at`] replays the
+/// LEXER's mode stack and must push and pop exactly where the lexer does; a
+/// path literal changes no mode, so counting it there desynchronises the
+/// replay for the rest of the file. This scan replays nothing — it is a
+/// backward match over the PARSER's brackets, looking for the innermost one
+/// still open at the cursor, and `<[ … ]>` is a bracket pair there
+/// (`parser.mly:819`). Counting it is what skips a whole path literal in a
+/// field value, and what stops a cursor written directly inside one from
+/// walking out to an enclosing `(|` and being told it is in a label slot.
+///
+/// Unbalanced text degrades it the way it degrades any backward bracket
+/// matcher — an unmatched closer inflates `depth` and the scan walks off the
+/// front — but it degrades to `false`, the conservative answer that offers
+/// values rather than labels, and it cannot leak into a later cursor because
+/// nothing is carried across calls.
 fn record_label_position(before: &[&Atom]) -> bool {
     let mut depth = 0usize;
     let mut saw_sep = false;

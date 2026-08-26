@@ -423,7 +423,11 @@ fn a_tab_inside_inline_text_survives_the_client_that_asked_for_spaces() {
 
 #[test]
 fn every_lsp_option_can_be_turned_off() {
-    let src = "let x = 1   \n\n\n\n\nlet y = 2   \n\n\n";
+    // The comment line is load-bearing. Without it this fixture asserted the
+    // identity over a source with no `%` in it, and the comment arm of
+    // `rewrite_gap` trimmed unconditionally — so "every rule off" was false
+    // for the one case the test was named after, and it passed anyway.
+    let src = "let x = 1   \n% note   \n\n\n\n\nlet y = 2   \n\n\n";
     let out = format(
         src,
         RustyfiVersion::V0_0,

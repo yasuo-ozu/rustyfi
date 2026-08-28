@@ -55,10 +55,14 @@ pub use ops::status::{status, PackageStatus, StatusReport};
 pub use ops::uninstall::{uninstall, RootOptions};
 
 pub use lockfile::{LockEntry, Lockfile};
-pub use satyristes::{find_upward, Project};
+pub use satyristes::{find_upward, LibraryMeta, Project};
 pub use source::{LibraryEntry, RegistryConfig, RegistryKind, SourceKind, SourceSpec};
 
 pub use ops::prepare::PrepareReport;
+pub use ops::publish::{
+    publish, publish_with_prompt, OpamFields, OpamPrompt, PublishOptions, PublishReport,
+    RepoShape,
+};
 pub use ops::registry_install::{install_registry, Resolved};
 pub use ops::search::{search, SearchHit};
 pub use ops::update::{update, update_multi, Upgrade, UpdateReport};

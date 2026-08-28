@@ -4,6 +4,7 @@
 //! `satyrographos` (package manager), dispatched on `argv[0]`'s basename and
 //! on the first subcommand.
 
+use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
@@ -730,7 +731,10 @@ use rustyfi_satyrographos as sg;
 fn sg_exit_code(err: &sg::Error) -> i32 {
     use sg::Error::*;
     match err {
-        RootResolution | ManifestNotFound | NoRegistry => 3,
+        RootResolution | ManifestNotFound | NoRegistry | ProjectNotFound { .. } => 3,
+        // Several repositories configured and none chosen: nothing to publish
+        // INTO, the same "no target resolved" class as NoRegistry.
+        AmbiguousRegistry { .. } => 3,
         // Not-found: a missing receipt, package/version absent, or the
         // solver's Unsatisfiable/VersionConflict (its analogue of
         // VersionNotFound).
@@ -739,8 +743,16 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | PackageNotFound { .. }
         | VersionNotFound { .. }
         | Unsatisfiable { .. }
-        | VersionConflict { .. } => 4,
-        LibraryFilter { .. } | AmbiguousLibrary { .. } | AmbiguousDoc { .. } | DocFilter { .. } => 2,
+        | VersionConflict { .. }
+        // A version already published is the publish-side twin of
+        // AlreadyInstalled: a collision `--force` overrides.
+        | AlreadyPublished { .. } => 4,
+        LibraryFilter { .. }
+        | AmbiguousLibrary { .. }
+        | AmbiguousDoc { .. }
+        | DocFilter { .. }
+        // A missing/malformed/contradictory publish argument is a usage error.
+        | PublishInput { .. } => 2,
         NoDocTarget => 3,
         DocBuild { .. } | OpamBuild { .. } => 1,
         Io { .. }
@@ -766,6 +778,7 @@ fn sg_exit_code(err: &sg::Error) -> i32 {
         | InvalidVersion { .. }
         | HashFile { .. }
         | HashKeyConflict { .. }
+        | RepositoryShape { .. }
         | Offline { .. } => 5,
     }
 }
@@ -788,7 +801,7 @@ fn finish<E: std::fmt::Display>(result: Result<(), E>, code: impl FnOnce(&E) -> 
 fn is_package_command(name: &str) -> bool {
     matches!(
         name,
-        "install" | "uninstall" | "build" | "list" | "status" | "search" | "update"
+        "install" | "uninstall" | "build" | "list" | "status" | "search" | "update" | "publish"
     )
 }
 
@@ -802,6 +815,7 @@ fn run_package(name: &str, sm: &ArgMatches) -> i32 {
         "status" => return cmd_status(sm),
         "search" => cmd_search(sm),
         "update" => cmd_update(sm),
+        "publish" => cmd_publish(sm),
         other => {
             eprintln!("error: unknown command `{other}`");
             return 2;
@@ -1206,6 +1220,131 @@ fn cmd_update(m: &ArgMatches) -> Result<(), sg::Error> {
     }
     for (url, e) in &report.unreachable {
         eprintln!("warning: registry `{url}` could not be refreshed: {e}");
+    }
+    Ok(())
+}
+
+/// Asks on the terminal for the fields of an `<id>.opam` that has to be
+/// created.
+///
+/// Empty accepts the shown default; `-` clears a field that has one, which is
+/// the only way to say "leave this out" once a default has been offered.
+struct StdinPrompt;
+
+impl sg::OpamPrompt for StdinPrompt {
+    fn begin(&mut self, library: &str, file: &std::path::Path) -> Result<(), sg::Error> {
+        println!(
+            "\n{} has no opam file. Answer to fill it in (Enter accepts the \
+             default, `-` leaves a field out):\n  {}",
+            library,
+            file.display()
+        );
+        Ok(())
+    }
+
+    fn ask(
+        &mut self,
+        _field: &str,
+        question: &str,
+        default: Option<&str>,
+    ) -> Result<Option<String>, sg::Error> {
+        use std::io::Write as _;
+        match default {
+            Some(d) => print!("  {question} [{d}]: "),
+            None => print!("  {question}: "),
+        }
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return Ok(default.map(str::to_string));
+        }
+        let line = line.trim();
+        if line == "-" {
+            return Ok(None);
+        }
+        if line.is_empty() {
+            return Ok(default.map(str::to_string));
+        }
+        Ok(Some(line.to_string()))
+    }
+}
+
+/// `publish`: write this project's `Satyristes` library into a package
+/// repository as an installable definition — the `opam publish` step, minus
+/// the parts that need credentials.
+///
+/// The push (and any pull request) is PRINTED rather than run: a release is
+/// the one operation whose mistakes other people inherit, so the author gets
+/// to look at the written file before it leaves the machine.
+fn cmd_publish(m: &ArgMatches) -> Result<(), sg::Error> {
+    let opts = sg::PublishOptions {
+        project: m.get_one::<PathBuf>("project").cloned(),
+        library: m.get_one::<String>("library").cloned(),
+        url: m
+            .get_one::<String>("url")
+            .expect("--url is required by clap")
+            .clone(),
+        sha256: m.get_one::<String>("sha256").cloned(),
+        archive: m.get_one::<PathBuf>("archive").cloned(),
+        shape: m
+            .get_one::<String>("shape")
+            .and_then(|s| sg::RepoShape::parse(s)),
+        package_name: m.get_one::<String>("package_name").cloned(),
+        description: m.get_one::<String>("description").cloned(),
+        maintainer: m.get_one::<String>("maintainer").cloned(),
+        force: m.get_flag("force"),
+        commit: m.get_flag("commit"),
+        branch: m.get_one::<String>("branch").cloned(),
+        dry_run: m.get_flag("dry_run"),
+    };
+    // The same fallback chain every registry-aware command uses; `publish`
+    // differs only in refusing a LIST rather than taking its head
+    // (`ops::publish::select_repository`).
+    // Prompt only when there is a human to answer. A pipeline, a CI job or a
+    // test gets the derived file written unasked — a library that read stdin on
+    // its own would hang all three.
+    let interactive =
+        !m.get_flag("no_wizard") && !opts.dry_run && std::io::stdin().is_terminal();
+    let mut prompt = StdinPrompt;
+    let report = sg::publish_with_prompt(
+        &opts,
+        &registry_options(m)?,
+        &registry_fallbacks(m)?,
+        interactive.then_some(&mut prompt as &mut dyn sg::OpamPrompt),
+    )?;
+
+    let verb = if report.dry_run { "would publish" } else { "published" };
+    println!(
+        "{verb} {} {} as {} ({} repository)",
+        report.library,
+        report.version,
+        report.package,
+        report.shape.as_str()
+    );
+    println!("  {}", report.repository.join(&report.relative).display());
+    println!("  url    {}", report.url);
+    println!("  sha256 {}", report.sha256);
+    println!("  install as `{}`", report.installable);
+    if let Some(branch) = &report.committed {
+        println!("  committed on {branch}");
+    }
+    // These land in the AUTHOR's own tree rather than the repository checkout,
+    // so they are not covered by the `next:` steps below (which are all `git`
+    // commands run inside the repository).
+    if !report.opam_files.is_empty() {
+        let verb = if report.dry_run { "would create" } else { "created" };
+        println!("{verb} beside the Satyristes:");
+        for path in &report.opam_files {
+            println!("  {}", path.display());
+        }
+    }
+    if report.dry_run {
+        println!("--- {} (not written) ---", report.relative);
+        print!("{}", report.contents);
+    }
+    println!("next:");
+    for step in &report.next_steps {
+        println!("  {step}");
     }
     Ok(())
 }

@@ -792,6 +792,120 @@ fn package_subcommands(cmd: Command) -> Command {
     .subcommand(root_flags(registry_flag(Command::new("update").about(
         "Re-fetch the registry index and report available upgrades vs Satyristes.lock.",
     ))))
+    .subcommand(publish_command())
+}
+
+/// `publish` — write this project's `Satyristes` library into a package
+/// repository as an installable definition, the way `opam publish` does for an
+/// OCaml package. `--url` names an already-released tarball: nothing here
+/// builds or uploads one, and nothing pushes.
+fn publish_command() -> Command {
+    registry_flag(
+        Command::new("publish")
+            .about("Write this project's library into a package repository as a release.")
+            .arg(
+                Arg::new("url")
+                    .long("url")
+                    .value_name("URL")
+                    .required(true)
+                    .help(
+                        "The released source tarball's URL, recorded verbatim and never \
+                         fetched. Hosting it is yours, as with `opam publish`.",
+                    ),
+            )
+            .arg(Arg::new("sha256").long("sha256").value_name("HEX").help(
+                "The tarball's SHA-256. Required unless --archive supplies it; \
+                 given with --archive, the two must agree.",
+            ))
+            .arg(
+                Arg::new("archive")
+                    .long("archive")
+                    .value_name("PATH")
+                    .help("A local copy of the tarball at --url, hashed to supply --sha256.")
+                    .value_parser(value_parser!(PathBuf)),
+            )
+            .arg(
+                Arg::new("project")
+                    .long("project")
+                    .value_name("DIR")
+                    .help("Find the Satyristes upward from DIR (default: the current directory).")
+                    .value_parser(value_parser!(PathBuf)),
+            )
+            .arg(
+                Arg::new("library")
+                    .short('l')
+                    .long("library")
+                    .value_name("NAME")
+                    .help("Which `(library ...)` block to publish, if the manifest has several."),
+            )
+            .arg(
+                Arg::new("shape")
+                    .long("shape")
+                    .value_name("SHAPE")
+                    .value_parser(["opam", "toml"])
+                    .help(
+                        "Repository layout: `opam` (packages/<id>/<id>.<v>/opam, \
+                         Satyrographos' own) or `toml` (packages/<id>.toml, this port's \
+                         index). Detected from what the repository already holds when \
+                         omitted; required when that is undecidable.",
+                    ),
+            )
+            .arg(
+                Arg::new("package_name")
+                    .long("package-name")
+                    .value_name("ID")
+                    .help(
+                        "Publish under this package id instead of the derived one \
+                         (`satysfi-<name>` for an opam repository, `<name>` for the \
+                         TOML index).",
+                    ),
+            )
+            .arg(
+                Arg::new("description")
+                    .long("description")
+                    .value_name("TEXT")
+                    .help("One-line description (opam `synopsis:`, or the TOML `description`)."),
+            )
+            .arg(
+                Arg::new("maintainer")
+                    .long("maintainer")
+                    .value_name("TEXT")
+                    .help("opam `maintainer:` (the TOML index has no such field)."),
+            )
+            .arg(
+                Arg::new("commit")
+                    .long("commit")
+                    .action(ArgAction::SetTrue)
+                    .help("git add + git commit the written file in the repository checkout."),
+            )
+            .arg(
+                Arg::new("branch")
+                    .long("branch")
+                    .value_name("NAME")
+                    .help("Commit on this branch, creating it if needed (with --commit)."),
+            )
+            .arg(
+                Arg::new("force")
+                    .long("force")
+                    .action(ArgAction::SetTrue)
+                    .help("Replace an already-published <name>.<version>."),
+            )
+            .arg(
+                Arg::new("dry_run")
+                    .long("dry-run")
+                    .action(ArgAction::SetTrue)
+                    .help("Compose and check everything, print the definition, write nothing."),
+            )
+            .arg(
+                Arg::new("no_wizard")
+                    .long("no-wizard")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "Do not prompt for the fields of a missing <id>.opam; write the \
+                         derived file instead. Implied when stdin is not a terminal.",
+                    ),
+            ),
+    )
 }
 
 fn satyrographos_command() -> Command {

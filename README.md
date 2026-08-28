@@ -168,6 +168,47 @@ url = "https://github.com/na4zagin3/satyrographos-repo"
 url = "https://example.org/another-index"
 ```
 
+### Publishing your own
+
+`rustyfi publish` is the `opam publish` step: it reads the `Satyristes` you are
+standing in and writes a package definition into a checkout of the repository,
+pointing at a tarball **you** have already released.
+
+```console
+$ rustyfi publish --url https://example.org/great-package-1.0.0.tar.gz \
+                  --archive ./dist/great-package-1.0.0.tar.gz \
+                  --registry ~/src/satyrographos-repo --commit
+```
+
+`--archive` is a local copy of that same tarball, hashed to supply the
+`sha256`; pass `--sha256 HEX` instead if you already have the digest, or both
+to have them cross-checked. The default output is Satyrographos' own OPAM shape
+(`packages/satysfi-<name>/satysfi-<name>.<version>/opam`), so what it writes is
+installable by real Satyrographos too; a repository using this port's native
+`packages/<name>.toml` index gets that instead. Which one is detected from what
+the repository already holds, and `--shape opam|toml` decides when that is
+undecidable — it is never guessed. `--dry-run` prints the definition and writes
+nothing.
+
+If a `(library …)` block has no `.opam` file beside its `Satyristes`, one is
+created — the file an opam pin of your source tree reads, and the one
+`(opam "…")` names. On a terminal you are asked for the fields the manifest
+cannot supply (`license:`, `homepage:`, `authors:` …), with defaults taken from
+your git remote and `git config`; `--no-wizard`, a pipe or a CI job writes the
+derived file unasked. An existing `.opam` is never touched. It deliberately
+carries no `url { }` block: a source tree is not a released tarball, and the
+url/checksum pair belongs only to the repository entry that pins one.
+
+Nothing is uploaded and nothing is pushed. With `--commit` the definition is
+committed on a branch (`--branch NAME`) in your checkout, and the `git push`
+you would run next is printed for you to run yourself. Re-publishing a version
+that already exists needs `--force`, since that version is what a consumer pins.
+
+With several repositories configured and no `--registry`, `$RUSTYFI_REGISTRY`
+or project `(registry …)`, `publish` lists them and stops rather than picking
+one: `search` and `install` consult them all, but a release goes into exactly
+one.
+
 ## Useful options
 
 | flag | what it does |

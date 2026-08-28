@@ -366,6 +366,54 @@ impl Project {
     }
 }
 
+/// One `(library ...)` block's published identity: what names a release
+/// rather than what makes one up.
+///
+/// Deliberately not this module's `read`/`PackagePlan`. Planning walks the declared
+/// source files, and a package's files need not exist yet — a font package's
+/// only arrive when `prepare` unpacks its `extra-source`. Publishing describes
+/// an already-released tarball, so it must not require a complete working tree
+/// to state the package's name, version and generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryMeta {
+    /// `(name "…")` — the library name a `@require:` or a dependency entry uses.
+    pub name: String,
+    /// `(version "…")` — what a consumer pins.
+    pub version: String,
+    /// `(lang 0.0|0.1)` — which SATySFi generation the package is written for.
+    pub lang: Lang,
+    /// `(opam "…")` — the `.opam` file this block claims, if it names one.
+    pub opam: Option<String>,
+    /// `(dependencies ((name ()) …))` as name → constraint text. Upstream's
+    /// payload carries no version, so every entry is the wildcard `"*"`.
+    pub dependencies: BTreeMap<String, String>,
+}
+
+/// Every `(library ...)` block in the `Satyristes` at `path`, in declaration
+/// order. `path` is the manifest FILE (what [`find_upward`] returns), matching
+/// [`read_project`] rather than this module's source-root-taking `read`.
+pub fn read_libraries(path: &Path) -> Result<Vec<LibraryMeta>, Error> {
+    let text = util::read_to_string(path)?;
+    let forms = parse(&text).map_err(|pe| Error::Satyristes {
+        path: path.to_path_buf(),
+        message: pe.to_string(),
+    })?;
+    let (libs, _docs) = split_forms(&forms).map_err(|message| Error::Satyristes {
+        path: path.to_path_buf(),
+        message,
+    })?;
+    Ok(libs
+        .into_iter()
+        .map(|lib| LibraryMeta {
+            name: lib.name,
+            version: lib.version,
+            lang: lib.lang,
+            opam: lib.opam,
+            dependencies: lib.dependencies,
+        })
+        .collect())
+}
+
 /// Read `path` as a project manifest.
 pub fn read_project(path: &Path) -> Result<Project, Error> {
     let text = util::read_to_string(path)?;

@@ -205,6 +205,49 @@ pub enum Error {
     )]
     NoRegistry,
 
+    /// Several repositories are configured and nothing chose between them
+    /// (exit `3`). Only `publish` raises this: `search`/`install` consult every
+    /// repository in order, but a release goes into exactly ONE, and picking
+    /// the first silently would put it somewhere the user never named.
+    #[error(
+        "several package repositories are configured and none was chosen; \
+         pass `--registry URL` (or set $RUSTYFI_REGISTRY) to say which one to \
+         publish into: {urls}"
+    )]
+    AmbiguousRegistry { urls: String },
+
+    /// The target repository's layout could not be determined, or it holds
+    /// both shapes at once (exit `5`).
+    #[error("cannot tell which package-repository shape `{}` uses: {message}", .path.display())]
+    RepositoryShape { path: PathBuf, message: String },
+
+    /// The repository already publishes this `<name>.<version>` and `--force`
+    /// was not given (exit `4`). That version is what a consumer pins, so
+    /// changing what it resolves to is never silent.
+    #[error(
+        "`{name}` version `{version}` is already published at {} — \
+         pass `--force` to replace it (a consumer may already have pinned it)",
+        .path.display()
+    )]
+    AlreadyPublished {
+        name: String,
+        version: String,
+        path: PathBuf,
+    },
+
+    /// A `publish` argument was missing, malformed, or contradicted another
+    /// (exit `2`).
+    #[error("cannot publish: {message}")]
+    PublishInput { message: String },
+
+    /// `publish` was pointed at a directory with no `Satyristes` at or above
+    /// it (exit `3`).
+    #[error(
+        "no `Satyristes` found at or above `{}` (every parent directory was searched)",
+        .from.display()
+    )]
+    ProjectNotFound { from: PathBuf },
+
     /// Acquiring/cloning the registry index via `git` failed (exit `5`).
     #[error("registry git operation failed: {message}")]
     GitFailed { message: String },

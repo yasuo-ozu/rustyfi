@@ -2007,7 +2007,30 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
 /// remainder, matching `normalize`'s `(bihead :: Alist.to_list_rev biacc)` /
 /// `bitail` split. Borrows when nothing is deleted, so Latin-only text pays
 /// one scan and no allocation.
-fn normalize_source_whitespace(text: &str) -> std::borrow::Cow<'_, str> {
+///
+/// The second component is every NORMALIZED byte offset at which at least one
+/// character was deleted — the JOINS this pass creates, which `text_to_boxes`
+/// then treats specially. Deleting a character joins its two neighbours, and
+/// that join has two separable consequences:
+///
+///   * the two survivors must be SPACED as if the author had written them
+///     adjacent. That is the bug this pass exists to fix, and it is taken:
+///     `cjk_pair_space` is a property of the two characters, not of what stood
+///     between them.
+///   * UAX#14, run over the JOINED text, would also grant a BREAK between them
+///     that the author's own text never offered — `語\n日` classifies as `語日`,
+///     where the raw text's boundary was LB6, never break before a line feed.
+///     That is NOT taken.
+///
+/// Declining the second is a scope decision, and a measured one: granting the
+/// new break opportunities lets the line-breaker pack one extra line into
+/// `easytable` (`lines_dev` 2 -> 3, a `layout-tests/fidelity.py` gate) and
+/// inflate `floatfig`'s wrapped column, while the spacing alone leaves every
+/// gated metric at or better than baseline. It is also the conservative
+/// reading: upstream normalizes the whitespace away and then chunks the
+/// result per chunk, not by a UAX#14 sweep that can now see across the gap,
+/// so nothing here claims upstream grants that break either.
+fn normalize_source_whitespace(text: &str) -> (std::borrow::Cow<'_, str>, Vec<usize>) {
     let is_cjk = |ch: char| matches!(char_script(ch), Script::HanIdeographic | Script::Kana);
     // `Some` only once a character has actually been deleted; until then the
     // output is a prefix of `text` and needs no buffer.
@@ -2016,6 +2039,9 @@ fn normalize_source_whitespace(text: &str) -> std::borrow::Cow<'_, str> {
     // `prev` a space, so `prev_cjk` is false for the next boundary, which is
     // what the old in-loop version got from resetting `prev_script` to `None`.
     let mut prev: Option<char> = None;
+    // Normalized offsets where a deletion joined two characters the source did
+    // not write adjacently. See the doc comment.
+    let mut joined: Vec<usize> = Vec::new();
     for (i, c) in text.char_indices() {
         let mut keep = true;
         if c == ' ' || c == '\n' {
@@ -2049,14 +2075,25 @@ fn normalize_source_whitespace(text: &str) -> std::borrow::Cow<'_, str> {
                 buf.push(c);
             }
             prev = Some(c);
-        } else if out.is_none() {
-            out = Some(text[..i].to_string());
+        } else {
+            // The length of the output SO FAR is the normalized offset of the
+            // join this deletion creates: the character before it ends there,
+            // the character after it begins there. Before the first deletion
+            // the output is still the borrowed prefix `text[..i]`, so that
+            // length is `i`. A whole run collapsing to nothing pushes the same
+            // offset more than once; the consumer only ever writes a flag, so
+            // that is harmless and cheaper than deduplicating.
+            joined.push(out.as_ref().map_or(i, String::len));
+            if out.is_none() {
+                out = Some(text[..i].to_string());
+            }
         }
     }
-    match out {
+    let normalized = match out {
         Some(buf) => std::borrow::Cow::Owned(buf),
         None => std::borrow::Cow::Borrowed(text),
-    }
+    };
+    (normalized, joined)
 }
 
 fn text_to_boxes(
@@ -2078,9 +2115,24 @@ fn text_to_boxes(
     // normalized text (`lineBreakDataMap.ml:482` — `append_property` then
     // `cut_into_segment_record`). See `normalize_source_whitespace` for what
     // reading the raw text here used to cost.
-    let normalized = normalize_source_whitespace(text);
+    let (normalized, joined) = normalize_source_whitespace(text);
     let text: &str = &normalized;
-    let boundary = uax14_boundaries(text);
+    let mut boundary = uax14_boundaries(text);
+    // Parallel to `boundary`: whether the normalization JOINED two characters
+    // at this offset. A join takes the SPACING of a written-adjacent boundary
+    // and declines its BREAK, so `boundary` is cleared there — leaving exactly
+    // what the pre-normalization code read, since `boundary` was then indexed
+    // into the RAW text and `語`/`\n` answered LB6 — while `joined_at` keeps
+    // the fact around for the box loop to space against. See
+    // `normalize_source_whitespace` for why, and for what granting the break
+    // instead costs.
+    let mut joined_at = vec![false; boundary.len()];
+    for off in joined {
+        if off < boundary.len() {
+            boundary[off] = None;
+            joined_at[off] = true;
+        }
+    }
     let mut word = String::new();
     let flush_word =
         |word: &mut String, script: Script, out: &mut Vec<HorzBox>| -> Result<(), EvalError> {
@@ -2353,6 +2405,9 @@ fn text_to_boxes(
             // be breakable. A line with no give has to FILL its measure with
             // characters, which is part of why the port packs more per line than
             // SATySFi.
+            // `boundary[after]` is already `None` at a join (see above);
+            // `joined_at[after]` is which of the two `None`s this is.
+            let joined_here = joined_at[after];
             match boundary[after] {
                 Some(kind) => {
                     flush_word(&mut word, script, out)?;
@@ -2410,20 +2465,38 @@ fn text_to_boxes(
                 // reordering does not touch, so the natural-width bug the
                 // rigid half would fix — `」。`/`」、` a half-em too wide,
                 // `末・雲` a quarter — stays open on its own merits.
+                //
+                // A JOINED boundary takes this arm too — it is not a break
+                // candidate — but keeps the RIGID half as well. The asymmetry
+                // argued above is about boundaries where UPSTREAM itself emits
+                // `LBPure`, and a join is not one of those: upstream deletes
+                // the whitespace and then spaces the two survivors exactly as
+                // if the author had written them adjacent. Dropping the kern
+                // here would set `・\nあ` a quarter em WIDER than `・あ` at
+                // every source line end, which is the same class of gap this
+                // pass exists to close. Only the BREAK is withheld. Pinned by
+                // `cjk_source_newline_normalization::
+                // a_joined_boundary_keeps_the_rigid_half_of_the_pair_space`.
                 None => {
-                    if let Some((_, sh, st)) = pair {
-                        if sh != Length::ZERO || st != Length::ZERO {
+                    if let Some((n, sh, st)) = pair {
+                        let kern = if joined_here { n } else { Length::ZERO };
+                        if kern != Length::ZERO || sh != Length::ZERO || st != Length::ZERO {
                             flush_word(&mut word, script, out)?;
                             word_script = None;
+                            let mut no_break = Vec::new();
+                            if kern != Length::ZERO {
+                                no_break.push(PureHorzBox::FixedEmpty { width: kern });
+                            }
+                            no_break.push(PureHorzBox::OuterEmpty {
+                                natural: Length::ZERO,
+                                shrinkable: sh,
+                                stretchable: st,
+                            });
                             out.push(HorzBox::Pure(PureHorzBox::Discretionary {
                                 penalty: NO_BREAK_PENALTY,
                                 pre_break: Vec::new(),
                                 post_break: Vec::new(),
-                                no_break: vec![PureHorzBox::OuterEmpty {
-                                    natural: Length::ZERO,
-                                    shrinkable: sh,
-                                    stretchable: st,
-                                }],
+                                no_break,
                             }));
                         }
                     }

@@ -489,7 +489,7 @@ fn cases() -> Vec<Case> {
     v.push(case(
         "L7",
         "literal(program)",
-        "trailing space kept by the closing `#`: ``​`alpha `#`` vs ``​`alpha`#``",
+        "trailing space kept by the closing `#`: `` `alpha `# `` vs `` `alpha`# ``",
         lit("`alpha `#"),
         lit("`alpha`#"),
     ));

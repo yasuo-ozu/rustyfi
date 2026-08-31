@@ -513,6 +513,23 @@ fn header_keywords(source: &str, byte: usize, version: RustyfiVersion) -> Option
 /// A depth-0 `;` sets `saw_sep`, after which a `=` no longer decides: that `=`
 /// belongs to the PREVIOUS field, which the `;` already closed. Without it,
 /// `(| a = 1; b` would read the first field's `=` and answer "value".
+///
+/// **`<[ … ]>` counts here, though it deliberately does not in [`crate::area::area_at`],**
+/// and the difference is which oracle each answers to. [`crate::area::area_at`] replays the
+/// LEXER's mode stack and must push and pop exactly where the lexer does; a
+/// path literal changes no mode, so counting it there desynchronises the
+/// replay for the rest of the file. This scan replays nothing — it is a
+/// backward match over the PARSER's brackets, looking for the innermost one
+/// still open at the cursor, and `<[ … ]>` is a bracket pair there
+/// (`parser.mly:819`). Counting it is what skips a whole path literal in a
+/// field value, and what stops a cursor written directly inside one from
+/// walking out to an enclosing `(|` and being told it is in a label slot.
+///
+/// Unbalanced text degrades it the way it degrades any backward bracket
+/// matcher — an unmatched closer inflates `depth` and the scan walks off the
+/// front — but it degrades to `false`, the conservative answer that offers
+/// values rather than labels, and it cannot leak into a later cursor because
+/// nothing is carried across calls.
 fn record_label_position(before: &[&Atom]) -> bool {
     let mut depth = 0usize;
     let mut saw_sep = false;

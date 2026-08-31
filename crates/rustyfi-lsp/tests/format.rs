@@ -1142,3 +1142,79 @@ fn formatting_is_idempotent_under_a_real_editors_options() {
         }
     }
 }
+
+/// `format_auto` decides by LEXING, so a buffer it can format is never refused
+/// because a PARSER preferred the other generation.
+///
+/// It used to defer to `detect_version`, which picks by furthest parse
+/// progress — and a 0.0.6 LEX failure can out-reach a 0.1 PARSE failure.
+/// `A.B.C` is 0.1's `LongUpper` and a hard lex error under 0.0.6, so such a
+/// file detected as 0.0.6 and the server answered "unformattable" for
+/// something it could format perfectly.
+#[test]
+fn format_auto_formats_anything_either_generation_can_lex() {
+    for src in [
+        "let x = A.B.C\n",
+        "module M = struct\n  let f = A.B.C\nend\n",
+        "signature S = sig\n  val f : A.B.C\nend\n",
+    ] {
+        let auto = format_auto(src, &FormatOptions::default());
+        assert!(auto.is_some(), "refused a buffer that lexes as 0.1: {src:?}");
+        assert_eq!(
+            auto,
+            format(src, RustyfiVersion::V0_1, &FormatOptions::default()),
+            "and it must agree with the generation that lexes, for {src:?}",
+        );
+    }
+    // The ordinary 0.0.6 buffer still goes to 0.0.6 — the fallback only ever
+    // adds an answer, it never changes one that already existed.
+    let v006 = "@require: stdjabook\nlet x = 1   \n";
+    assert_eq!(
+        format_auto(v006, &FormatOptions::default()),
+        format(v006, RustyfiVersion::V0_0, &FormatOptions::default()),
+    );
+}
+
+/// No token span may END between the two bytes of a CRLF.
+///
+/// This is the invariant `rewrite_gap`'s final-newline logic rests on:
+/// `at_line_start` is read as "the byte before this gap is a COMPLETE
+/// terminator", and that is only true if no span stops half way through one.
+/// It held nowhere before `lex_header` was fixed — over a CRLF corpus there
+/// were 1224 such endpoints, every one a header — and acting on the flag while
+/// they existed turned `\r\n` into a bare `\r`.
+///
+/// Nothing else enforces it. One new lexer rule that consumes a single break
+/// character re-arms that corruption silently, in a file class the rest of the
+/// suite barely covers, so the guard is here rather than in a comment.
+#[test]
+fn no_token_span_ends_inside_a_crlf() {
+    for path in corpus_v006().into_iter().chain(corpus_v01()) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // Only files that are LF-terminated can be meaningfully CRLF-ified;
+        // a file already carrying CR is left as it is.
+        if text.contains('\r') {
+            continue;
+        }
+        let crlf = text.replace('\n', "\r\n");
+        for version in [RustyfiVersion::V0_0, RustyfiVersion::V0_1] {
+            // `lex_partial` stops at the first error and hands back what it
+            // read; the tokens before that point are still real spans.
+            let (atoms, _err) = rustyfi_syntax::lex_partial(&crlf, version);
+            for atom in &atoms {
+                let end = atom.span.end.byte;
+                assert!(
+                    !(crlf.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\r')
+                        && crlf.as_bytes().get(end) == Some(&b'\n')),
+                    "{}: a {:?} span ends between \\r and \\n at byte {end} — \
+                     `at_line_start` is no longer trustworthy and the final-newline \
+                     logic in `rewrite_gap` will halve a CRLF",
+                    path.display(),
+                    atom.slot,
+                );
+            }
+        }
+    }
+}

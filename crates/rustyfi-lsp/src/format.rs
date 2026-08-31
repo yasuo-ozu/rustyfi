@@ -244,11 +244,45 @@ pub fn format(source: &str, version: RustyfiVersion, opts: &FormatOptions) -> Op
 
 /// [`format`], choosing the generation from the buffer itself.
 ///
-/// The same ladder [`crate::analyze_auto`] applies, through the same function
-/// ([`crate::detect_version`]), so the formatter and the diagnostics cannot
-/// disagree about which grammar a file is written in.
+/// **By LEXING, not by parsing.** This used to defer to
+/// [`crate::detect_version`], so that the formatter and the diagnostics could
+/// not disagree about which grammar a file is written in — a good instinct
+/// applied to the wrong question. Diagnostics need a TREE; formatting needs a
+/// TOKEN STREAM and nothing else, and asking a parser cost three things:
+///
+/// - **files that lex were refused.** `detect_version` picks by furthest
+///   progress when neither generation parses, and a 0.0.6 LEX failure can
+///   out-reach a 0.1 PARSE failure. `let x = A.B.C` (0.1's `LongUpper`, a hard
+///   lex error under 0.0.6) then detected as 0.0.6, and the server answered
+///   "this file is unformattable" for a file it could format perfectly.
+/// - **two full parses on every save.** Measured on a real mid-typing buffer:
+///   101 ms against 5.7 ms for `format` itself.
+/// - **a stack overflow imported from the parser.** `format` walks a `Vec`
+///   and survives inputs 100x deeper than the recursive-descent parser, which
+///   aborts the process; going through the parser handed that failure to a
+///   function that did not have it.
+///
+/// So: try the generation the HEADERS name, then the other, and take whichever
+/// lexes. `format` already answers `None` for a buffer that does not lex, so
+/// no separate lexing pass is needed — the fallback is the test. A file that
+/// lexes under both is decided by [`rustyfi_syntax::sniff_version`], which is
+/// a walk over the header lines and is what `detect_version` starts from
+/// anyway, so the common case picks the same generation it always did.
+///
+/// The formatter and the diagnostics can now disagree, in the narrow case
+/// where a buffer lexes as one generation and parses further as the other.
+/// That is the right way round: a formatter that works on a file the
+/// diagnostics are confused about is strictly better than one that refuses it.
 pub fn format_auto(source: &str, opts: &FormatOptions) -> Option<String> {
-    format(source, crate::detect_version(source), opts)
+    let preferred = rustyfi_syntax::sniff_version(source).unwrap_or(RustyfiVersion::V0_0);
+    // `RustyfiVersion` is non-exhaustive, so this is a two-way swap with an
+    // explicit default rather than a match that a third generation would
+    // silently break.
+    let fallback = match preferred == RustyfiVersion::V0_1 {
+        true => RustyfiVersion::V0_0,
+        false => RustyfiVersion::V0_1,
+    };
+    format(source, preferred, opts).or_else(|| format(source, fallback, opts))
 }
 
 /// The byte ranges between tokens that are in program text.

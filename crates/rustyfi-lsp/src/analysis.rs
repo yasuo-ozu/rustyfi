@@ -5,7 +5,7 @@
 use rustyfi_syntax::{RustyfiVersion, Span};
 use syan::parse::Parse;
 
-use crate::line_index::{floor_boundary, LineIndex};
+use crate::line_index::{floor_boundary, trim_trailing_ws, LineIndex};
 
 /// How bad a [`Diag`] is. The numbering matches LSP's `DiagnosticSeverity`
 /// (1 = `Error`) so the server can cast straight across, but the type itself
@@ -370,7 +370,17 @@ pub(crate) fn span_to_range(
     // never be handed a different buffer each.
     let source = index.source();
     let start_byte = floor_boundary(source, span.start.byte);
-    let end_byte = floor_boundary(source, span.end.byte.max(start_byte));
+    // Trailing layout is trimmed off, for the reason `trim_trailing_ws` gives:
+    // a header token owns its own line break, so an untrimmed diagnostic spilled
+    // onto the next line and reported a width describing the terminator rather
+    // than the header. A span that is ENTIRELY whitespace collapses to
+    // degenerate here and is widened below, which is the right answer for it
+    // too — a visible caret beats a highlight over a line break.
+    let end_byte = trim_trailing_ws(
+        source,
+        start_byte,
+        floor_boundary(source, span.end.byte.max(start_byte)),
+    );
 
     if start_byte < end_byte {
         return (index.position(start_byte), index.position(end_byte));

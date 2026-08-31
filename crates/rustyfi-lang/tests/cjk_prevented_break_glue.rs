@@ -22,8 +22,9 @@
 //! 2. its `no_break` slot is pure ELASTICITY: natural width zero, so the
 //!    paragraph's natural metrics are untouched (the deliberate deviation
 //!    documented at that emission site — upstream's rigid half is a
-//!    per-CHARACTER kern this port still models per-PAIR, and cannot come along
-//!    until the source-whitespace rewrite moves ahead of `uax14_boundaries`);
+//!    per-CHARACTER kern this port still models per-PAIR; the rewrite-ordering
+//!    half of that blocker has since been fixed, see
+//!    `normalize_source_whitespace`, but the asymmetry has not);
 //! 3. an allowed boundary still gets an ordinary penalty-0 `Discretionary` that
 //!    IS a break point;
 //! 4. the breaker consequently never breaks before `、`, however much a narrow

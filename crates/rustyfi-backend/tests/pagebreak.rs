@@ -142,6 +142,134 @@ fn footnote_in_footnote_is_ignored() {
     assert!(vboxes.is_empty());
 }
 
+/// **A footnote under a `draw-text` is NOT collected, and that matches
+/// upstream.**
+///
+/// `GraphicsElem::Text` (`draw-text`) carries real inline boxes, so a
+/// `\footnote` can genuinely sit inside one — figbox's `FigBox.frame` /
+/// `rotate` / `scale` / `shift` and `\fig-inline` all wrap their content in
+/// exactly this shape, which is why the box-tree visitor survey flagged
+/// `Graphics.elems -> Text.contents` as a missing edge in
+/// `collect_footnotes_in_box`.
+///
+/// It is missing on purpose. Upstream's `embed_page_info` does not recurse
+/// into it either: the `ImHorzInlineGraphics` arm (pageInfo.ml:44-45) returns
+/// the box untouched — no `iter`, no `appendF` — while `ImHorzRising`
+/// (:22-25), `ImHorzFrame` (:27-30) and `ImHorzEmbeddedVert` (:36-39) all do
+/// recurse. The marker renders and the body does not, in both engines.
+///
+/// Measured end to end, not inferred from the source: a document setting the
+/// same `\footnote` six ways (plain, `\fig-inline`+`textbox`,
+/// `\fig-center`+`textbox`, `hconcat`, `frame`, `rotate`) against the
+/// vendored `layout-tests/corpus/figbox` renders CHARACTER-IDENTICAL under
+/// this port and under real SATySFi 0.0.11 — all six markers present and
+/// identically numbered, bodies 1/3/4 rendered and 2/5/6 absent.
+///
+/// So this test pins fidelity, not a fix. It goes red if
+/// `collect_footnotes_in_box` is ever converted to `rustyfi_backend::visit`'s
+/// generated (unconditional) traversal, or otherwise taught to descend into
+/// `Graphics` — which would make the port DIVERGE from the reference
+/// `layout-tests/fidelity.py` gates figbox against. Doing that may still be
+/// the right call one day; it must be a decision, not a side effect.
+#[test]
+fn footnote_under_a_draw_text_is_not_collected_matching_upstream() {
+    let buried = PureHorzBox::Graphics {
+        width: Length::pt(10.0),
+        height: Length::pt(10.0),
+        depth: Length::ZERO,
+        elems: vec![rustyfi_backend::GraphicsElem::Text {
+            pt: (Length::ZERO, Length::ZERO),
+            contents: vec![(Length::ZERO, fnote(vec![plain_line(20.0, 0.0, 20.0)]))],
+            width: Length::pt(10.0),
+            height: Length::pt(10.0),
+            depth: Length::ZERO,
+            transform: None,
+        }],
+        origin_independent: false,
+    };
+    let mut vboxes = vec![line(10.0, 2.0, 12.0, vec![(Length::ZERO, buried)])];
+    let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(100.0), &mut vboxes);
+    assert_eq!(
+        lines.len(),
+        1,
+        "a footnote under a `draw-text` must NOT be bottom-placed — upstream's \
+         `ImHorzInlineGraphics` arm does not collect it either, and the figbox \
+         corpus is measured against upstream"
+    );
+    assert!(vboxes.is_empty());
+}
+
+/// The controls for the test above: the four container shapes this walk DOES
+/// descend through still yield their footnote, so a green
+/// `footnote_under_a_draw_text_is_not_collected_matching_upstream` cannot be
+/// bought by breaking collection wholesale.
+///
+/// `Frame` is the load-bearing one — `FootnoteScheme.main` wraps every
+/// `add-footnote` in `Inline.no-break`, which lowers to exactly a
+/// `PureHorzBox::Frame` — and `Tabular` is the one place this port is already
+/// deliberately MORE thorough than upstream, whose `embed_page_info_to_tabular`
+/// call site (pageInfo.ml:32-33) binds `footnotelst` and then drops it on the
+/// floor — it returns through `ext`, which threads the OUTER `footnoteacc`.
+#[test]
+fn the_collected_container_shapes_still_yield_their_footnote() {
+    let fnote_box = || fnote(vec![plain_line(20.0, 0.0, 20.0)]);
+    let cases: Vec<(&str, PureHorzBox)> = vec![
+        (
+            "Frame",
+            PureHorzBox::Frame {
+                width: Length::ZERO,
+                height: Length::ZERO,
+                depth: Length::ZERO,
+                deco: rustyfi_backend::DecoId(0),
+                contents: vec![(Length::ZERO, fnote_box())],
+            },
+        ),
+        (
+            "Discretionary.no_break",
+            PureHorzBox::Discretionary {
+                penalty: 0,
+                pre_break: vec![],
+                post_break: vec![],
+                no_break: vec![fnote_box()],
+            },
+        ),
+        (
+            "EmbeddedBlock",
+            PureHorzBox::EmbeddedBlock {
+                width: Length::ZERO,
+                height: Length::ZERO,
+                depth: Length::ZERO,
+                block: vec![line(5.0, 0.0, 5.0, vec![(Length::ZERO, fnote_box())])],
+                anchor_last: false,
+                breakable: false,
+            },
+        ),
+        (
+            "Tabular",
+            PureHorzBox::Tabular(rustyfi_backend::TabularBox {
+                width: Length::ZERO,
+                height: Length::ZERO,
+                depth: Length::ZERO,
+                cells: vec![rustyfi_backend::TabularCellBox {
+                    x: Length::ZERO,
+                    baseline_y: Length::ZERO,
+                    contents: vec![(Length::ZERO, fnote_box())],
+                }],
+                rules: vec![],
+            }),
+        ),
+    ];
+    for (name, bx) in cases {
+        let mut vboxes = vec![line(10.0, 2.0, 12.0, vec![(Length::ZERO, bx)])];
+        let lines = chop_page((Length::ZERO, Length::ZERO), Length::pt(100.0), &mut vboxes);
+        assert_eq!(
+            lines.len(),
+            2,
+            "a footnote inside a `{name}` must still be bottom-placed"
+        );
+    }
+}
+
 /// `place_block_at` (headers/footers) never extracts footnotes — a
 /// `Footnote` box riding a header/footer line is inert, contributing no
 /// extra lines.

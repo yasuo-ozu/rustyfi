@@ -440,23 +440,62 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
             blank_run = 0;
             seen_content |= !text.is_empty();
         }
-        out.push_str(text);
+        // Trimming a whitespace-only line can DELETE A LINE, and only in a
+        // file that mixes line endings. If the previous line ended in a lone
+        // `\r` and this one ends in `\n`, the input held two line breaks with
+        // something between them; take that something away and the two become
+        // adjacent, and `\r\n` is ONE break. Three logical lines came back as
+        // two.
+        //
+        // There is no byte to insert that would keep them apart, so the only
+        // way to preserve the line is not to trim it. That is the right trade:
+        // this formatter's licence is to remove INSIGNIFICANT whitespace, and
+        // a line is not insignificant. Reachable only with a Classic-Mac `\r`
+        // terminator beside a Unix `\n` in one file, which is why it survived
+        // the corpus.
+        let would_fuse = text.is_empty()
+            && !line.lead.is_empty()
+            && out.ends_with('\r')
+            && line.term.starts_with('\n');
+        match would_fuse {
+            true => out.push_str(line.lead),
+            false => out.push_str(text),
+        }
         out.push_str(line.term);
     }
 
     if at_file_end {
+        // The file's last terminator is not always inside this gap.
+        // `lex_header` pulls a header's own line break INTO the token, so a
+        // buffer whose last token is a header (`@require: a\n` — every file
+        // mid-typing, before its body is written) has an EMPTY final gap over
+        // a file that already ends in a newline. Judging by `out` alone read
+        // that as "no terminator" and appended a second one, so format-on-save
+        // added a blank line and `format` was not idempotent.
+        //
+        // `at_line_start` is the missing fact: the gap begins at column 0, so
+        // the byte before it is a break — except at the start of the file,
+        // where there is no byte before it. This is only sound because
+        // `lex_header` now takes BOTH halves of a CRLF; while it took only the
+        // `\r`, "preceded by a terminator" was ambiguous (the gap's leading
+        // `\n` might be completing it) and acting on it turned `\r\n` into a
+        // bare `\r`.
+        let preceded_by_terminator = at_line_start && !at_file_start;
+        let ends_the_file =
+            |s: &str| ends_with_terminator(s) || (s.is_empty() && preceded_by_terminator);
         if opts.trim_final_newlines {
             // Leave exactly one terminator: strip while what remains still
-            // ends in one.
+            // ends in one — counting the one inside the previous token's span,
+            // or a header's trailing run stops one newline late.
             loop {
                 let keep = match strip_terminator(&out) {
-                    Some(shorter) if ends_with_terminator(shorter) => shorter.len(),
+                    Some(shorter) if ends_the_file(shorter) => shorter.len(),
                     _ => break,
                 };
                 out.truncate(keep);
             }
         }
-        if opts.insert_final_newline && !ends_with_terminator(&out) {
+        if opts.insert_final_newline && !ends_the_file(&out) {
             out.push_str(newline);
         }
     }

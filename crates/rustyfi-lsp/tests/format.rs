@@ -949,3 +949,84 @@ fn the_blank_line_cap_survives_a_client_that_declines_trailing_whitespace() {
         "whitespace on a blank line must not change how many survive",
     );
 }
+
+/// A file whose LAST token is a header already ends in a newline, and must not
+/// be given a second one.
+///
+/// `lex_header` pulls a header's own line break INTO the token, so such a
+/// buffer has an EMPTY final gap over a file that is already terminated.
+/// Judging by the gap alone read that as "no terminator": format-on-save added
+/// a blank line, and `format` was not idempotent. Every file mid-typing looks
+/// like this, before its body is written.
+///
+/// All three line endings, because the bug was not uniform across them — CRLF
+/// was accidentally correct while `lex_header` took only the `\r`.
+#[test]
+fn a_file_ending_in_a_header_is_already_terminated() {
+    for (src, want) in [
+        ("@require: a", "@require: a\n"),
+        ("@require: a\n", "@require: a\n"),
+        ("@require: a\r", "@require: a\r"),
+        ("@require: a\r\n", "@require: a\r\n"),
+        // `trim_final_newlines` leaves exactly ONE terminator, counting the one
+        // inside the token's span — it used to stop a newline late.
+        ("@require: a\n\n\n\n", "@require: a\n"),
+        ("@require: a\r\n\r\n\r\n", "@require: a\r\n"),
+    ] {
+        let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default())
+            .unwrap_or_else(|| panic!("declined to format {src:?}"));
+        assert_eq!(out, want, "for {src:?}");
+        let again = format(&out, RustyfiVersion::V0_0, &FormatOptions::default())
+            .unwrap_or_else(|| panic!("declined to format its own output for {src:?}"));
+        assert_eq!(again, out, "not idempotent for {src:?}");
+    }
+}
+
+/// A blank run after a CRLF header caps the same as after an LF one.
+///
+/// `lex_header` took only the `\r`, leaving the `\n` in the gap where
+/// `split_gap` read it as a terminator of its own — so line 0 of the gap
+/// counted blank and every run after a header capped one line short. The LF
+/// control is the half that says this is about the line ending and not about
+/// headers.
+#[test]
+fn a_crlf_header_does_not_eat_one_line_of_the_blank_run() {
+    let crlf = "@require: pkg\r\n\r\n\r\nlet x = 1\r\n";
+    let lf = "@require: pkg\n\n\nlet x = 1\n";
+    for src in [crlf, lf] {
+        let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default())
+            .unwrap_or_else(|| panic!("declined {src:?}"));
+        assert_eq!(out, src, "two blank lines are under the cap and must survive");
+    }
+    // The same split deleted the orphan `\n` outright at cap 0, leaving a bare
+    // `\r` — a mixed-ending file written by the formatter.
+    let zero = FormatOptions { max_blank_lines: 0, ..FormatOptions::default() };
+    let out = format("@require: a\r\nlet x = 1\r\n", RustyfiVersion::V0_0, &zero)
+        .expect("declined");
+    assert_eq!(out, "@require: a\r\nlet x = 1\r\n", "a CRLF must not be halved");
+}
+
+/// Trimming a whitespace-only line must not DELETE the line.
+///
+/// Only reachable in a file that mixes endings: a lone `\r` terminator, a
+/// whitespace-only line, then a `\n` terminator. Trim the whitespace and the
+/// two breaks become adjacent — and `\r\n` is one break, so three logical
+/// lines came back as two.
+///
+/// There is no byte to insert that keeps them apart, so the line is kept
+/// untrimmed instead. That is the trade this formatter's licence implies: it
+/// may remove insignificant whitespace, and a line is not insignificant.
+#[test]
+fn trimming_never_fuses_two_line_breaks_into_one() {
+    let src = "let x = 1\r \nlet y = 2\r";
+    let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default()).expect("declined");
+    assert_eq!(out.matches('\n').count() + out.matches('\r').count() - out.matches("\r\n").count(),
+               src.matches('\n').count() + src.matches('\r').count() - src.matches("\r\n").count(),
+               "the number of line breaks must not change: {out:?}");
+    // The uniform-ending controls have nothing to fuse and trim normally.
+    for (ctl, want) in [("let x = 1\n \nlet y = 2\n", "let x = 1\n\nlet y = 2\n"),
+                        ("let x = 1\r \rlet y = 2\r", "let x = 1\r\rlet y = 2\r")] {
+        let o = format(ctl, RustyfiVersion::V0_0, &FormatOptions::default()).expect("declined");
+        assert_eq!(o, want, "for {ctl:?}");
+    }
+}

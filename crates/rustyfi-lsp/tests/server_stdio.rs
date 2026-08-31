@@ -1394,3 +1394,63 @@ fn an_absurd_tab_size_is_clamped_rather_than_allocated() {
         .len();
     assert!(text <= 1024, "the edit carried {text} bytes");
 }
+
+/// An empty `contentChanges` list is a NO-OP, not a reason to forget the file.
+///
+/// `full_replacement` used to answer one `Option<&str>`, and `None` meant
+/// "what you hold is stale, drop it" — right for a ranged change under a
+/// Full-sync agreement, wrong for an empty list, where nothing changed and the
+/// server's copy is still exactly the client's. A client sends one after, for
+/// instance, an undo that restored the saved text. The document then answered
+/// `null` to formatting and to every cursor feature, and published no
+/// diagnostics, until the next full change arrived.
+///
+/// Asserted against the ranged case in the same session, because the two share
+/// the code path and the fix is precisely that they stop sharing an answer.
+#[test]
+fn an_empty_change_list_leaves_the_document_open() {
+    let noop = "file:///noop.saty";
+    let ranged = "file:///ranged.saty";
+    let untidy = "let x = 1   \n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(noop, untidy),
+        did_open(ranged, untidy),
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": noop, "version": 2 },
+                "contentChanges": [],
+            },
+        }),
+        // The control: a ranged change under Full sync really is unreadable,
+        // and the buffer must still be forgotten.
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": ranged, "version": 2 },
+                "contentChanges": [{
+                    "range": { "start": {"line": 0, "character": 0},
+                               "end": {"line": 0, "character": 1} },
+                    "text": "L",
+                }],
+            },
+        }),
+        formatting(2, noop),
+        formatting(3, ranged),
+    ]);
+    assert_eq!(
+        reply(&out, 2)["result"],
+        json!([{
+            "range": { "start": {"line": 0, "character": 9},
+                       "end": {"line": 0, "character": 12} },
+            "newText": "",
+        }]),
+        "an empty change list must leave the document formattable",
+    );
+    assert_eq!(
+        reply(&out, 3)["result"],
+        json!(null),
+        "a ranged change under Full sync must still forget the buffer",
+    );
+}

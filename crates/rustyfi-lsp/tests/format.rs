@@ -1095,3 +1095,50 @@ fn an_absurd_tab_size_is_clamped_in_the_library_too() {
         assert_eq!(out, sane, "tab_size {absurd} was not clamped to the ceiling");
     }
 }
+
+/// Formatting twice must give what formatting once gave — including under the
+/// options an ordinary VS Code save actually sends.
+///
+/// `insert_final_newline` appended its terminator AFTER the blank-run cap had
+/// run. The gap's last line has no terminator of its own, so it was never a
+/// blank line; the appended `\n` then made it one, and only the NEXT format
+/// capped it away. Two consecutive saves of an untouched file produced two
+/// different files, with different blank-line counts.
+///
+/// The option set matters and is not hypothetical: `files.insertFinalNewline`
+/// on with `files.trimTrailingWhitespace` absent (hence off) is what leaves a
+/// whitespace-only last line standing to be terminated. The suite's only other
+/// idempotence check runs `FormatOptions::default()` — all flags on — where
+/// this cannot happen, and the one test that turns trimming off also turns
+/// `insert_final_newline` off, which is exactly the combination that hides it.
+#[test]
+fn formatting_is_idempotent_under_a_real_editors_options() {
+    let vscode = FormatOptions {
+        trim_trailing_whitespace: false,
+        insert_final_newline: true,
+        trim_final_newlines: false,
+        ..FormatOptions::default()
+    };
+    let cap0 = FormatOptions { max_blank_lines: 0, ..FormatOptions {
+        trim_trailing_whitespace: false,
+        insert_final_newline: true,
+        trim_final_newlines: false,
+        ..FormatOptions::default()
+    } };
+    for opts in [&vscode, &cap0] {
+        for src in [
+            "let x = 1\n\n\n\n   ",
+            "let x = 1\n   \n   \n   \n   ",
+            "let x = 1\n   ",
+            "let x = 1\n\n\n\n",
+            " ",
+            "   \n  \n",
+        ] {
+            let once = format(src, RustyfiVersion::V0_0, opts)
+                .unwrap_or_else(|| panic!("declined {src:?}"));
+            let twice = format(&once, RustyfiVersion::V0_0, opts)
+                .unwrap_or_else(|| panic!("declined its own output for {src:?}"));
+            assert_eq!(twice, once, "not idempotent for {src:?}");
+        }
+    }
+}

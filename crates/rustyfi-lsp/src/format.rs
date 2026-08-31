@@ -434,8 +434,20 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
         // two. That made an LSP flag silently switch off a rule that has no
         // LSP option of its own, and after absent-means-off it was what an
         // ordinary client got by default.
-        let is_blank =
-            line.comment.is_none() && !line.term.is_empty() && (i > 0 || at_line_start);
+        //
+        // The gap's LAST line has no terminator of its own, so it was never a
+        // blank line — and then `insert_final_newline` gave it one AFTER the
+        // cap had run, turning it into a blank line that only the NEXT format
+        // capped away. Two consecutive saves of an untouched file produced two
+        // different files. Counting the terminator this pass is about to add
+        // is what makes the cap see it now instead. Reachable on an ordinary
+        // VS Code save, where `files.insertFinalNewline` is on and
+        // `trimTrailingWhitespace` is absent (so off) — the combination that
+        // leaves a whitespace-only last line standing to be terminated.
+        let will_terminate = i == last && at_file_end && opts.insert_final_newline;
+        let is_blank = line.comment.is_none()
+            && (!line.term.is_empty() || will_terminate)
+            && (i > 0 || at_line_start);
         if is_blank {
             blank_run += 1;
             // Nothing has been written yet and the gap starts the file, so

@@ -385,11 +385,20 @@ impl State {
             // this server does not do. Publishing nothing leaves the previous
             // diagnostics on screen — stale, but never pointing at text that
             // is not there.
-            "textDocument/didChange" => {
-                let text = full_replacement(&params).map(str::to_string);
-                self.remember(&params, text.as_deref());
-                self.publish(&params, text.as_deref())
-            }
+            "textDocument/didChange" => match full_replacement(&params) {
+                Change::Full(text) => {
+                    let text = text.to_string();
+                    self.remember(&params, Some(&text));
+                    self.publish(&params, Some(&text))
+                }
+                // Nothing changed, so nothing is stale: keep the buffer, and
+                // send no diagnostics — the ones on screen still describe it.
+                Change::Nothing => Vec::new(),
+                Change::Unreadable => {
+                    self.remember(&params, None);
+                    self.publish(&params, None)
+                }
+            },
             "textDocument/didClose" => {
                 let Some(uri) = params
                     .get("textDocument")
@@ -946,19 +955,47 @@ fn str_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
     value.get(name).and_then(Value::as_str)
 }
 
-/// The new full text of a `didChange`, if every change in it is a whole-
-/// document replacement.
+/// What a `didChange` did to the document, as far as this server can act on
+/// it.
+///
+/// Three outcomes, and collapsing any two of them loses a document. This used
+/// to be one `Option<&str>` where `None` meant "forget what you hold", which
+/// is right for a ranged change and wrong for an EMPTY change list: nothing
+/// changed, so the copy the server holds is still exactly the client's.
+enum Change<'a> {
+    /// A whole-document replacement — this is the new text.
+    Full(&'a str),
+    /// The change list was empty, so the document is untouched. Keep it.
+    Nothing,
+    /// A ranged (incremental) change under a Full-sync agreement, or a list
+    /// this server cannot read. What it holds may be stale, so it must go.
+    Unreadable,
+}
+
+/// Classify a `didChange`'s `contentChanges`.
 ///
 /// A Full-sync change list is normally one entry with only a `text` member.
-/// The last entry wins if a client batches several, since they apply in
-/// order. A `range` on any entry means the client is doing incremental sync
-/// regardless of what was advertised, and this returns `None` rather than
-/// silently treating a fragment as the whole file.
-fn full_replacement(params: &Value) -> Option<&str> {
-    let changes = params.get("contentChanges")?.as_array()?;
-    let last = changes.last()?;
+/// The LAST entry wins if a client batches several, since they apply in order
+/// and a trailing whole-document replacement supersedes what came before it.
+/// A `range` on that entry means the client is doing incremental sync
+/// regardless of what was advertised, and it is reported as
+/// [`Change::Unreadable`] rather than silently treated as the whole file.
+fn full_replacement(params: &Value) -> Change<'_> {
+    let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
+        return Change::Unreadable;
+    };
+    // An empty list is a no-op, not a loss. A client may send one after an
+    // undo that restored the saved text, and reading it as "forget" left the
+    // document unformattable — and unhoverable, and undiagnosable — until the
+    // next full change arrived.
+    let Some(last) = changes.last() else {
+        return Change::Nothing;
+    };
     if last.get("range").is_some_and(|r| !r.is_null()) {
-        return None;
+        return Change::Unreadable;
     }
-    str_field(last, "text")
+    match str_field(last, "text") {
+        Some(text) => Change::Full(text),
+        None => Change::Unreadable,
+    }
 }

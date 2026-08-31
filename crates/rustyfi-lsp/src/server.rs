@@ -714,7 +714,11 @@ fn lsp_range(text: &str, range: ByteRange) -> Value {
 /// most `256n` bytes. `0` is clamped *up* to `1` for the reason
 /// `normalise_indent` already had: a tab stop every zero columns names no
 /// column.
-const MAX_TAB_SIZE: u64 = 256;
+/// One bound, not two: `crate::format` enforces the same ceiling for library
+/// callers (the wasm playground among them), who never pass through this
+/// function at all. Two constants for one field would be a difference nobody
+/// could explain.
+const MAX_TAB_SIZE: u64 = crate::format::MAX_TAB_SIZE as u64;
 
 /// LSP's `FormattingOptions` object, as far as this formatter reads it.
 ///

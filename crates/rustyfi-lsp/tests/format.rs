@@ -1030,3 +1030,68 @@ fn trimming_never_fuses_two_line_breaks_into_one() {
         assert_eq!(o, want, "for {ctl:?}");
     }
 }
+
+/// The `\r` that could fuse two line breaks is not always one this gap wrote.
+///
+/// For a gap's FIRST line nothing has been emitted yet, so the candidate is
+/// the last byte of the PRECEDING TOKEN'S SPAN — and `lex_header` leaves a
+/// bare `\r` there whenever the next byte is not `\n`. A guard that consulted
+/// only the output buffer was blind to exactly that, and letting it through
+/// made a byte appear INSIDE a token's span (`"@import: p\r"` became
+/// `"@import: p\r\n"`), which is the one thing this module may never do. It
+/// was not exotic either: 158 of the 273 bundled sources reproduce it when
+/// saved with CR endings.
+#[test]
+fn a_bare_cr_ending_a_token_span_cannot_fuse_with_the_gaps_first_newline() {
+    let breaks = |s: &str| {
+        s.matches('\n').count() + s.matches('\r').count() - s.matches("\r\n").count()
+    };
+    // The header's own `\r` is a bare CR; the gap's `\n` must not complete it.
+    for src in [
+        "@import: p\r  \nlet x = 1\n",
+        "@require: a\r\t\nlet x = 1\n",
+        "@stage: 0\r\t\nlet x = 1\n",
+    ] {
+        let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default())
+            .unwrap_or_else(|| panic!("declined {src:?}"));
+        assert_eq!(breaks(&out), breaks(src), "a line vanished from {src:?}: {out:?}");
+        assert!(out.starts_with(src.split('\r').next().unwrap()), "{out:?}");
+    }
+    // Controls: with nothing to fuse, the whitespace-only line is still
+    // trimmed away as usual, and the break count still holds.
+    for (src, want) in [
+        ("@require: a\n\t\nlet x = 1\n", "@require: a\n\nlet x = 1\n"),
+        ("@require: a\r\n \nlet x = 1\n", "@require: a\r\n\nlet x = 1\n"),
+    ] {
+        let out = format(src, RustyfiVersion::V0_0, &FormatOptions::default())
+            .unwrap_or_else(|| panic!("declined {src:?}"));
+        assert_eq!(out, want, "for {src:?}");
+        assert_eq!(breaks(&out), breaks(src), "for {src:?}");
+    }
+}
+
+/// `tab_size` is clamped in the LIBRARY, not only at the protocol boundary.
+///
+/// `FormatOptions::tab_size` is a plain public `usize` and the wasm playground
+/// calls `format` directly, so an editor setting can arrive unmediated by
+/// `server.rs`. Unclamped this is not a large output but a dead process:
+/// `usize::MAX / 2` aborts with an allocation failure no caller can catch.
+#[test]
+fn an_absurd_tab_size_is_clamped_in_the_library_too() {
+    let src = "let x = 1\n\tlet y = 2\n";
+    let sane = format(
+        src,
+        RustyfiVersion::V0_0,
+        &FormatOptions { tab_size: 256, ..FormatOptions::default() },
+    )
+    .expect("declined");
+    for absurd in [usize::MAX, usize::MAX / 2, 4_294_967_296, 10_000_000] {
+        let out = format(
+            src,
+            RustyfiVersion::V0_0,
+            &FormatOptions { tab_size: absurd, ..FormatOptions::default() },
+        )
+        .expect("declined");
+        assert_eq!(out, sane, "tab_size {absurd} was not clamped to the ceiling");
+    }
+}

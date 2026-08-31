@@ -223,6 +223,13 @@ pub fn format(source: &str, version: RustyfiVersion, opts: &FormatOptions) -> Op
                 // line, not the header's. Read off the byte before the gap so
                 // that any future token with the same shape is handled too.
                 at_line_start: start == 0 || source[..start].ends_with(['\n', '\r']),
+                // Which break it was, not merely that there was one. A token
+                // span can END in a bare `\r` — `lex_header` takes one when
+                // the next byte is not `\n` — and then this gap's own leading
+                // `\n`, if trimming ever makes the two adjacent, completes it
+                // into a CRLF and a line disappears. `out.ends_with('\r')`
+                // cannot see that `\r`, because it is not in this gap.
+                prev_is_cr: source[..start].ends_with('\r'),
                 at_file_start: start == 0,
                 at_file_end: end == source.len(),
             },
@@ -351,6 +358,9 @@ struct Where {
     /// The gap begins at column 0, so its first line is a line of its own
     /// rather than the tail of the preceding token's line.
     at_line_start: bool,
+    /// The byte immediately before the gap is a bare `\r`. See the fusion
+    /// guard in [`rewrite_gap`].
+    prev_is_cr: bool,
     /// The gap begins at byte 0. Blank lines here are the file's leading ones
     /// and none of them stay, whatever [`FormatOptions::max_blank_lines`] says.
     at_file_start: bool,
@@ -363,6 +373,7 @@ struct Where {
 fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Option<String> {
     let Where {
         at_line_start,
+        prev_is_cr,
         at_file_start,
         at_file_end,
     } = at;
@@ -453,9 +464,21 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
         // a line is not insignificant. Reachable only with a Classic-Mac `\r`
         // terminator beside a Unix `\n` in one file, which is why it survived
         // the corpus.
+        // The `\r` that could fuse is not always one this gap wrote. For the
+        // gap's FIRST line nothing has been emitted yet, and the candidate is
+        // the last byte of the PRECEDING TOKEN'S SPAN — which `lex_header`
+        // leaves as a bare `\r` whenever the next byte is not `\n`. Reading
+        // only `out` missed exactly that case, and it was not exotic: 158 of
+        // the 273 bundled sources reproduce it when saved with CR endings.
+        // Letting it through made a byte appear INSIDE a token's span, which
+        // is the one thing this module may never do.
+        let prev_cr = match out.is_empty() {
+            true => prev_is_cr,
+            false => out.ends_with('\r'),
+        };
         let would_fuse = text.is_empty()
             && !line.lead.is_empty()
-            && out.ends_with('\r')
+            && prev_cr
             && line.term.starts_with('\n');
         match would_fuse {
             true => out.push_str(line.lead),
@@ -509,11 +532,29 @@ fn rewrite_gap(gap: &str, at: Where, newline: &str, opts: &FormatOptions) -> Opt
 /// when the client wants tabs, or when there are none — which is what keeps a
 /// three-space indent at three spaces: this expands tabs, it does not
 /// re-indent.
+/// The widest `tab_size` any caller gets, protocol or library.
+///
+/// Far past any editor's own tab stop, so no setting a person could plausibly
+/// have chosen is clipped, while the worst case stays proportional to the
+/// file: an indentation run of `n` tabs can grow to at most `256n` bytes.
+pub(crate) const MAX_TAB_SIZE: usize = 256;
+
 fn normalise_indent(lead: &str, opts: &FormatOptions) -> String {
     if !opts.insert_spaces || !lead.contains('\t') {
         return lead.to_string();
     }
-    let tab = opts.tab_size.max(1);
+    // Clamped HERE, not only at the protocol boundary. `server.rs` caps a
+    // client's `tabSize`, but `FormatOptions::tab_size` is a plain public
+    // `usize` and the wasm playground calls `format` directly — so an editor
+    // setting could arrive unmediated. Unclamped this is not a big output, it
+    // is a dead process: `col + tab` overflows near `usize::MAX` and
+    // `" ".repeat(col)` at `usize::MAX / 2` ABORTS with an allocation failure
+    // that no caller can catch. On wasm32 `usize` is 32-bit, so both arrive
+    // sooner and a panic there poisons the module instance.
+    //
+    // The bound matches `server::MAX_TAB_SIZE` deliberately: two different
+    // ceilings for the same field would be a difference nobody could explain.
+    let tab = opts.tab_size.clamp(1, MAX_TAB_SIZE);
     let mut col = 0usize;
     for c in lead.chars() {
         col = match c {

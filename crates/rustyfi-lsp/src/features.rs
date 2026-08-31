@@ -566,6 +566,26 @@ pub fn record_label_slot(source: &str, version: RustyfiVersion, byte: usize) -> 
     area_at(&before) == Area::Program && record_label_position(&before)
 }
 
+/// [`in_type_position`] asked about a cursor, for a caller with no token
+/// stream — [`record_label_slot`]'s counterpart, exported for the same reason.
+///
+/// The browser playground decides namespaces twice and merges the two answers
+/// into one popup: once through [`completions`] for the buffer's own names,
+/// once in its own lookup over the compiled-in package corpus. Without this
+/// the second half had no notion of a type position at all, so `let f : leng`
+/// offered the corpus's VALUES — `length-abs`, `length-min` — where only a
+/// type can go, while the first half correctly offered nothing.
+pub fn type_position_slot(source: &str, version: RustyfiVersion, byte: usize) -> bool {
+    let byte = crate::line_index::floor_boundary(source, byte);
+    let word = word_before(source, byte);
+    let (atoms, _) = rustyfi_syntax::lex_partial(source, version);
+    let before: Vec<&Atom> = atoms
+        .iter()
+        .filter(|a| a.slot != Token::Eoi && a.span.end.byte <= word.sigil_start)
+        .collect();
+    area_at(&before) == Area::Program && in_type_position(&before)
+}
+
 /// Every record label the buffer mentions, in first-seen order.
 ///
 /// Labels are the one namespace with no [`Def`] to enumerate: a label binds
@@ -603,6 +623,30 @@ fn in_type_position(before: &[&Atom]) -> bool {
     for a in before.iter().rev() {
         match &a.slot {
             Token::Colon => return true,
+            // A type SYNONYM's right-hand side: `type t = …`. Reached only
+            // through the `=`, which every other binding form also writes —
+            // `let x = …` is an expression — so the `=` cannot decide on its
+            // own and the introducing keyword is what settles it. Scanning
+            // back over the name and its parameters is exact here: between
+            // `type` and its `=` a 0.0.6 declaration writes only the name and
+            // type variables.
+            //
+            // Without this the slot answered with VALUES: `type t = leng`
+            // offered `length-abs` and `length-min`, which are not types and
+            // cannot go there.
+            Token::DefEq => {
+                // Everything between `type` and its `=` is the synonym's name
+                // and its type variables, so the first token that is neither
+                // decides: `type` means a type follows, anything else means an
+                // expression does.
+                return before
+                    .iter()
+                    .rev()
+                    .skip_while(|b| !matches!(b.slot, Token::DefEq))
+                    .skip(1)
+                    .find(|b| !matches!(b.slot, Token::Var(_) | Token::TypeVar(_)))
+                    .is_some_and(|b| matches!(b.slot, Token::Type));
+            }
             Token::Var(_)
             | Token::VarWithMod(..)
             | Token::TypeVar(_)

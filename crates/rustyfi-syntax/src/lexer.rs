@@ -915,6 +915,18 @@ impl Lexer {
         while let Some(c) = self.peek() {
             if is_break(c) {
                 self.bump();
+                // A CRLF is ONE line break, and this token must take both
+                // halves of it or neither. Taking only the `\r` put a TOKEN
+                // SPAN BOUNDARY inside the pair, and everything downstream
+                // that reasons about "the byte before this gap" then saw a
+                // lone `\r` with an orphan `\n` sitting in the gap: the LSP
+                // formatter counted that `\n` as ending a blank line of its
+                // own (so a run after a header capped one line short), and
+                // with the cap at 0 it deleted the `\n` outright and left a
+                // bare `\r` in a CRLF file.
+                if c == '\r' && self.peek() == Some('\n') {
+                    self.bump();
+                }
                 break;
             }
             content.push(self.bump());

@@ -11,8 +11,9 @@
 //! `textDocument/didOpen` / `didChange` / `didClose`,
 //! `textDocument/publishDiagnostics`, the three interactive requests —
 //! `textDocument/hover`, `textDocument/definition` and
-//! `textDocument/completion` — and the two outline ones,
-//! `textDocument/documentSymbol` and `workspace/symbol`. The `initialize`
+//! `textDocument/completion` — the two outline ones,
+//! `textDocument/documentSymbol` and `workspace/symbol`, and
+//! `textDocument/formatting`. The `initialize`
 //! reply advertises exactly that and nothing more — an over-claimed
 //! capability costs the user a hang or an empty popup on every keystroke, so
 //! the reply lists only what is actually wired up. (The whole-program tier is
@@ -233,6 +234,7 @@ impl State {
             // is always on screen, and an error in it reads as a broken server
             // rather than as an empty file.
             "textDocument/documentSymbol" => Ok(self.document_symbols(&params)),
+            "textDocument/formatting" => Ok(self.formatting(&params)),
             "workspace/symbol" => {
                 let query = params.get("query").and_then(Value::as_str).unwrap_or("");
                 let lang = self.opts.lang;
@@ -383,11 +385,20 @@ impl State {
             // this server does not do. Publishing nothing leaves the previous
             // diagnostics on screen — stale, but never pointing at text that
             // is not there.
-            "textDocument/didChange" => {
-                let text = full_replacement(&params).map(str::to_string);
-                self.remember(&params, text.as_deref());
-                self.publish(&params, text.as_deref())
-            }
+            "textDocument/didChange" => match full_replacement(&params) {
+                Change::Full(text) => {
+                    let text = text.to_string();
+                    self.remember(&params, Some(&text));
+                    self.publish(&params, Some(&text))
+                }
+                // Nothing changed, so nothing is stale: keep the buffer, and
+                // send no diagnostics — the ones on screen still describe it.
+                Change::Nothing => Vec::new(),
+                Change::Unreadable => {
+                    self.remember(&params, None);
+                    self.publish(&params, None)
+                }
+            },
             "textDocument/didClose" => {
                 let Some(uri) = params
                     .get("textDocument")
@@ -476,6 +487,43 @@ impl State {
             None => crate::document_symbols_auto(text),
         };
         Value::Array(symbols.iter().map(symbol_json).collect())
+    }
+
+    /// `textDocument/formatting`: normalise the buffer's program-area
+    /// whitespace.
+    ///
+    /// Three outcomes, and the difference between the last two is the whole
+    /// contract:
+    ///
+    /// - **`null`** — the formatter *declined*. A URI this server was never
+    ///   sent, or a buffer that does not lex ([`crate::format`] explains why
+    ///   that is where it stops). `null` is a specified result for this
+    ///   request, not an error, so a client shows "cannot format" rather than
+    ///   logging a failure.
+    /// - **`[]`** — the buffer is already formatted. Distinct from `null` on
+    ///   purpose: nothing is wrong, there is simply nothing to do, and a
+    ///   format-on-save that answered `null` here would tell the user their
+    ///   file is unformattable every time they saved a tidy one.
+    /// - **one `TextEdit`** — the change, narrowed to the bytes that actually
+    ///   differ (see [`minimal_edit`]).
+    fn formatting(&self, params: &Value) -> Value {
+        let text = params
+            .get("textDocument")
+            .and_then(|d| str_field(d, "uri"))
+            .and_then(|uri| self.docs.get(uri));
+        let Some(text) = text else {
+            return Value::Null;
+        };
+        let opts = format_options(params.get("options"));
+        let formatted = match self.opts.lang {
+            Some(lang) => crate::format(text, lang, &opts),
+            None => crate::format_auto(text, &opts),
+        };
+        match formatted {
+            None => Value::Null,
+            Some(new) if new == *text => Value::Array(Vec::new()),
+            Some(new) => Value::Array(vec![minimal_edit(text, &new)]),
+        }
     }
 
     /// Absorb `initializationOptions` — `lang`, `libRoot`, `typecheck`,
@@ -659,6 +707,150 @@ fn lsp_range(text: &str, range: ByteRange) -> Value {
     })
 }
 
+/// The largest `tabSize` this server will honour.
+///
+/// `tabSize` is a `uinteger` on the wire, so it is unbounded client input, and
+/// `format::normalise_indent` turns it into that many spaces per indentation
+/// run — a client-controlled allocation, on a request an editor sends on every
+/// save. Measured: `tabSize: 40_000_000` on a file with one tab-indented line
+/// produced a 120 MB `newText` in 0.45 s.
+///
+/// 256 is the bound because it is far past any editor's own tab stop (8 is the
+/// widest anybody defaults to, and the settings UIs present single digits)
+/// while still being wider than any line a person reads, so no setting a user
+/// could plausibly have chosen is clipped; and because it keeps the worst case
+/// proportional to the file — an indentation run of `n` tabs can grow to at
+/// most `256n` bytes. `0` is clamped *up* to `1` for the reason
+/// `normalise_indent` already had: a tab stop every zero columns names no
+/// column.
+/// One bound, not two: `crate::format` enforces the same ceiling for library
+/// callers (the wasm playground among them), who never pass through this
+/// function at all. Two constants for one field would be a difference nobody
+/// could explain.
+const MAX_TAB_SIZE: u64 = crate::format::MAX_TAB_SIZE as u64;
+
+/// LSP's `FormattingOptions` object, as far as this formatter reads it.
+///
+/// **An absent optional member means "off", not "the library default".**
+/// `tabSize` and `insertSpaces` are required by the specification;
+/// `trimTrailingWhitespace`, `insertFinalNewline` and `trimFinalNewlines` are
+/// optional, and the common clients send them *only when the user's
+/// corresponding editor setting is on*. VS Code's
+/// `files.trimTrailingWhitespace`, `files.insertFinalNewline` and
+/// `files.trimFinalNewlines` all default to false, and the client then omits
+/// the member entirely rather than sending `false`; nvim behaves the same. So
+/// an ordinary format-on-save arrives as `{"tabSize":4,"insertSpaces":true}`,
+/// and reading that as "all three on" deletes trailing whitespace and final
+/// newlines the user explicitly turned off. Silence from a client is not a
+/// request.
+///
+/// This is deliberately **not** [`crate::FormatOptions`]'s own [`Default`],
+/// and the two must not be collapsed into one. `FormatOptions::default()` is
+/// for the library and playground callers, who pass no options because there
+/// is no client in the picture at all, and for whom "tidy everything" is the
+/// right answer. Here the silence belongs to somebody, and it carries
+/// information. Only the two *required* members fall back to the library
+/// default, and that fallback is unreachable for a conforming client — it
+/// exists so a malformed request still gets an answer instead of an error.
+///
+/// # The contract that results
+///
+/// Two of the formatter's rules are not LSP options, so they have no member to
+/// be absent and do **not** switch off with these flags — they always apply:
+///
+/// - a run of blank lines in program text is capped at
+///   [`crate::FormatOptions::max_blank_lines`];
+/// - a file's *leading* blank lines are dropped.
+///
+/// That is not an inconsistency with "absence means off". The protocol has no
+/// vocabulary for either rule, so a client cannot ask for them or decline them
+/// either way; and a formatter that did nothing whatever when the three
+/// optional members were missing would answer `[]` to every ordinary
+/// format-on-save, which is an advertised capability that never does anything.
+/// The visible consequence is at the end of a file: with `trimFinalNewlines`
+/// off, a file ending in six newlines still comes back with that run capped,
+/// so "off" means *this formatter does not collapse the tail to a single
+/// newline*, not *the tail is untouched*.
+///
+/// `FormattingOptions` also carries arbitrary client-defined members, which
+/// are ignored — acting on a key this server does not document would be acting
+/// on a guess about what the client meant.
+fn format_options(options: Option<&Value>) -> crate::FormatOptions {
+    let default = crate::FormatOptions::default();
+    // A missing `options` object is treated exactly as an empty one rather
+    // than as the library default: the three optional members are absent
+    // either way, and the two required ones fall back below.
+    let get = |name: &str| options.and_then(|o| o.get(name));
+    let flag = |name: &str| get(name).and_then(Value::as_bool).unwrap_or(false);
+    crate::FormatOptions {
+        tab_size: get("tabSize")
+            .and_then(Value::as_u64)
+            .map_or(default.tab_size, |n| n.clamp(1, MAX_TAB_SIZE) as usize),
+        insert_spaces: get("insertSpaces")
+            .and_then(Value::as_bool)
+            .unwrap_or(default.insert_spaces),
+        trim_trailing_whitespace: flag("trimTrailingWhitespace"),
+        insert_final_newline: flag("insertFinalNewline"),
+        trim_final_newlines: flag("trimFinalNewlines"),
+        max_blank_lines: default.max_blank_lines,
+    }
+}
+
+/// The one `TextEdit` that turns `old` into `new`, narrowed to the bytes that
+/// differ.
+///
+/// A whole-document replacement would be correct and is what the simplest
+/// server sends. It is also what makes an editor scroll to the top, collapse
+/// every fold and lose the selection on every save, because from the client's
+/// point of view every line was deleted and rewritten. Trimming the common
+/// prefix and suffix costs two loops and leaves an edit that usually covers a
+/// handful of lines.
+///
+/// Both cuts land on `char` boundaries, and both are boundaries in *both*
+/// strings for the same reason: the bytes on either side of the cut are equal
+/// in the two strings, and a byte position in valid UTF-8 is a boundary
+/// exactly when the byte there is not a continuation byte.
+fn minimal_edit(old: &str, new: &str) -> Value {
+    let (start, old_end, new_end) = minimal_edit_span(old, new);
+    json!({
+        "range": lsp_range(old, ByteRange::new(start, old_end)),
+        "newText": &new[start..new_end],
+    })
+}
+
+/// [`minimal_edit`]'s arithmetic, as byte offsets: replace `old[start..
+/// old_end]` with `new[start..new_end]`.
+///
+/// Split out from the JSON so the property that matters can be STATED —
+/// `old[..start] + new[start..new_end] + old[old_end..] == new`. Against a
+/// `Value` carrying a UTF-16 line/character range that round trip cannot be
+/// written, which is why this function was the one link between the formatter
+/// and the client's buffer that nothing exercised: a wrong cut here does not
+/// produce tidy-but-odd whitespace, it silently deletes the user's text.
+fn minimal_edit_span(old: &str, new: &str) -> (usize, usize, usize) {
+    let (ob, nb) = (old.as_bytes(), new.as_bytes());
+    let mut start = 0;
+    while start < ob.len() && start < nb.len() && ob[start] == nb[start] {
+        start += 1;
+    }
+    start = crate::line_index::floor_boundary(old, start);
+
+    let mut back = 0;
+    while back < ob.len() - start
+        && back < nb.len() - start
+        && ob[ob.len() - 1 - back] == nb[nb.len() - 1 - back]
+    {
+        back += 1;
+    }
+    // Round the cut *outwards* — a shorter suffix, a longer edit — because
+    // rounding it inwards could put it inside a character.
+    while back > 0 && !old.is_char_boundary(ob.len() - back) {
+        back -= 1;
+    }
+
+    (start, ob.len() - back, nb.len() - back)
+}
+
 /// `file:///a/b%20c.saty` → `/a/b c.saty`.
 ///
 /// Deliberately minimal, and `None` for anything that is not a plain local
@@ -749,6 +941,12 @@ fn server_capabilities() -> Value {
             },
             "documentSymbolProvider": true,
             "workspaceSymbolProvider": true,
+            // Whole-document only. `documentRangeFormattingProvider` is
+            // deliberately absent: a range's own text does not say which
+            // lexical area it starts in, so formatting one would mean either
+            // lexing the whole file to find out (at which point the range
+            // bought nothing) or guessing — and guessing here rewrites prose.
+            "documentFormattingProvider": true,
             // The protocol's default, stated explicitly because it is the
             // one thing about this server most likely to be got wrong by
             // whoever touches `line_index` next: every `character` below is
@@ -771,19 +969,135 @@ fn str_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
     value.get(name).and_then(Value::as_str)
 }
 
-/// The new full text of a `didChange`, if every change in it is a whole-
-/// document replacement.
+/// What a `didChange` did to the document, as far as this server can act on
+/// it.
+///
+/// Three outcomes, and collapsing any two of them loses a document. This used
+/// to be one `Option<&str>` where `None` meant "forget what you hold", which
+/// is right for a ranged change and wrong for an EMPTY change list: nothing
+/// changed, so the copy the server holds is still exactly the client's.
+enum Change<'a> {
+    /// A whole-document replacement — this is the new text.
+    Full(&'a str),
+    /// The change list was empty, so the document is untouched. Keep it.
+    Nothing,
+    /// A ranged (incremental) change under a Full-sync agreement, or a list
+    /// this server cannot read. What it holds may be stale, so it must go.
+    Unreadable,
+}
+
+/// Classify a `didChange`'s `contentChanges`.
 ///
 /// A Full-sync change list is normally one entry with only a `text` member.
-/// The last entry wins if a client batches several, since they apply in
-/// order. A `range` on any entry means the client is doing incremental sync
-/// regardless of what was advertised, and this returns `None` rather than
-/// silently treating a fragment as the whole file.
-fn full_replacement(params: &Value) -> Option<&str> {
-    let changes = params.get("contentChanges")?.as_array()?;
-    let last = changes.last()?;
+/// The LAST entry wins if a client batches several, since they apply in order
+/// and a trailing whole-document replacement supersedes what came before it.
+/// A `range` on that entry means the client is doing incremental sync
+/// regardless of what was advertised, and it is reported as
+/// [`Change::Unreadable`] rather than silently treated as the whole file.
+fn full_replacement(params: &Value) -> Change<'_> {
+    let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
+        return Change::Unreadable;
+    };
+    // An empty list is a no-op, not a loss. A client may send one after an
+    // undo that restored the saved text, and reading it as "forget" left the
+    // document unformattable — and unhoverable, and undiagnosable — until the
+    // next full change arrived.
+    let Some(last) = changes.last() else {
+        return Change::Nothing;
+    };
     if last.get("range").is_some_and(|r| !r.is_null()) {
-        return None;
+        return Change::Unreadable;
     }
-    str_field(last, "text")
+    match str_field(last, "text") {
+        Some(text) => Change::Full(text),
+        None => Change::Unreadable,
+    }
+}
+
+#[cfg(test)]
+mod minimal_edit_tests {
+    use super::minimal_edit_span;
+
+    /// Applying the edit to `old` must reconstruct `new`, and neither cut may
+    /// land inside a character — in EITHER string.
+    ///
+    /// This is the one link between a correct `format` output and the client's
+    /// buffer that nothing exercised. A wrong cut here does not produce
+    /// tidy-but-odd whitespace; it silently deletes the user's text, or panics
+    /// on a slice that is not a char boundary.
+    fn check(old: &str, new: &str) {
+        let (start, old_end, new_end) = minimal_edit_span(old, new);
+        assert!(start <= old_end && old_end <= old.len(), "{old:?} -> {new:?}");
+        assert!(start <= new_end && new_end <= new.len(), "{old:?} -> {new:?}");
+        for (s, at) in [(old, start), (old, old_end), (new, start), (new, new_end)] {
+            assert!(
+                s.is_char_boundary(at),
+                "cut at {at} is inside a character of {s:?} ({old:?} -> {new:?})",
+            );
+        }
+        let applied = format!("{}{}{}", &old[..start], &new[start..new_end], &old[old_end..]);
+        assert_eq!(applied, new, "applying the edit to {old:?} did not give {new:?}");
+    }
+
+    /// A deterministic xorshift, so a failure is reproducible from the seed
+    /// printed in the panic rather than from a lucky rerun.
+    fn rng(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// Deliberately hostile: multi-byte and astral characters (so a cut can
+    /// land mid-character), both line endings, and characters that repeat so
+    /// that long common prefixes and suffixes actually occur.
+    ///
+    /// `あ` (E3 81 82) and `も` (E3 82 82) are in here as a PAIR, and that is
+    /// the point of them: they share a trailing byte without being the same
+    /// character, which is what makes the byte-wise suffix scan stop in the
+    /// middle of one and forces the rounding below it to matter. Without such
+    /// a pair the rounding direction is unobservable — a mutation that rounds
+    /// the cut the wrong way survives 200 000 cases, because every cut lands
+    /// on a boundary anyway. `🎉`/`🎊` (F0 9F 8E 89 / 8A) are the astral
+    /// version of the same trick.
+    const ALPHABET: [&str; 14] = [
+        "a", "a", "b", " ", "\n", "\r\n", "\t", "%", "あ", "も", "漢", "🎉", "🎊", "é",
+    ];
+
+    fn build(state: &mut u64, max: usize) -> String {
+        let n = (rng(state) as usize) % (max + 1);
+        (0..n).map(|_| ALPHABET[(rng(state) as usize) % ALPHABET.len()]).collect()
+    }
+
+    #[test]
+    fn applying_the_edit_reconstructs_the_new_text() {
+        // The shapes the generator is unlikely to hit on its own.
+        for (old, new) in [
+            ("", ""), ("", "x"), ("x", ""), ("x", "x"),
+            ("あ", "い"), ("🎉", "🎊"), ("a🎉b", "a🎉c"), ("a🎉b", "ab"),
+            ("\r\n", "\n"), ("\n", "\r\n"), ("aaa", "aa"), ("aa", "aaa"),
+            ("漢字", "漢"), ("漢", "漢字"),
+        ] {
+            check(old, new);
+        }
+        let mut state = 0x5eed_1234_9abc_def0u64;
+        for _ in 0..200_000 {
+            let old = build(&mut state, 12);
+            // Half the time edit `old` rather than draw independently, so long
+            // shared prefixes and suffixes — the case the function exists for —
+            // are actually reached.
+            let new = match rng(&mut state) % 2 {
+                0 => build(&mut state, 12),
+                _ => {
+                    let mut n = old.clone();
+                    n.push_str(&build(&mut state, 3));
+                    let cut = (rng(&mut state) as usize) % (n.len() + 1);
+                    let cut = (0..=cut).rev().find(|c| n.is_char_boundary(*c)).unwrap_or(0);
+                    n.truncate(cut);
+                    n
+                }
+            };
+            check(&old, &new);
+        }
+    }
 }

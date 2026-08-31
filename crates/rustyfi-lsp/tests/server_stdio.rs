@@ -16,7 +16,7 @@
 
 use rustyfi_lsp::jsonrpc::{self, code};
 use rustyfi_lsp::server::{self, Options};
-use rustyfi_lsp::RustyfiVersion;
+use rustyfi_lsp::{LineIndex, Position, RustyfiVersion};
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
@@ -146,6 +146,7 @@ fn the_full_lifecycle_produces_a_diagnostic_and_exits_cleanly() {
             },
             "documentSymbolProvider": true,
             "workspaceSymbolProvider": true,
+            "documentFormattingProvider": true,
             "positionEncoding": "utf-16",
         }),
     );
@@ -227,9 +228,14 @@ fn an_unknown_request_is_method_not_found_and_the_session_survives() {
 fn every_advertised_capability_answers_in_one_session() {
     let uri = "file:///all.saty";
     let src = "let-inline \\emph it = it\nlet greeting = 1\nlet doc = {\\emph{hi}} greeting\n";
+    // Formatting asks about a *second* buffer, because the first one is
+    // already tidy and a formatter with nothing to do answers `[]` — which is
+    // the very shape this test reads as "advertised but does nothing".
+    let untidy = "file:///untidy.saty";
     let (out, code_) = session(&[
         initialize(1),
         did_open(uri, src),
+        did_open(untidy, "let x = 1   \n\n\n\n\n"),
         at(2, "hover", uri, 2, 12),
         at(3, "definition", uri, 2, 23),
         at(4, "completion", uri, 2, 12),
@@ -238,6 +244,7 @@ fn every_advertised_capability_answers_in_one_session() {
             "jsonrpc": "2.0", "id": 6, "method": "workspace/symbol",
             "params": { "query": "greeting" },
         }),
+        formatting(8, untidy),
         shutdown(7),
         exit(),
     ]);
@@ -255,6 +262,7 @@ fn every_advertised_capability_answers_in_one_session() {
         [
             "completionProvider",
             "definitionProvider",
+            "documentFormattingProvider",
             "documentSymbolProvider",
             "hoverProvider",
             "workspaceSymbolProvider",
@@ -271,6 +279,7 @@ fn every_advertised_capability_answers_in_one_session() {
         (4, "completion"),
         (5, "documentSymbol"),
         (6, "workspace/symbol"),
+        (8, "formatting"),
     ] {
         let r = reply(&out, id);
         assert!(r.get("error").is_none(), "{what} errored: {r:#?}");
@@ -937,4 +946,511 @@ fn document_symbol_obeys_an_explicit_lang() {
         },
     );
     assert_eq!(reply(&pinned, 2)["result"], json!([]));
+}
+
+// ---------------------------------------------------------------------------
+// textDocument/formatting
+// ---------------------------------------------------------------------------
+
+/// A formatting request from a client whose three optional whitespace
+/// settings are all *on* — which is what the tests below mean when they say
+/// "format this buffer".
+///
+/// It has to say so explicitly, because the members are optional and their
+/// absence means "off" on the wire (`server.rs`'s `format_options`). A client
+/// with the editor defaults sends none of them; that case is the subject of
+/// its own tests further down rather than the silent baseline for every test
+/// here.
+fn formatting(id: i64, uri: &str) -> Value {
+    formatting_with(
+        id,
+        uri,
+        json!({
+            "tabSize": 4,
+            "insertSpaces": true,
+            "trimTrailingWhitespace": true,
+            "insertFinalNewline": true,
+            "trimFinalNewlines": true,
+        }),
+    )
+}
+
+/// A formatting request carrying an explicit `FormattingOptions`.
+fn formatting_with(id: i64, uri: &str, options: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "textDocument/formatting",
+        "params": { "textDocument": { "uri": uri }, "options": options },
+    })
+}
+
+/// Apply the reply's edits to `text` the way a client would, so the tests
+/// assert the *document the user ends up with* rather than the arithmetic in
+/// the range. A wrong range that still reads plausibly in an `assert_eq!` on
+/// the JSON would corrupt a buffer here.
+fn apply(text: &str, edits: &Value) -> String {
+    let index = LineIndex::new(text);
+    let mut out = text.to_string();
+    // Applied back to front so an earlier edit's offsets stay valid. This
+    // server only ever sends one, which the tests below pin separately.
+    let mut edits: Vec<&Value> = edits
+        .as_array()
+        .expect("an array of edits")
+        .iter()
+        .collect();
+    edits.reverse();
+    for e in edits {
+        let at = |which: &str| {
+            let p = &e["range"][which];
+            index.offset(Position {
+                line: p["line"].as_u64().unwrap() as u32,
+                character: p["character"].as_u64().unwrap() as u32,
+            })
+        };
+        out.replace_range(at("start")..at("end"), e["newText"].as_str().unwrap());
+    }
+    out
+}
+
+/// The edit an editor actually receives, asserted as JSON.
+///
+/// The range is checked literally as well as through [`apply`], because the
+/// narrowing in `minimal_edit` is exactly the kind of arithmetic that is right
+/// on the buffer and wrong on the wire.
+#[test]
+fn formatting_answers_one_narrow_edit_rather_than_replacing_the_file() {
+    let uri = "file:///untidy.saty";
+    // Twenty tidy lines and one untidy one: a whole-document replacement would
+    // name a range covering all of them.
+    let mut src = String::new();
+    for i in 0..20 {
+        src.push_str(&format!("let x{i} = {i}\n"));
+    }
+    src.push_str("let last = 1   \n");
+    let (out, _) = session(&[initialize(1), did_open(uri, &src), formatting(2, uri)]);
+
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(edits.as_array().map(Vec::len), Some(1), "{edits:#?}");
+    assert_eq!(
+        edits[0]["range"],
+        json!({
+            "start": { "line": 20, "character": 12 },
+            "end":   { "line": 20, "character": 15 },
+        }),
+        "the edit must cover the trailing spaces and nothing else"
+    );
+    assert_eq!(edits[0]["newText"], "");
+    assert_eq!(apply(&src, edits), src.replace("= 1   \n", "= 1\n"));
+}
+
+/// An already-formatted buffer answers `[]`, and one that cannot be formatted
+/// answers `null`. The difference matters on every save: a format-on-save that
+/// saw `null` for a tidy file would report it as unformattable.
+#[test]
+fn a_tidy_buffer_gets_no_edits_and_a_broken_one_gets_null() {
+    let tidy = "file:///tidy.saty";
+    let broken = "file:///broken.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(tidy, "let x = 1\n"),
+        // An unterminated inline area: no area map, so no format.
+        did_open(broken, "let doc = {hello\n"),
+        formatting(2, tidy),
+        formatting(3, broken),
+        formatting(4, "file:///never-opened.saty"),
+    ]);
+    assert_eq!(reply(&out, 2)["result"], json!([]));
+    assert!(reply(&out, 3)["result"].is_null());
+    assert!(reply(&out, 4)["result"].is_null(), "an unknown URI");
+    for id in [2, 3, 4] {
+        assert!(
+            reply(&out, id).get("error").is_none(),
+            "declining is not an error: {:#?}",
+            reply(&out, id)
+        );
+    }
+}
+
+/// Inline text is content, and the wire path must not be the place that
+/// forgets it. This buffer holds doubled spaces and a trailing run inside
+/// `{ … }` and neither is touched; the trailing run on the *program* line is.
+#[test]
+fn formatting_over_the_wire_leaves_prose_alone() {
+    let uri = "file:///prose.saty";
+    let src = "let doc = {hello  world   \n\n  and  more}   \n";
+    let (out, _) = session(&[initialize(1), did_open(uri, src), formatting(2, uri)]);
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(
+        apply(src, edits),
+        "let doc = {hello  world   \n\n  and  more}\n",
+        "only the spaces after the closing brace are program text"
+    );
+}
+
+/// UTF-16 again, on the formatting path: the edit's range is only right if the
+/// server counts code units, and Japanese before the edit is what separates
+/// that from counting bytes.
+#[test]
+fn formatting_ranges_are_utf16_over_the_wire() {
+    let uri = "file:///jp.saty";
+    let src = "let title = `日本語のタイトル`   \n";
+    assert_eq!(src.find("   \n"), Some(38), "byte offset, for contrast");
+    let (out, _) = session(&[initialize(1), did_open(uri, src), formatting(2, uri)]);
+    let edits = &reply(&out, 2)["result"];
+    assert_eq!(
+        edits[0]["range"]["start"],
+        json!({ "line": 0, "character": 22 }),
+        "22 UTF-16 units, not 38 bytes"
+    );
+    assert_eq!(apply(src, edits), "let title = `日本語のタイトル`\n");
+}
+
+/// The client's `FormattingOptions` reach the formatter. `insertSpaces: false`
+/// is the one that is easy to accept and then ignore, because ignoring it
+/// still produces valid output — just not the output that was asked for.
+#[test]
+fn the_clients_formatting_options_are_honoured() {
+    let uri = "file:///tabs.saty";
+    let src = "let f x =\n\tx\n";
+    let msgs = |options: Value| {
+        [
+            initialize(1),
+            did_open(uri, src),
+            formatting_with(2, uri, options),
+        ]
+    };
+
+    let (spaces, _) = session(&msgs(json!({ "tabSize": 2, "insertSpaces": true })));
+    assert_eq!(apply(src, &reply(&spaces, 2)["result"]), "let f x =\n  x\n");
+
+    let (tabs, _) = session(&msgs(json!({ "tabSize": 2, "insertSpaces": false })));
+    assert_eq!(reply(&tabs, 2)["result"], json!([]), "tabs were asked for");
+
+    // The optional members turn individual rules off.
+    let uri2 = "file:///opts.saty";
+    let (kept, _) = session(&[
+        initialize(1),
+        did_open(uri2, "let x = 1   \n"),
+        formatting_with(
+            2,
+            uri2,
+            json!({ "tabSize": 4, "insertSpaces": true, "trimTrailingWhitespace": false }),
+        ),
+    ]);
+    assert_eq!(reply(&kept, 2)["result"], json!([]));
+}
+
+/// `--lang` pins the generation for formatting too. `@stage:` is a header 0.1
+/// deleted outright, so the pin is visible as a decline rather than as a
+/// different tidy-up.
+#[test]
+fn formatting_obeys_an_explicit_lang() {
+    let uri = "file:///lib.satyh";
+    let src = "@stage: 1\nlet x = 1   \n";
+    let msgs = [initialize(1), did_open(uri, src), formatting(2, uri)];
+
+    let (auto, _) = session(&msgs);
+    assert_eq!(
+        apply(src, &reply(&auto, 2)["result"]),
+        "@stage: 1\nlet x = 1\n"
+    );
+
+    let (pinned, _) = session_with(
+        &msgs,
+        Options {
+            lang: Some(RustyfiVersion::V0_1),
+            ..Options::default()
+        },
+    );
+    assert!(
+        reply(&pinned, 2)["result"].is_null(),
+        "0.1 has no `@stage:` header, so this buffer does not lex as 0.1"
+    );
+}
+
+/// Formatting reads the stored buffer, so it follows `didChange` rather than
+/// the text the file was opened with.
+#[test]
+fn formatting_follows_did_change() {
+    let uri = "file:///doc.saty";
+    let edited = "let after = 1   \n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, "let before = 1\n"),
+        did_change(uri, 2, edited),
+        formatting(3, uri),
+    ]);
+    assert_eq!(apply(edited, &reply(&out, 3)["result"]), "let after = 1\n");
+}
+
+// ---------------------------------------------------------------------------
+// textDocument/formatting: the optional `FormattingOptions` members
+//
+// LSP marks `trimTrailingWhitespace`, `insertFinalNewline` and
+// `trimFinalNewlines` optional, and VS Code and nvim send them only when the
+// user's `files.trimTrailingWhitespace` / `files.insertFinalNewline` /
+// `files.trimFinalNewlines` are on — all three default to false, and the
+// member is then *omitted*, not sent as `false`. So the wire shape this group
+// cares about most is the one an ordinary format-on-save actually has:
+// `{"tabSize":4,"insertSpaces":true}` and nothing else.
+//
+// Every case is asserted through `apply`, on the document the user ends up
+// with. Asserting `result == []` alone would pass against a formatter that
+// had stopped doing anything at all, which is exactly the failure "absence
+// means off" could turn into if it were taken one step too far.
+// ---------------------------------------------------------------------------
+
+/// The document a client ends up with after formatting `src` under `options`.
+fn formatted(src: &str, options: Value) -> String {
+    let uri = "file:///opts.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        formatting_with(2, uri, options),
+    ]);
+    let result = &reply(&out, 2)["result"];
+    assert!(
+        !result.is_null(),
+        "the server declined to format {src:?}: {:#?}",
+        reply(&out, 2)
+    );
+    apply(src, result)
+}
+
+/// The three optional members, one at a time, in all three wire states:
+/// absent, `false`, `true`. Absent and `false` must agree — that is the whole
+/// claim — and `true` must differ from both, which is what stops the test
+/// passing against a formatter that has simply gone inert.
+#[test]
+fn an_absent_optional_formatting_member_means_off_exactly_as_false_does() {
+    // (member, buffer, what the buffer becomes when the member is on)
+    let cases = [
+        (
+            "trimTrailingWhitespace",
+            "let x = 1   \nlet y = 2  \n",
+            "let x = 1\nlet y = 2\n",
+        ),
+        ("insertFinalNewline", "let x = 1", "let x = 1\n"),
+        // Six terminators after the token. With the member on they collapse
+        // to one; with it off the blank-line cap still applies, so the run
+        // stops at two blank lines rather than staying at five. See the
+        // contract in `format_options`.
+        (
+            "trimFinalNewlines",
+            "let x = 1\n\n\n\n\n\n",
+            "let x = 1\n",
+        ),
+    ];
+
+    for (member, src, on) in cases {
+        let base = json!({ "tabSize": 4, "insertSpaces": true });
+        let with = |value: bool| {
+            let mut o = base.clone();
+            o[member] = json!(value);
+            o
+        };
+
+        let absent = formatted(src, base.clone());
+        let off = formatted(src, with(false));
+        let onward = formatted(src, with(true));
+
+        assert_eq!(
+            absent, off,
+            "{member}: an absent member must mean what `false` means"
+        );
+        assert_eq!(onward, on, "{member}: sent as `true`");
+        assert_ne!(
+            absent, onward,
+            "{member}: `true` and absent must not agree, or this test proves nothing"
+        );
+    }
+}
+
+/// What "off" leaves behind, spelled out rather than inferred from an
+/// inequality: the buffer each member declines to touch.
+#[test]
+fn the_optional_members_left_off_leave_their_own_whitespace_alone() {
+    let base = json!({ "tabSize": 4, "insertSpaces": true });
+
+    assert_eq!(
+        formatted("let x = 1   \nlet y = 2  \n", base.clone()),
+        "let x = 1   \nlet y = 2  \n",
+        "trailing whitespace the user chose to keep"
+    );
+    assert_eq!(
+        formatted("let x = 1", base.clone()),
+        "let x = 1",
+        "a file the user chose to end without a newline"
+    );
+    assert_eq!(
+        formatted("let x = 1\n\n\n\n\n\n", base.clone()),
+        "let x = 1\n\n\n",
+        "the tail is capped by `max_blank_lines`, which is not an LSP option, \
+         but it is not collapsed to a single newline"
+    );
+}
+
+/// The two rules with no LSP member behind them apply whatever the flags say.
+/// This is the part of the contract that reads as an inconsistency if it is
+/// not written down: "the client asked for nothing" is not "the formatter does
+/// nothing".
+#[test]
+fn the_rules_that_are_not_lsp_options_apply_with_every_member_off() {
+    let all_off = json!({
+        "tabSize": 4,
+        "insertSpaces": true,
+        "trimTrailingWhitespace": false,
+        "insertFinalNewline": false,
+        "trimFinalNewlines": false,
+    });
+    assert_eq!(
+        formatted("\n\n\nlet x = 1\n\n\n\n\n\nlet y = 2\n", all_off),
+        "let x = 1\n\n\nlet y = 2\n",
+        "leading blank lines are dropped and the interior run is capped at two"
+    );
+}
+
+/// Turning one member on does not turn the others on with it.
+#[test]
+fn the_optional_members_are_independent() {
+    let only = |member: &str| {
+        let mut o = json!({ "tabSize": 4, "insertSpaces": true });
+        o[member] = json!(true);
+        o
+    };
+    let src = "let x = 1   \n\n\n\n\nlet y = 2   ";
+
+    assert_eq!(
+        formatted(src, only("trimTrailingWhitespace")),
+        "let x = 1\n\n\nlet y = 2",
+        "the trailing runs go; no final newline is invented"
+    );
+    assert_eq!(
+        formatted(src, only("insertFinalNewline")),
+        "let x = 1   \n\n\nlet y = 2   \n",
+        "a final newline is added and the trailing runs stay"
+    );
+}
+
+/// A request with no `options` object at all is malformed rather than
+/// meaningful, and must not be an error or a panic: the optional members are
+/// absent there like anywhere else, so it behaves as "all off".
+#[test]
+fn a_formatting_request_with_no_options_object_is_answered_not_refused() {
+    let uri = "file:///no-options.saty";
+    let src = "let x = 1   \n\n\n\n\n\n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        json!({
+            "jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting",
+            "params": { "textDocument": { "uri": uri } },
+        }),
+    ]);
+    assert!(reply(&out, 2).get("error").is_none(), "{:#?}", reply(&out, 2));
+    assert_eq!(
+        apply(src, &reply(&out, 2)["result"]),
+        "let x = 1   \n\n\n",
+        "the trailing run stays; only the option-less blank-line cap fires"
+    );
+}
+
+/// `tabSize` is unbounded `uinteger` input and each tab becomes that many
+/// spaces, so it is clamped. Unclamped, a measured `tabSize: 40_000_000`
+/// turned one tab-indented line into a 120 MB `newText`.
+#[test]
+fn an_absurd_tab_size_is_clamped_rather_than_allocated() {
+    let src = "let f x =\n\tx\n";
+    let with = |n: u64| json!({ "tabSize": n, "insertSpaces": true });
+
+    assert_eq!(
+        formatted(src, with(8)),
+        "let f x =\n        x\n",
+        "an ordinary tab size passes through untouched"
+    );
+    assert_eq!(
+        formatted(src, with(0)),
+        "let f x =\n x\n",
+        "zero clamps up to one: a tab stop every zero columns names no column"
+    );
+
+    let huge = formatted(src, with(40_000_000));
+    assert_eq!(
+        huge,
+        format!("let f x =\n{}x\n", " ".repeat(256)),
+        "clamped to the 256-column bound"
+    );
+
+    // The point of the clamp is the size of what goes over the wire, so read
+    // that off the reply rather than off the applied document.
+    let uri = "file:///huge-tab.saty";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(uri, src),
+        formatting_with(2, uri, with(40_000_000)),
+    ]);
+    let text = reply(&out, 2)["result"][0]["newText"]
+        .as_str()
+        .expect("one edit")
+        .len();
+    assert!(text <= 1024, "the edit carried {text} bytes");
+}
+
+/// An empty `contentChanges` list is a NO-OP, not a reason to forget the file.
+///
+/// `full_replacement` used to answer one `Option<&str>`, and `None` meant
+/// "what you hold is stale, drop it" — right for a ranged change under a
+/// Full-sync agreement, wrong for an empty list, where nothing changed and the
+/// server's copy is still exactly the client's. A client sends one after, for
+/// instance, an undo that restored the saved text. The document then answered
+/// `null` to formatting and to every cursor feature, and published no
+/// diagnostics, until the next full change arrived.
+///
+/// Asserted against the ranged case in the same session, because the two share
+/// the code path and the fix is precisely that they stop sharing an answer.
+#[test]
+fn an_empty_change_list_leaves_the_document_open() {
+    let noop = "file:///noop.saty";
+    let ranged = "file:///ranged.saty";
+    let untidy = "let x = 1   \n";
+    let (out, _) = session(&[
+        initialize(1),
+        did_open(noop, untidy),
+        did_open(ranged, untidy),
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": noop, "version": 2 },
+                "contentChanges": [],
+            },
+        }),
+        // The control: a ranged change under Full sync really is unreadable,
+        // and the buffer must still be forgotten.
+        json!({
+            "jsonrpc": "2.0", "method": "textDocument/didChange",
+            "params": {
+                "textDocument": { "uri": ranged, "version": 2 },
+                "contentChanges": [{
+                    "range": { "start": {"line": 0, "character": 0},
+                               "end": {"line": 0, "character": 1} },
+                    "text": "L",
+                }],
+            },
+        }),
+        formatting(2, noop),
+        formatting(3, ranged),
+    ]);
+    assert_eq!(
+        reply(&out, 2)["result"],
+        json!([{
+            "range": { "start": {"line": 0, "character": 9},
+                       "end": {"line": 0, "character": 12} },
+            "newText": "",
+        }]),
+        "an empty change list must leave the document formattable",
+    );
+    assert_eq!(
+        reply(&out, 3)["result"],
+        json!(null),
+        "a ranged change under Full sync must still forget the buffer",
+    );
 }

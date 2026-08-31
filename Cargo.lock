@@ -1529,7 +1529,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustyfi"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-backend"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "newer-type 0.3.0",
  "newer-type-std",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-html"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rustyfi-backend",
  "rustyfi-pdf",
@@ -1570,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-lang"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "hyphenation",
  "image",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-latex"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rustyfi-backend",
  "rustyfi-html",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-loader"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rustyfi-syntax",
  "safegraph 0.1.0",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-lsp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "rustyfi-lang",
  "rustyfi-loader",
@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-pdf"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "lopdf",
  "pdf-writer",
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-satyrographos"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "flate2",
  "serde",
@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "rustyfi-syntax"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "newer-type 0.3.0",
  "newer-type-std",

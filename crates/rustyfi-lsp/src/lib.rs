@@ -5,8 +5,9 @@
 //!
 //! - [`analyze`] and friends ([`analyze_auto`], [`analyze_detected`],
 //!   [`Diag`], [`Severity`], [`LineIndex`]), the cursor-driven half
-//!   ([`build_model`], [`hover`], [`definition`], [`completions`]) and the
-//!   outline ([`document_symbols`]) — **no LSP types, no filesystem, no
+//!   ([`build_model`], [`hover`], [`definition`], [`completions`]), the
+//!   outline ([`document_symbols`]) and the formatter ([`format`],
+//!   [`format_auto`]) — **no LSP types, no filesystem, no
 //!   I/O**, and nothing outside `rustyfi-syntax`.
 //!   This half builds for `wasm32-unknown-unknown`, so the browser
 //!   playground's editor gets exactly the diagnostics the editor on the
@@ -90,10 +91,23 @@
 //! ceiling, but its own CST walk rather than the [`Model`]'s: it wants the
 //! *outline* of every top-level binding, where the cursor half wants whatever
 //! sits under one offset.
+//!
+//! # Formatting
+//!
+//! [`format`] is a fifth reader, and the only one that *writes*. It reads
+//! neither the [`Model`] nor a parse tree — only the token stream, because the
+//! one thing it needs is the lexer's own area stack. That is the whole design:
+//! SATySFi's inline text, block text and math areas turn whitespace into
+//! content (`Token::Space`, `Token::Break`), so the formatter normalises
+//! program-area whitespace and reproduces everything else byte for byte. See
+//! its module comment for exactly what is normalised, what is left alone, and
+//! the corpus measurements behind both lists.
 
 mod analysis;
+mod area;
 mod budget;
 mod features;
+mod format;
 mod line_index;
 mod model;
 mod symbols;
@@ -114,6 +128,7 @@ pub use features::{
     completions, definition, hover, record_label_slot, type_position_slot, Completion,
     Definition, Hover,
 };
+pub use format::{format, format_auto, FormatOptions};
 pub use line_index::{LineIndex, Position};
 pub use model::{build_model, ByteRange, Def, HeaderKind, HeaderRef, Hit, Model, Ns, Opaque, Ref};
 pub use symbols::{

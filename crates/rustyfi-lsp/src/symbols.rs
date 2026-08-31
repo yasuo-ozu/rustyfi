@@ -196,13 +196,11 @@ impl Ranges<'_> {
     fn range(&self, span: Span) -> Range {
         let src = self.0.source();
         let start = floor_boundary(src, span.start.byte);
-        let mut end = floor_boundary(src, span.end.byte.max(start));
-        while end > start {
-            let Some(c) = src[..end].chars().next_back().filter(|c| c.is_whitespace()) else {
-                break;
-            };
-            end -= c.len_utf8();
-        }
+        let end = crate::line_index::trim_trailing_ws(
+            src,
+            start,
+            floor_boundary(src, span.end.byte.max(start)),
+        );
         Range {
             start: self.0.position(start),
             end: self.0.position(end),

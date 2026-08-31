@@ -877,8 +877,9 @@ $ rustyfi lsp                # detect each file's generation from its own text
 $ rustyfi lsp --lang 0.1     # analyse everything as 0.1
 ```
 
-It answers **diagnostics**, **hover**, **go-to-definition**, **completion**
-and **symbols** — for both SATySFi generations, and on half-typed buffers.
+It answers **diagnostics**, **hover**, **go-to-definition**, **completion**,
+**symbols** and **formatting** — for both SATySFi generations, and on
+half-typed buffers.
 
 ### Diagnostics
 
@@ -983,6 +984,78 @@ following `@require:` — so it cannot produce a *wrong* answer, only an
 incomplete one, and it works on a half-typed buffer: it reads the top-level
 declaration sequence one declaration at a time, so an unfinished `let` at the
 bottom of the file costs you that one symbol rather than the whole outline.
+
+### Formatting
+
+`textDocument/formatting` normalises a buffer's whitespace. It is deliberately
+narrow, and the reason is the language rather than a lack of ambition: **in
+SATySFi, whitespace is usually content**. Inside inline text `{ … }`, block
+text `'< … >` and math `${ … }` the lexer turns a run of spaces into inter-word
+glue and a newline into a line-break opportunity, and the CJK adjacency rules
+decide where a line ends from exactly those. Re-wrapping a paragraph does not
+tidy a document; it re-typesets it.
+
+So the formatter rewrites the whitespace **between two program-mode tokens**
+and copies every other byte across untouched. It never alters a byte inside a
+token's span, and that much is span arithmetic rather than care: a candidate
+range runs from one token's last byte to the next token's first, so prose
+characters, string bodies and the whitespace the lexer folded into a token are
+unreachable whatever else goes wrong. It never alters a byte inside a text or
+math area either, but that second half is a property of the *area map* — the
+lexer's own mode stack, replayed over the token stream — and is only as good
+as that replay's fidelity, because inline text, block text and math have
+whitespace and comment gaps of their own that the map is what excludes. So the
+replay is held to being exact (it diverges from the lexer in one bounded,
+deliberately conservative place, documented in `crates/rustyfi-lsp/src/area.rs`),
+a gap holding anything but whitespace and `%` comments makes the whole format
+decline rather than guess, and the corpus sweep checks per file that every byte
+that differs is whitespace the lexer discards.
+
+What it normalises, all of it whitespace the lexer discards:
+
+- trailing whitespace at the end of a line;
+- the final newline — exactly one, with trailing blank lines removed;
+- leading blank lines at the top of the file;
+- runs of blank lines, capped at two;
+- tabs in indentation, expanded to the columns they occupied at the client's
+  `tabSize` (only when the client asked for spaces).
+
+The first four are LSP's own `trimTrailingWhitespace` / `insertFinalNewline` /
+`trimFinalNewlines` options and are honoured as such; `tabSize` and
+`insertSpaces` drive the fifth. That overlap is not a coincidence — those are
+the normalisations the protocol treats as universal precisely because no
+language attaches meaning to them.
+
+What it deliberately does **not** do, measured against the 209 real SATySFi
+files in this repository rather than assumed:
+
+- **It does not re-indent.** Real SATySFi indents continuations by hand, and
+  the hand choice carries information a bracket counter cannot recover — a
+  final argument line indented one step past its function with no bracket
+  opened in between. Reproducing that needs expression-level layout, not a
+  whitespace pass.
+- **It does not collapse runs of spaces.** 1,380 of those files' 24,111 lines
+  carry an interior multi-space run, and sampling them finds alignment in
+  essentially every case: `val font-cjk-gothic   : string * float * float`,
+  `| f init []        = init`, the two-space gap before an end-of-line
+  comment. Squeezing them is what a naive formatter does, and it would rewrite
+  5.7% of the corpus for no gain.
+- **It never inserts whitespace where none was written.** `let x=1` stays.
+  Inserting a space is the one whitespace edit that could re-tokenise a file.
+
+A buffer that does not **lex** is declined outright (`null` on the wire) rather
+than formatted on a guess — the mode stack is what failed, so there is no area
+map to be careful with. A buffer that lexes but does not *parse* is formatted
+normally: formatting reads tokens, not trees. Range formatting is not
+advertised, because a range's own text does not say which lexical area it
+starts in.
+
+The whole bundled and third-party corpus is swept in
+`crates/rustyfi-lsp/tests/format.rs`: every file is formatted and checked for
+idempotence, an identical token stream, byte-identical text and math regions,
+and — the property the other three are blind to — that source and output agree
+once all whitespace is deleted, so no edit can have landed anywhere but in
+whitespace.
 
 ### Configuration
 

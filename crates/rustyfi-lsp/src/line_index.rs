@@ -166,6 +166,27 @@ impl<'s> LineIndex<'s> {
 /// diagnostic's message and its range on different characters.
 pub(crate) use rustyfi_syntax::span::floor_char_boundary as floor_boundary;
 
+/// `end`, moved back over any trailing whitespace, but never past `start`.
+///
+/// The trim is not cosmetic. A `@require: foo` header token spans its own line
+/// terminator (`lex_header` takes it, and both bytes of a CRLF), so an
+/// untrimmed range ends at `{line + 1, 0}` — an editor highlights the line
+/// break, a breadcrumb claims the header contains the first thing on the next
+/// line, and a lex error reported against the header renders with a width that
+/// describes the terminator rather than the header.
+///
+/// Shared rather than copied: `symbols` had this loop and `analysis` did not,
+/// which is precisely why the two rendered the same span differently.
+pub(crate) fn trim_trailing_ws(source: &str, start: usize, mut end: usize) -> usize {
+    while end > start {
+        let Some(c) = source[..end].chars().next_back().filter(|c| c.is_whitespace()) else {
+            break;
+        };
+        end -= c.len_utf8();
+    }
+    end
+}
+
 /// Where the terminator of the line starting at `start` and ending (exclusive
 /// of the next line's first byte) at `next` begins.
 ///

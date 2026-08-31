@@ -21,6 +21,7 @@
 //!   else. It is a short list. A long list of names that may or may not exist
 //!   is what makes a completion popup something to dismiss rather than read.
 
+use crate::area::{area_at, Area};
 use crate::model::{ByteRange, Def, HeaderKind, Hit, Model, Ns, Ref};
 use rustyfi_syntax::{Atom, RustyfiVersion, Token};
 
@@ -202,19 +203,6 @@ pub struct Completion {
     /// The word being replaced, so a client that re-filters gets the same
     /// answer the server did.
     pub range: ByteRange,
-}
-
-/// Which text area a cursor sits in.
-///
-/// Derived from the token stream rather than the parse tree, because the
-/// question has an answer even when the file does not parse — and a file being
-/// typed into usually does not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Area {
-    Program,
-    Inline,
-    Block,
-    Math,
 }
 
 /// Candidates for the cursor.
@@ -438,39 +426,6 @@ fn word_before(source: &str, byte: usize) -> Word {
 
 fn is_name_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
-}
-
-/// Which area the tokens before the cursor leave it in.
-///
-/// A fold over the delimiter tokens, which is faithful because the *lexer*
-/// decides the area with the same stack: `{` after program text is an inline
-/// group and `{` inside math is a math group, and the token it produced
-/// already records which.
-fn area_at(before: &[&Atom]) -> Area {
-    let mut stack = vec![Area::Program];
-    for a in before {
-        match a.slot {
-            Token::BHorzGrp => stack.push(Area::Inline),
-            Token::BVertGrp => stack.push(Area::Block),
-            Token::BMathGrp => stack.push(Area::Math),
-            Token::LParen | Token::BList | Token::BRecord | Token::BPath | Token::OpenModule(_) => {
-                stack.push(Area::Program)
-            }
-            Token::EHorzGrp
-            | Token::EVertGrp
-            | Token::EMathGrp
-            | Token::RParen
-            | Token::EList
-            | Token::ERecord
-            | Token::EPath => {
-                if stack.len() > 1 {
-                    stack.pop();
-                }
-            }
-            _ => {}
-        }
-    }
-    *stack.last().expect("the stack always holds Program")
 }
 
 /// Whether the cursor is writing a type rather than a value.

@@ -1218,3 +1218,52 @@ fn no_token_span_ends_inside_a_crlf() {
         }
     }
 }
+
+/// The whole corpus again, CRLF-ified — the dialect the sweep above cannot see.
+///
+/// Its three properties are each blind to a CRLF bug. Same tokens: `\r\n` and
+/// `\r` lex alike. Text areas byte-identical: the damage is in program gaps.
+/// Idempotent: halving a `\r\n` is a fixed point once done. So `stdja.satyh`
+/// could silently lose a blank line after its last `@require:` — 17225 bytes
+/// to 17223 — and every property still held.
+///
+/// The assertion is therefore the one the LF sweep does not need: a CRLF file
+/// must format to exactly what its LF twin formats to, modulo the endings.
+/// That catches any rule which counts, deletes or fuses a line break
+/// differently depending on how the line ends, which is the entire class.
+#[test]
+fn the_corpus_formats_the_same_with_crlf_endings() {
+    let files: Vec<PathBuf> = corpus_v006().into_iter().chain(corpus_v01()).collect();
+    assert!(files.len() > 20, "expected the bundled corpus, found {}", files.len());
+    let (mut compared, mut differed) = (0usize, 0usize);
+    for path in &files {
+        let Ok(lf) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // Only a file that is purely LF has an unambiguous CRLF twin.
+        if lf.contains('\r') {
+            continue;
+        }
+        let crlf = lf.replace('\n', "\r\n");
+        for version in [RustyfiVersion::V0_0, RustyfiVersion::V0_1] {
+            let (Some(a), Some(b)) = (
+                format(&lf, version, &FormatOptions::default()),
+                format(&crlf, version, &FormatOptions::default()),
+            ) else {
+                continue;
+            };
+            compared += 1;
+            if b.replace("\r\n", "\n") != a {
+                differed += 1;
+                assert_eq!(
+                    b.replace("\r\n", "\n"),
+                    a,
+                    "{}: formatting differs between LF and CRLF under {version:?}",
+                    path.display(),
+                );
+            }
+        }
+    }
+    assert!(compared > 100, "only {compared} files compared — the sweep has shrunk");
+    assert_eq!(differed, 0);
+}

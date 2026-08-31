@@ -811,6 +811,23 @@ fn format_options(options: Option<&Value>) -> crate::FormatOptions {
 /// in the two strings, and a byte position in valid UTF-8 is a boundary
 /// exactly when the byte there is not a continuation byte.
 fn minimal_edit(old: &str, new: &str) -> Value {
+    let (start, old_end, new_end) = minimal_edit_span(old, new);
+    json!({
+        "range": lsp_range(old, ByteRange::new(start, old_end)),
+        "newText": &new[start..new_end],
+    })
+}
+
+/// [`minimal_edit`]'s arithmetic, as byte offsets: replace `old[start..
+/// old_end]` with `new[start..new_end]`.
+///
+/// Split out from the JSON so the property that matters can be STATED —
+/// `old[..start] + new[start..new_end] + old[old_end..] == new`. Against a
+/// `Value` carrying a UTF-16 line/character range that round trip cannot be
+/// written, which is why this function was the one link between the formatter
+/// and the client's buffer that nothing exercised: a wrong cut here does not
+/// produce tidy-but-odd whitespace, it silently deletes the user's text.
+fn minimal_edit_span(old: &str, new: &str) -> (usize, usize, usize) {
     let (ob, nb) = (old.as_bytes(), new.as_bytes());
     let mut start = 0;
     while start < ob.len() && start < nb.len() && ob[start] == nb[start] {
@@ -831,10 +848,7 @@ fn minimal_edit(old: &str, new: &str) -> Value {
         back -= 1;
     }
 
-    json!({
-        "range": lsp_range(old, ByteRange::new(start, ob.len() - back)),
-        "newText": &new[start..nb.len() - back],
-    })
+    (start, ob.len() - back, nb.len() - back)
 }
 
 /// `file:///a/b%20c.saty` → `/a/b c.saty`.
@@ -997,5 +1011,93 @@ fn full_replacement(params: &Value) -> Change<'_> {
     match str_field(last, "text") {
         Some(text) => Change::Full(text),
         None => Change::Unreadable,
+    }
+}
+
+#[cfg(test)]
+mod minimal_edit_tests {
+    use super::minimal_edit_span;
+
+    /// Applying the edit to `old` must reconstruct `new`, and neither cut may
+    /// land inside a character — in EITHER string.
+    ///
+    /// This is the one link between a correct `format` output and the client's
+    /// buffer that nothing exercised. A wrong cut here does not produce
+    /// tidy-but-odd whitespace; it silently deletes the user's text, or panics
+    /// on a slice that is not a char boundary.
+    fn check(old: &str, new: &str) {
+        let (start, old_end, new_end) = minimal_edit_span(old, new);
+        assert!(start <= old_end && old_end <= old.len(), "{old:?} -> {new:?}");
+        assert!(start <= new_end && new_end <= new.len(), "{old:?} -> {new:?}");
+        for (s, at) in [(old, start), (old, old_end), (new, start), (new, new_end)] {
+            assert!(
+                s.is_char_boundary(at),
+                "cut at {at} is inside a character of {s:?} ({old:?} -> {new:?})",
+            );
+        }
+        let applied = format!("{}{}{}", &old[..start], &new[start..new_end], &old[old_end..]);
+        assert_eq!(applied, new, "applying the edit to {old:?} did not give {new:?}");
+    }
+
+    /// A deterministic xorshift, so a failure is reproducible from the seed
+    /// printed in the panic rather than from a lucky rerun.
+    fn rng(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// Deliberately hostile: multi-byte and astral characters (so a cut can
+    /// land mid-character), both line endings, and characters that repeat so
+    /// that long common prefixes and suffixes actually occur.
+    ///
+    /// `あ` (E3 81 82) and `も` (E3 82 82) are in here as a PAIR, and that is
+    /// the point of them: they share a trailing byte without being the same
+    /// character, which is what makes the byte-wise suffix scan stop in the
+    /// middle of one and forces the rounding below it to matter. Without such
+    /// a pair the rounding direction is unobservable — a mutation that rounds
+    /// the cut the wrong way survives 200 000 cases, because every cut lands
+    /// on a boundary anyway. `🎉`/`🎊` (F0 9F 8E 89 / 8A) are the astral
+    /// version of the same trick.
+    const ALPHABET: [&str; 14] = [
+        "a", "a", "b", " ", "\n", "\r\n", "\t", "%", "あ", "も", "漢", "🎉", "🎊", "é",
+    ];
+
+    fn build(state: &mut u64, max: usize) -> String {
+        let n = (rng(state) as usize) % (max + 1);
+        (0..n).map(|_| ALPHABET[(rng(state) as usize) % ALPHABET.len()]).collect()
+    }
+
+    #[test]
+    fn applying_the_edit_reconstructs_the_new_text() {
+        // The shapes the generator is unlikely to hit on its own.
+        for (old, new) in [
+            ("", ""), ("", "x"), ("x", ""), ("x", "x"),
+            ("あ", "い"), ("🎉", "🎊"), ("a🎉b", "a🎉c"), ("a🎉b", "ab"),
+            ("\r\n", "\n"), ("\n", "\r\n"), ("aaa", "aa"), ("aa", "aaa"),
+            ("漢字", "漢"), ("漢", "漢字"),
+        ] {
+            check(old, new);
+        }
+        let mut state = 0x5eed_1234_9abc_def0u64;
+        for _ in 0..200_000 {
+            let old = build(&mut state, 12);
+            // Half the time edit `old` rather than draw independently, so long
+            // shared prefixes and suffixes — the case the function exists for —
+            // are actually reached.
+            let new = match rng(&mut state) % 2 {
+                0 => build(&mut state, 12),
+                _ => {
+                    let mut n = old.clone();
+                    n.push_str(&build(&mut state, 3));
+                    let cut = (rng(&mut state) as usize) % (n.len() + 1);
+                    let cut = (0..=cut).rev().find(|c| n.is_char_boundary(*c)).unwrap_or(0);
+                    n.truncate(cut);
+                    n
+                }
+            };
+            check(&old, &new);
+        }
     }
 }

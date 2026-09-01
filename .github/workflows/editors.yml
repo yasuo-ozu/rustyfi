@@ -1,0 +1,362 @@
+name: Editor plugins
+
+# CI for the two editor integrations, which the Rust workflow (`ci.yml`) does
+# not touch at all:
+#
+#   editors/vim     Vimscript + Lua, driven by REAL headless editors
+#   editors/vscode  TypeScript, `tsc` + `node --test`
+#
+# Both suites shell out to the `rustyfi` binary — the vim preview compiles a
+# document, the vscode integration tests assert the `fmt` exit-code contract
+# against the real CLI — so the binary is the expensive part. It is built ONCE
+# here, in its own job, and handed to both plugin jobs as an artifact. That is
+# also why the plugin jobs need no Rust toolchain: they only need the file.
+#
+# Not reusing `ci.yml`'s cache: that job builds the DEBUG profile under its own
+# `Swatinem/rust-cache` key (the action keys per job by default), while both
+# plugin suites look for `target/release/rustyfi`. Giving two jobs the same
+# `shared-key` for two different profiles would just make them evict each
+# other, so this workflow keeps its own release-profile key instead.
+#
+# Deliberately NOT run for every Rust push — see the `paths:` filters below and
+# the per-job split in `changes`.
+
+# The two path lists below are duplicated on purpose: GitHub Actions does not
+# expand YAML anchors, so `&x`/`*x` would be silently wrong here. Keep them in
+# step with each other and with the per-job filters in `changes`.
+on:
+  push:
+    paths:
+      - 'editors/**'
+      # The plugins drive `rustyfi fmt` and `rustyfi lsp`: the language server
+      # AND the formatter both live in rustyfi-lsp, and the CLI crate owns the
+      # argv/exit-code contract that `integration.test.ts` pins. A change to
+      # either can break a plugin without breaking a single Rust test.
+      - 'crates/rustyfi-lsp/**'
+      - 'crates/rustyfi/**'
+      - '.github/workflows/editors.yml'
+  pull_request:
+    paths:
+      - 'editors/**'
+      - 'crates/rustyfi-lsp/**'
+      - 'crates/rustyfi/**'
+      - '.github/workflows/editors.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The `paths:` above keep a Rust-only push out of this workflow entirely;
+  # this job is the second cut, so that a change under editors/vim/ does not
+  # also spend a runner on `npm ci`. A shared dependency (rustyfi-lsp, the CLI,
+  # this file) matches BOTH filters and runs both.
+  changes:
+    name: which plugin changed
+    runs-on: ubuntu-latest
+    outputs:
+      vim: ${{ steps.decide.outputs.vim }}
+      vscode: ${{ steps.decide.outputs.vscode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        # It needs a base to diff against, which a manual run has not got.
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            vim:
+              - 'editors/vim/**'
+              - 'crates/rustyfi-lsp/**'
+              - 'crates/rustyfi/**'
+              - '.github/workflows/editors.yml'
+            vscode:
+              - 'editors/vscode/**'
+              - 'crates/rustyfi-lsp/**'
+              - 'crates/rustyfi/**'
+              - '.github/workflows/editors.yml'
+      - name: Decide
+        id: decide
+        # A manual run means "test the plugins", so it runs both rather than
+        # neither: this is the one place where guessing wrong should cost a
+        # runner, not a missed regression.
+        env:
+          EVENT: ${{ github.event_name }}
+          F_VIM: ${{ steps.filter.outputs.vim }}
+          F_VSCODE: ${{ steps.filter.outputs.vscode }}
+        run: |
+          set -eu
+          if [ "$EVENT" = workflow_dispatch ]; then
+            vim=true; vscode=true
+          else
+            vim=$F_VIM; vscode=$F_VSCODE
+            # Both plugin jobs are gated on `== 'true'`, so an EMPTY output
+            # (the action failing open, or renaming its outputs) would skip
+            # both of them and report the workflow green having tested
+            # nothing. Refuse that reading rather than serve it.
+            case "$vim:$vscode" in
+              true:true|true:false|false:true|false:false) ;;
+              *) echo "paths-filter gave no usable outputs (vim='$vim' vscode='$vscode')" >&2
+                 exit 1 ;;
+            esac
+          fi
+          # Echoed as well as written, so that "both plugin jobs were skipped"
+          # is readable here rather than being a mystery on the summary page.
+          echo "decision: vim=$vim vscode=$vscode"
+          echo "vim=$vim"       >> "$GITHUB_OUTPUT"
+          echo "vscode=$vscode" >> "$GITHUB_OUTPUT"
+
+  binary:
+    name: rustyfi (release binary)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Its own key, shared by nothing: this is the only job in the repo
+          # that builds the release profile (see the header).
+          shared-key: editors-release
+      # Both suites hard-code `target/release/rustyfi` as their default, so the
+      # profile is not a free choice.
+      - name: Build the CLI (release)
+        run: cargo build --release --bin rustyfi
+      - name: Upload it
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustyfi-release
+          path: target/release/rustyfi
+          if-no-files-found: error
+          retention-days: 1
+
+  vim:
+    name: editors/vim (Vim + Neovim)
+    needs: [changes, binary]
+    if: needs.changes.outputs.vim == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch the CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: rustyfi-release
+          path: target/release
+      - name: Make it executable
+        # actions/upload-artifact does not preserve the mode bit.
+        run: |
+          chmod +x target/release/rustyfi
+          ./target/release/rustyfi --version
+
+      # THE POINT OF THIS JOB. On the machine the plugin was written on, `vim`
+      # is a symlink to Neovim, so run.sh prints its "no real Vim found" note
+      # and the Vim 8 half of autoload/rustyfi/job.vim (job_start(), out_cb/
+      # err_cb/exit_cb/close_cb, the "job object stays queryable after exit"
+      # difference) never executes. Here it does. The coverage step at the end
+      # of this job FAILS if that note is what happens instead.
+      #
+      # WHAT VERSION: whatever the runner image's apt ships — Vim 9.x today.
+      # The plugin declares a minimum of Vim 8.2 and that exact version is NOT
+      # covered here: no prebuilt 8.2 exists any more (vim/vim-appimage keeps
+      # only recent 9.2 releases) and building 8.2.1522 from source against a
+      # current toolchain does not configure cleanly, so pinning it would be a
+      # claim this workflow cannot honour. What IS asserted below is that a
+      # real Vim ran, that it is >= 8.2, and that it has +job — i.e. the branch
+      # is exercised, on a newer Vim than the floor. If pinning the floor ever
+      # becomes worth the runner time, `rhysd/action-setup-vim` is the route.
+      - name: Install a real Vim
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends vim
+
+      # Neovim, pinned rather than apt's, because the two versions that matter
+      # are the two the plugin claims:
+      #   0.9.5  the declared MINIMUM (`plugin/rustyfi.vim` refuses below 0.9)
+      #          — and the version for which test/lsp.vim's `native` route is
+      #          SUPPOSED to skip, which only means something if a version that
+      #          does not skip also runs;
+      #   0.11.6 the runtime `lsp/rustyfi.lua` route (needs 0.11+).
+      # Note the release ASSET NAME changed between them (`nvim-linux64` ->
+      # `nvim-linux-x86_64`); that is not a typo below.
+      - name: Install pinned Neovim 0.9.5 and 0.11.6
+        run: |
+          set -eu
+          d="$RUNNER_TEMP/nvim"; mkdir -p "$d"
+          curl -sSfL -o "$d/n09.tar.gz" \
+            https://github.com/neovim/neovim/releases/download/v0.9.5/nvim-linux64.tar.gz
+          curl -sSfL -o "$d/n011.tar.gz" \
+            https://github.com/neovim/neovim/releases/download/v0.11.6/nvim-linux-x86_64.tar.gz
+          tar -xzf "$d/n09.tar.gz"  -C "$d"
+          tar -xzf "$d/n011.tar.gz" -C "$d"
+          # 0.11 is the `nvim` on PATH, so run.sh gives it the full treatment
+          # (run.vim + lsp.vim in both `setup` and `native` modes).
+          echo "$d/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+          # 0.9 rides in through RUSTYFI_EXTRA_VIM, which run.sh also routes
+          # through its is_nvim() branch, so it gets run.vim + lsp.vim too.
+          echo "NVIM_09=$d/nvim-linux64/bin/nvim" >> "$GITHUB_ENV"
+
+      # run.sh skips an unreadable RUSTYFI_EXTRA_VIM entry SILENTLY (`[ -x
+      # "$extra" ] && run_one "$extra"`), so a wrong path here would quietly
+      # halve the matrix. Check before, not after.
+      - name: Check the editors are what this job thinks they are
+        run: |
+          set -eu
+          fail=0
+          echo "vim:  $(vim --version | head -1)"
+          echo "nvim: $(nvim --version | head -1)"
+          echo "0.9:  $("$NVIM_09" --version | head -1)"
+          if vim --version | head -1 | grep -qi nvim; then
+            echo "FAIL: 'vim' on PATH is Neovim, not Vim" >&2; fail=1
+          fi
+          # The declared floor. `VIM - Vi IMproved 9.1 (...` -> 9.1
+          v=$(vim --version | head -1 | sed -n 's/^VIM - Vi IMproved \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+          case "$v" in
+            '') echo "FAIL: could not read the Vim version" >&2; fail=1 ;;
+            8.0|8.1) echo "FAIL: Vim $v is below the declared minimum 8.2" >&2; fail=1 ;;
+            *) echo "Vim $v (>= the declared minimum 8.2)" ;;
+          esac
+          # Without +job the Vim 8 branch of autoload/rustyfi/job.vim throws
+          # E117 rather than being tested. Install `vim-nox` instead if the
+          # image's `vim` ever loses it.
+          vim --version | grep -q '+job' || { echo "FAIL: this Vim has no +job" >&2; fail=1; }
+          test -x "$NVIM_09" || { echo "FAIL: $NVIM_09 is not executable" >&2; fail=1; }
+          exit "$fail"
+
+      # No fonts. `download-fonts.sh` is NOT run here, unlike the layout jobs in
+      # ci.yml: the preview compiles to Markdown, which needs metrics but not
+      # embeddable faces, and it was measured to succeed with dist/fonts and
+      # dist/hash empty (exactly a fresh checkout — both are gitignored). So
+      # this job asserts no measured number and cannot hit the "CI has no
+      # fonts" trap.
+      - name: editors/vim/test/run.sh
+        env:
+          RUSTYFI_EXTRA_VIM: ${{ env.NVIM_09 }}
+        run: |
+          set -o pipefail
+          editors/vim/test/run.sh 2>&1 | tee "$RUNNER_TEMP/vim-test.log"
+
+      # A green run.sh is not by itself proof that anything ran: it exits 0
+      # having tested Neovim alone, and prints only a note about it. These are
+      # the coverage assertions that make the note impossible to miss.
+      - name: What actually ran
+        if: always()
+        run: |
+          set -eu
+          log="$RUNNER_TEMP/vim-test.log"
+          test -f "$log" || { echo "no log — run.sh did not start" >&2; exit 1; }
+          echo '--- editors run.sh reported testing:'
+          grep '^=== ' "$log" || true
+          fail=0
+          need() {
+            grep -Eq "$1" "$log" || { echo "MISSING COVERAGE: $2" >&2; fail=1; }
+          }
+          need '^=== VIM - Vi IMproved' 'a real Vim (the job_start() branch)'
+          need '^=== NVIM v0\.9\.'      'Neovim 0.9, the declared minimum'
+          need '^=== NVIM v0\.11\.'     'Neovim 0.11, the native lsp/ route'
+          if grep -q 'no real Vim found' "$log"; then
+            echo "MISSING COVERAGE: run.sh fell back to its no-real-Vim note" >&2
+            fail=1
+          fi
+          # lsp.vim's `native` mode must have run for real at least once: it is
+          # attempted for every Neovim and self-skips below 0.11, so with two
+          # Neovims we expect two attempts and at most one skip.
+          modes=$(grep -c -- '-- mode: native' "$log" || true)
+          skips=$(grep -c 'native lsp/ route needs Neovim 0.11' "$log" || true)
+          echo "native lsp/ route: $modes attempt(s), $skips skip(s)"
+          if [ "$modes" -lt 2 ] || [ "$skips" -gt 1 ]; then
+            echo "MISSING COVERAGE: the native lsp/ route never ran unskipped" >&2
+            fail=1
+          fi
+          exit "$fail"
+
+  vscode:
+    name: editors/vscode (TypeScript)
+    needs: [changes, binary]
+    if: needs.changes.outputs.vscode == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch the CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: rustyfi-release
+          path: target/release
+      - name: Make it executable
+        working-directory: ${{ github.workspace }}
+        run: |
+          chmod +x target/release/rustyfi
+          ./target/release/rustyfi --version
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          # The extension declares `engines.vscode ^1.85`, whose Electron ships
+          # Node 18; 20 is the nearest LTS the toolchain (`@vscode/vsce` needs
+          # >= 20) also accepts.
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      # `package-lock.json` is committed, so this is `ci` (exact, reproducible)
+      # rather than `install`.
+      - name: npm ci
+        run: npm ci
+      - name: npm run compile
+        # Separate from `npm test` (whose `pretest` compiles anyway) so that a
+        # type error reads as a compile failure rather than a test failure.
+        run: npm run compile
+
+      # BOTH `describe` blocks in src/test/integration.test.ts SKIP rather than
+      # fail when their prerequisite is missing — the binary at
+      # `<repo>/target/release/rustyfi` (hard-coded from __dirname; there is no
+      # env override, unlike the vim suite's RUSTYFI_TEST_BIN) and the corpus
+      # document the preview case compiles. That is right for a fresh clone and
+      # wrong for CI, where a silent skip would turn the only tests that touch
+      # the real compiler into nothing. Assert both prerequisites first.
+      - name: The integration tests must not silently skip
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eu
+          test -x target/release/rustyfi
+          test -f layout-tests/corpus/latexcmds/doc/latexcmds-doc.saty
+          grep -q '^@import:' layout-tests/corpus/latexcmds/doc/latexcmds-doc.saty
+
+      - name: npm test
+        run: npm test
+
+      # Cheap, and it catches the packaging mistakes nothing else here would:
+      # a file excluded by .vscodeignore that the extension needs at runtime, a
+      # malformed `contributes` block, a bad `main`. It does NOT fail the job
+      # when vsce itself cannot be obtained (npx reaches the registry, and a
+      # registry outage is not a defect in this extension) — but once vsce
+      # runs, a packaging error IS a failure, because that is the signal.
+      # Pinned to the current major so a vsce 4 cannot silently change what
+      # "packages cleanly" means.
+      - name: Package the .vsix (smoke test)
+        id: vsix
+        run: |
+          set -eu
+          if ! npx --yes @vscode/vsce@3 --version; then
+            echo "note: @vscode/vsce unavailable — packaging NOT checked" >&2
+            exit 0
+          fi
+          npx --yes @vscode/vsce@3 package --out "$RUNNER_TEMP/rustyfi.vsix"
+          ls -l "$RUNNER_TEMP/rustyfi.vsix"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+      - name: Upload the .vsix
+        if: steps.vsix.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustyfi-vsix
+          path: ${{ runner.temp }}/rustyfi.vsix
+          if-no-files-found: error

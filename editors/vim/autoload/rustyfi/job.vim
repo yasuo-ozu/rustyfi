@@ -124,8 +124,15 @@ function! rustyfi#job#running(handle) abort
   return job_status(a:handle) ==# 'run'
 endfunction
 
-" Stop a job and guarantee its on_exit will NOT be delivered: a stopped render
-" must not overwrite the pane a newer render is about to fill.
+" Stop a job.
+"
+" On VIM 8 the callbacks are dropped first, so on_exit is guaranteed NOT to be
+" delivered.  On NEOVIM there is no way to unregister a running job's
+" callbacks: jobstop() sends the signal and on_exit still arrives, carrying the
+" signal's exit code.  So a caller must NOT rely on silence here -- the preview
+" carries its own sequence number and drops a stale delivery (s:OnExit).  This
+" asymmetry is why the stale-guard bug in that function only ever fired on
+" Neovim, and why the guard has to exist at all.
 function! rustyfi#job#stop(handle) abort
   if empty(a:handle) || a:handle is 0
     return

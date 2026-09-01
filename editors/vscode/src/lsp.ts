@@ -40,13 +40,48 @@ class RustyfiLanguageClient extends LanguageClient {
 }
 
 let client: RustyfiLanguageClient | undefined;
+let watcher: vscode.FileSystemWatcher | undefined;
 
 export function isRunning(): boolean {
   return client !== undefined;
 }
 
-export async function start(out: vscode.OutputChannel): Promise<void> {
-  await stop();
+/**
+ * Start and stop are SERIALIZED, because `client` is only assigned after the
+ * `await c.start()` handshake completes and every caller is asynchronous.
+ *
+ * `activate()` does `void lsp.start(output)` and does not await it; a
+ * configuration change, or a second click on "rustyfi: Restart Language
+ * Server", calls `start()` again while the first is still mid-handshake.  The
+ * second call's `await stopInner()` then sees `client === undefined`, stops
+ * nothing, and both handshakes finish -- leaving TWO `rustyfi lsp` processes
+ * running with only the last one in `client`.  The other is unreachable: no
+ * later restart and not even `deactivate()` can stop it, so it lives as long
+ * as the window does, holding its pipes and its file-system watcher.
+ *
+ * A single-slot queue is enough; there is one server and the operations are
+ * short.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const next = queue.then(fn, fn);
+  queue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+export function start(out: vscode.OutputChannel): Promise<void> {
+  return serialize(() => startInner(out));
+}
+
+export function stop(): Promise<void> {
+  return serialize(() => stopInner());
+}
+
+async function startInner(out: vscode.OutputChannel): Promise<void> {
+  await stopInner();
 
   const cfg = vscode.workspace.getConfiguration('rustyfi');
   if (!cfg.get<boolean>('lsp.enable', true)) {
@@ -70,14 +105,17 @@ export async function start(out: vscode.OutputChannel): Promise<void> {
     debug: { command: bin.path, args: ['lsp'] },
   };
 
+  // Owned by this module and disposed in `stopInner`: the client subscribes to
+  // the watcher but does not own it, so one was leaked per start -- and start
+  // runs again on every settings change and every manual restart.
+  watcher = vscode.workspace.createFileSystemWatcher('**/*.{saty,satyh,satyg}');
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'satysfi' }],
     outputChannel: out,
     // Keep the channel from stealing focus every time the server logs.
     revealOutputChannelOn: 4 /* RevealOutputChannelOn.Never */,
-    synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{saty,satyh,satyg}'),
-    },
+    synchronize: { fileEvents: watcher },
   };
 
   suppressServerFormatting =
@@ -102,9 +140,18 @@ export async function start(out: vscode.OutputChannel): Promise<void> {
   }
 }
 
-export async function stop(): Promise<void> {
+async function stopInner(): Promise<void> {
   const c = client;
+  const w = watcher;
   client = undefined;
+  watcher = undefined;
+  if (w) {
+    try {
+      w.dispose();
+    } catch {
+      /* already gone */
+    }
+  }
   if (!c) return;
   try {
     await c.stop();

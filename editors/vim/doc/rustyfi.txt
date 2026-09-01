@@ -128,6 +128,17 @@ identifiers are one word.
 ==============================================================================
 5. COMMANDS                                                 *rustyfi-commands*
 
+                                                              *rustyfi-build*
+A note on BUILD versus PREVIEW, because they compile the same document and
+answer different questions.
+
+The preview renders a scratch copy of the BUFFER, continuously, into a split;
+it is a glance, and its errors go to a status line.  A build compiles the
+file ON DISK, once, writes the PDF where the author expects it, and reports
+failures through the quickfix list -- because a build failure is a thing you
+fix, and |:cnext| is how that is done here.
+
+
                                                                 *:RustyfiFmt*
 :RustyfiFmt             Format the current buffer.  |rustyfi-fmt|
 
@@ -139,6 +150,27 @@ identifiers are one word.
                                                     *:RustyfiFmtOnSaveToggle*
 :RustyfiFmtOnSaveToggle Toggle format-on-save for THIS buffer, overriding
                         `g:rustyfi_fmt_on_save`.
+
+                                                              *:RustyfiBuild*
+:RustyfiBuild           Compile the document to a PDF beside it, the way a
+                        real build does: the FILE ON DISK is compiled, so
+                        `@import:` resolves exactly as it will for anyone
+                        else, and the output path is the compiler's own
+                        default.  The buffer is written first unless
+                        `g:rustyfi_build_autowrite` is 0, in which case a
+                        modified buffer refuses rather than compiling stale
+                        bytes.
+
+                        A failure fills the |quickfix| list, so |:cnext| walks
+                        the errors; `g:rustyfi_build_copen` (default 1) opens
+                        the window.  A success CLEARS the list, so you never
+                        chase an error you already fixed.
+                        |rustyfi-build|
+
+                                                          *:RustyfiBuildOpen*
+:RustyfiBuildOpen       As |:RustyfiBuild|, then hand the PDF to the system
+                        viewer (`xdg-open`, `open`, or `start`; override with
+                        `g:rustyfi_build_opener`).
 
                                                             *:RustyfiPreview*
 :RustyfiPreview         Open the live preview split for the current buffer.

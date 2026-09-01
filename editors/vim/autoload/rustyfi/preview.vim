@@ -60,6 +60,21 @@ function! rustyfi#preview#open() abort
   endif
   let s:state.bin = l:bin
   if rustyfi#preview#is_open()
+    " There is ONE preview, and it was pinned to whichever buffer opened it.
+    " Asking for a preview from a DIFFERENT document used to re-render the old
+    " one and report `ok`, so the pane showed a file the user was not editing
+    " and typing in the new one changed nothing -- with no message anywhere.
+    " Re-point it instead.  (Called from inside the pane itself, `q`/`R`, the
+    " current buffer IS the preview: leave the target alone.)
+    let l:here = bufnr('%')
+    if l:here != s:state.srcbuf && l:here != s:state.prevbuf
+      call s:CancelJob()
+      call s:CleanTemps()
+      let s:state.srcbuf = l:here
+      let s:state.rendered = 0
+      let s:state.errors = []
+      call s:InstallAutocmds()
+    endif
     call rustyfi#preview#render(1)
     return
   endif
@@ -219,9 +234,19 @@ function! s:WriteScratch() abort
   if s:state.tmpsrc !=# '' && s:state.tmpsrc !=# l:path
     call delete(s:state.tmpsrc)
   endif
-  if writefile(l:lines, l:path) != 0
-    return ['', '']
-  endif
+  " `writefile()` does not merely return -1 on failure, it raises E482 -- and
+  " this function is `abort`, so the raise unwound it and the caller's
+  " `let [l:src, l:dir] = ...` then died on E714 (List required), twice per
+  " render, forever, in any directory the user cannot write to (a read-only
+  " checkout, a document opened from a package tree).  Catch it, and report
+  " through the status line like every other failure.
+  try
+    if writefile(l:lines, l:path) != 0
+      return ['', l:dir]
+    endif
+  catch
+    return ['', l:dir]
+  endtry
   let s:state.tmpsrc = l:path
   return [l:path, l:dir]
 endfunction
@@ -239,8 +264,11 @@ function! rustyfi#preview#render(force) abort
 
   let [l:src, l:dir] = s:WriteScratch()
   if l:src ==# ''
-    call s:SetStatus('cannot write preview scratch file into ' . l:dir,
-          \ ['rustyfi preview: writefile() failed for ' . l:src])
+    call s:SetStatus('cannot write the preview scratch file into ' . l:dir,
+          \ ['rustyfi preview: could not write a scratch copy of the buffer into '
+          \  . l:dir . ' -- the preview compiles a file beside the real document so'
+          \  . ' that @import: and @require: resolve the way they do for the real'
+          \  . ' one, and that directory is not writable.'])
     return
   endif
 
@@ -273,8 +301,16 @@ function! rustyfi#preview#render(force) abort
 endfunction
 
 function! s:OnExit(seq, code, out, err) abort
+  " Superseded by a newer render: drop this result.
+  "
+  " The comment is on its OWN line on purpose.  `:return` takes an
+  " expression, so a trailing `" ...` is parsed as the start of a STRING and
+  " not as a comment -- it raised `E114: Missing quote` out of every job
+  " callback a supersede reached, which on Neovim is every keystroke burst
+  " that outruns a compile (Vim 8 never saw it: its job#stop drops the
+  " callbacks before killing, Neovim's jobstop still delivers on_exit).
   if a:seq != s:state.seq
-    return  " superseded by a newer render
+    return
   endif
   let s:state.job = 0
   call delete(s:state.tmpout . '.aux')
@@ -317,8 +353,13 @@ function! s:Unscratch(msg) abort
   endif
   let l:real = bufname(s:state.srcbuf)
   let l:real = l:real ==# '' ? '[buffer]' : fnamemodify(l:real, ':t')
-  let l:msg = substitute(a:msg, '\V' . escape(s:state.tmpsrc, '\'), l:real, 'g')
-  return substitute(l:msg, '\V' . escape(fnamemodify(s:state.tmpsrc, ':t'), '\'), l:real, 'g')
+  " The REPLACEMENT half of substitute() has its own metacharacters: `&` is
+  " the whole match and `~` is the previous replacement.  Unescaped, a file
+  " called `Q&A.saty` spliced the scratch path back INTO the message this
+  " function exists to take it out of.
+  let l:sub = escape(l:real, '\&~')
+  let l:msg = substitute(a:msg, '\V' . escape(s:state.tmpsrc, '\'), l:sub, 'g')
+  return substitute(l:msg, '\V' . escape(fnamemodify(s:state.tmpsrc, ':t'), '\'), l:sub, 'g')
 endfunction
 
 function! s:Fill(lines) abort

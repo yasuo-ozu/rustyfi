@@ -348,6 +348,133 @@ call s:Ok(!rustyfi#preview#is_open(), 'source BufUnload closed the preview')
 call s:Ok(!filereadable(s:ts), 'source BufUnload removed the scratch source')
 
 " ==========================================================================
+call s:Say('== a superseded render is dropped SILENTLY')
+" ==========================================================================
+" `s:OnExit`'s stale-sequence guard was written `return  " superseded ...`.
+" `:return` takes an expression, so that trailing text is the start of a
+" STRING, not a comment: every superseded render raised `E114: Missing quote`
+" out of a job callback -- an error banner and a hit-enter prompt on every
+" typing burst that outran a compile.  Neovim only: Vim 8's job#stop drops the
+" callbacks before killing, Neovim's jobstop still delivers on_exit.
+execute 'edit!' fnameescape(s:Fixture('imports.saty'))
+RustyfiPreview
+call s:Ok(s:Wait(function('s:PreviewOk'), 30000), 'first render landed (else the next step is vacuous)')
+let v:errmsg = ''
+" Two renders back to back: the first is killed mid-flight and its on_exit
+" still arrives, carrying a stale seq.
+call rustyfi#preview#render(1)
+sleep 100m
+call rustyfi#preview#render(1)
+call s:Ok(s:Wait({-> v:errmsg !=# ''}, 4000) || 1, 'waited for a stale callback')
+call s:Eq(v:errmsg, '', 'a superseded render raised no error')
+call s:Ok(execute('messages') !~# 'E114', 'no E114 in the message history')
+RustyfiPreviewClose
+bwipeout!
+
+" ==========================================================================
+call s:Say('== :RustyfiPreview from a DIFFERENT buffer re-points the pane')
+" ==========================================================================
+" There is one preview and it was pinned to the buffer that opened it.  Asking
+" for a preview of another document re-rendered the FIRST one and reported
+" `ok`: the pane showed a file the user was not editing, typing in the new one
+" did nothing, and nothing said so.
+let s:two = tempname()
+call mkdir(s:two, 'p')
+call writefile(readfile(s:Fixture('imports.saty')), s:two . '/first.saty')
+call writefile(readfile(s:Fixture('helper.satyh')), s:two . '/helper.satyh')
+call writefile(readfile(s:Fixture('imports.saty')), s:two . '/second.saty')
+execute 'edit!' fnameescape(s:two . '/first.saty')
+let s:firstbuf = bufnr('%')
+RustyfiPreview
+call s:Ok(s:Wait(function('s:PreviewOk'), 30000), 'preview of the first document rendered')
+let s:firstscratch = rustyfi#preview#state().tmpsrc
+execute 'edit!' fnameescape(s:two . '/second.saty')
+let s:secondbuf = bufnr('%')
+RustyfiPreview
+call s:Eq(rustyfi#preview#state().srcbuf, s:secondbuf,
+      \ 'the preview follows the buffer it was asked from')
+call s:Ok(!filereadable(s:firstscratch), 'the first document''s scratch file was cleaned up')
+call s:Ok(s:Wait(function('s:PreviewOk'), 30000), 'the re-pointed preview rendered')
+call s:Ok(rustyfi#preview#state().tmpsrc =~# 'second',
+      \ 'the scratch file now belongs to the second document')
+" ... and the pane really does follow the new buffer's edits.
+call append(line('$') - 1, '  +p{ SECOND-DOCUMENT-SENTINEL. }')
+doautocmd TextChanged
+call s:Ok(s:Wait({-> join(s:PreviewText(), "\n") =~# 'SECOND-DOCUMENT-SENTINEL'}, 30000),
+      \ 'an edit in the re-pointed buffer reaches the pane')
+RustyfiPreviewClose
+bwipeout!
+execute 'bwipeout!' s:firstbuf
+
+" ==========================================================================
+call s:Say('== a document name with substitute() metacharacters in it')
+" ==========================================================================
+" s:Unscratch folds the scratch file's name back to the real one with
+" substitute(), and the REPLACEMENT half has its own metacharacters: `&` is the
+" whole match, `~` is the previous replacement.  Unescaped, a file called
+" `Q&A.saty` had the scratch path spliced back INTO the diagnostic that
+" function exists to take it out of.
+let s:amp = tempname()
+call mkdir(s:amp, 'p')
+call writefile(readfile(s:Fixture('imports.saty')), s:amp . '/Q&A~R.saty')
+call writefile(readfile(s:Fixture('helper.satyh')), s:amp . '/helper.satyh')
+execute 'edit!' fnameescape(s:amp . '/Q&A~R.saty')
+RustyfiPreview
+call s:Ok(s:Wait(function('s:PreviewOk'), 30000), 'a document with & and ~ in its name rendered')
+call setline(2, 'let let let')
+doautocmd TextChanged
+call s:Ok(s:Wait({-> rustyfi#preview#state().status =~# '^stale'}, 30000), 'and reports a broken edit')
+call s:Ok(rustyfi#preview#state().status =~# 'Q&A\~R\.saty',
+      \ 'the diagnostic names the real document')
+call s:Ok(rustyfi#preview#state().status !~# 'rustyfi-preview',
+      \ 'the scratch file name is not spliced back into the diagnostic')
+RustyfiPreviewClose
+bwipeout!
+
+" ==========================================================================
+call s:Say('== a read-only document directory fails through the status line')
+" ==========================================================================
+" `writefile()` RAISES E482 rather than returning -1, and s:WriteScratch is
+" `abort`, so the raise unwound it and the caller's list-unpack died on E714 --
+" two stacked errors and a hit-enter prompt, repeated on every debounce tick.
+let s:rodir = tempname()
+call mkdir(s:rodir, 'p')
+call writefile(readfile(s:Fixture('imports.saty')), s:rodir . '/ro.saty')
+call writefile(readfile(s:Fixture('helper.satyh')), s:rodir . '/helper.satyh')
+call setfperm(s:rodir, 'r-xr-xr-x')
+let s:ro_enforced = 0
+try
+  call writefile(['x'], s:rodir . '/.probe')
+  call delete(s:rodir . '/.probe')
+catch
+  let s:ro_enforced = 1
+endtry
+if s:ro_enforced
+  execute 'edit!' fnameescape(s:rodir . '/ro.saty')
+  let v:errmsg = ''
+  " Caught here rather than let loose: an uncaught E482 aborts the enclosing
+  " :if, which would make the remaining assertions VANISH instead of fail.
+  let s:ro_exc = ''
+  try
+    RustyfiPreview
+  catch
+    let s:ro_exc = v:exception
+  endtry
+  call s:Eq(s:ro_exc, '', 'a read-only directory threw no exception')
+  call s:Eq(v:errmsg, '', 'a read-only directory raised no error')
+  call s:Ok(execute('messages') !~# 'E482\|E714', 'no E482/E714 in the message history')
+  call s:Ok(rustyfi#preview#state().status =~# 'cannot write',
+        \ 'the failure is reported through the preview status line')
+  call s:Ok(!empty(rustyfi#preview#state().errors),
+        \ ':RustyfiPreviewErrors has something to say about it')
+  RustyfiPreviewClose
+  bwipeout!
+else
+  call s:Say('skip (this user can write to a mode-555 directory)')
+endif
+call setfperm(s:rodir, 'rwxr-xr-x')
+
+" ==========================================================================
 call s:Say('== preview split modes')
 " ==========================================================================
 for s:mode in ['horizontal', 'tab']
@@ -375,6 +502,27 @@ bwipeout!
 let g:rustyfi_bin = '/nonexistent/rustyfi'
 call rustyfi#bin#clear_cache()
 call s:Eq(rustyfi#bin#path(), '', 'an explicit but missing g:rustyfi_bin resolves to nothing')
+unlet g:rustyfi_bin
+
+" A MISS must not be cached.  It was, so the first thing anybody does in a
+" fresh checkout -- open a document, find there is no binary, build one in
+" another terminal -- left the plugin saying `executable not found` for the
+" rest of the session.
+call rustyfi#bin#clear_cache()
+if executable('rustyfi')
+  call s:Say('skip (rustyfi is on $PATH, so the walk-up is never reached)')
+else
+  let s:fresh = tempname() . '/checkout/doc'
+  call mkdir(s:fresh, 'p')
+  execute 'edit!' fnameescape(s:fresh . '/d.saty')
+  call s:Eq(rustyfi#bin#path(), '', 'nothing found before the build')
+  call mkdir(s:fresh . '/target/release', 'p')
+  call writefile(['#!/bin/sh', 'exit 0'], s:fresh . '/target/release/rustyfi')
+  call setfperm(s:fresh . '/target/release/rustyfi', 'rwxr-xr-x')
+  call s:Ok(rustyfi#bin#path() !=# '',
+        \ 'a binary built while the editor is open is found, with no cache to clear')
+  bwipeout!
+endif
 let g:rustyfi_bin = s:saved_bin
 call rustyfi#bin#clear_cache()
 
@@ -396,6 +544,112 @@ let s:h2 = rustyfi#job#start(['sh', '-c', 'sleep 30'], {'on_exit': {c, o, e -> e
 call s:Ok(rustyfi#job#running(s:h2), 'long job reports running')
 call rustyfi#job#stop(s:h2)
 call s:Ok(s:Wait({-> !rustyfi#job#running(s:h2)}, 10000), 'stopped job is no longer running')
+
+" ==========================================================================
+" :RustyfiBuild / :RustyfiBuildOpen
+"
+" A build is not a preview: it compiles the file ON DISK, writes the PDF
+" beside it, and reports failures through the quickfix list rather than a
+" status line.
+call s:Say('== build')
+
+if $RUSTYFI_LIB_ROOT ==# ''
+  call s:Say('skipped: needs $RUSTYFI_LIB_ROOT')
+else
+  let g:rustyfi_lib_root = $RUSTYFI_LIB_ROOT
+  let g:rustyfi_build_copen = 0
+
+  let s:bdir = tempname()
+  call mkdir(s:bdir, 'p')
+
+  " --- a clean build produces a PDF and an empty quickfix list -------------
+  let s:good = s:bdir . '/good.saty'
+  call writefile([
+        \ '@require: stdjabook',
+        \ "document (| title = {T}; author = {A}; show-title = true; show-toc = false; |) '<",
+        \ '  +p { hello }',
+        \ '>',
+        \ ], s:good)
+  execute 'edit' fnameescape(s:good)
+  call setqflist([], ' ', {'lines': ['stale entry from a previous run']})
+  RustyfiBuild
+  let s:n = 0
+  while s:n < 600 && !filereadable(s:bdir . '/good.pdf')
+    sleep 50m
+    let s:n += 1
+  endwhile
+  call s:Ok(filereadable(s:bdir . '/good.pdf'), 'a clean build writes a PDF beside the document')
+  " Give the exit callback a moment to clear the list after the file appears.
+  sleep 200m
+  call s:Ok(empty(getqflist()),
+        \ 'a clean build CLEARS a stale quickfix list (else you chase a fixed error)')
+
+  " --- the buffer is written first ----------------------------------------
+  " The point of a build command is to compile what the document is NOW.
+  call setline(3, '  +p { edited but unsaved }')
+  call s:Ok(&modified, 'precondition: the buffer is modified')
+  RustyfiBuild
+  let s:n = 0
+  while s:n < 600 && &modified
+    sleep 50m
+    let s:n += 1
+  endwhile
+  call s:Ok(!&modified, 'a build writes the buffer first (g:rustyfi_build_autowrite)')
+  call s:Ok(join(readfile(s:good), "\n") =~# 'edited but unsaved',
+        \ 'and what reached disk is the edit, not the old bytes')
+
+  " Let that build finish. Starting another while one is in flight is
+  " REFUSED, so without this the next case measures the refusal rather than
+  " the thing it means to test -- which is how it first went green-but-wrong.
+  let s:n = 0
+  while s:n < 600 && rustyfi#build#running()
+    sleep 50m
+    let s:n += 1
+  endwhile
+  call s:Ok(!rustyfi#build#running(), 'the build finished before the next case')
+
+  " --- a failure populates the quickfix list, navigably --------------------
+  let s:bad = s:bdir . '/bad.saty'
+  call writefile([
+        \ '@require: stdjabook',
+        \ "document (| title = {T}; author = {A}; show-title = true; show-toc = false; |) '<",
+        \ '  +p { \nosuchcommand; }',
+        \ '>',
+        \ ], s:bad)
+  execute 'edit' fnameescape(s:bad)
+  call setqflist([], ' ', {'lines': []})
+  RustyfiBuild
+  let s:n = 0
+  while s:n < 600 && empty(getqflist())
+    sleep 50m
+    let s:n += 1
+  endwhile
+  let s:qf = getqflist()
+  call s:Ok(!empty(s:qf), 'a failed build fills the quickfix list')
+  if !empty(s:qf)
+    " Navigable, not merely present: an entry with no file or line is one
+    " `:cnext` skips, and the `Error: ` prefix in the compiler output made
+    " every entry look exactly like that until the errorformat learned it.
+    call s:Ok(s:qf[0].valid, 'the entry is VALID (a file and a line, not just text)')
+    call s:Eq(s:qf[0].lnum, 3, 'the entry points at the offending line')
+    call s:Ok(s:qf[0].col > 0, 'and carries a column')
+    call s:Ok(bufname(s:qf[0].bufnr) =~# 'bad\.saty', 'and names the document')
+    call s:Ok(s:qf[0].text !~# 'Error:',
+          \ 'the prefix is consumed by the pattern, not left in the message')
+  endif
+  call s:Ok(!filereadable(s:bdir . '/bad.pdf'), 'a failed build writes no PDF')
+
+  " --- autowrite off refuses rather than building stale bytes -------------
+  let g:rustyfi_build_autowrite = 0
+  execute 'edit' fnameescape(s:good)
+  call setline(3, '  +p { unsaved again }')
+  let s:before = getqflist()
+  RustyfiBuild
+  sleep 300m
+  call s:Ok(&modified, 'with autowrite off, a modified buffer is NOT written')
+  let g:rustyfi_build_autowrite = 1
+  edit!
+endif
 
 " ==========================================================================
 " The two halves of the plugin must agree about WHICH rustyfi to run.

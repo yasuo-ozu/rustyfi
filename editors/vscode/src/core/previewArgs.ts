@@ -14,6 +14,16 @@ export const OUTPUT_IS_A_FILE = true;
 export type MathMode =
   | 'unicode-math' | 'svg-math' | 'svg-outline-math' | 'katex' | 'mathml';
 
+/**
+ * What the preview renders.
+ *
+ * `pdf` is the real thing -- the same page the build produces, laid out by
+ * the same engine, so what you see is what ships.  `markdown` is the
+ * reflowed, semantic reading of the document: no page breaks, no columns,
+ * but it wraps to the panel and stays legible at any width.
+ */
+export type PreviewFormat = 'pdf' | 'markdown';
+
 const MATH_FLAG: Record<MathMode, string> = {
   'unicode-math': '--unicode-math',
   'svg-math': '--svg-math',
@@ -26,7 +36,9 @@ export interface PreviewArgOptions {
   /** Path the compiler should read.  For an unsaved buffer this is the
    *  sibling temp file, not the document's own path. */
   inputPath: string;
-  /** Where the Markdown should land. */
+  /** What to render. */
+  format: PreviewFormat;
+  /** Where the output should land -- a `.pdf` or a `.md` to match. */
   outputPath: string;
   /** Kept out of the document's directory so a preview never litters the
    *  user's tree with a `.satysfi-aux`, while still seeding the
@@ -37,16 +49,24 @@ export interface PreviewArgOptions {
 }
 
 export function buildPreviewArgs(o: PreviewArgOptions): string[] {
-  const mode: MathMode = MATH_FLAG[o.mathMode] ? o.mathMode : 'unicode-math';
-  const args = [
-    o.inputPath,
-    '--format', 'markdown',
-    MATH_FLAG[mode],
-    '-o', o.outputPath,
-    '--aux-file', o.auxPath,
-  ];
+  const args = [o.inputPath, '--format', o.format];
+  // The math flags are a MARKDOWN/HTML concern: they choose how an equation
+  // is re-expressed in a format that has no maths of its own.  A PDF is
+  // typeset by the same engine that lays out the document, so passing one
+  // here would be meaningless at best -- `--unicode-math` is documented
+  // "Markdown only" -- and a rejected argument at worst.
+  if (o.format === 'markdown') {
+    const mode: MathMode = MATH_FLAG[o.mathMode] ? o.mathMode : 'unicode-math';
+    args.push(MATH_FLAG[mode]);
+  }
+  args.push('-o', o.outputPath, '--aux-file', o.auxPath);
   if (o.libRoot && o.libRoot.trim()) args.push('--lib-root', o.libRoot.trim());
   return args;
+}
+
+/** The extension the compiler will write for a format. */
+export function outputExtension(format: PreviewFormat): string {
+  return format === 'pdf' ? '.pdf' : '.md';
 }
 
 /**

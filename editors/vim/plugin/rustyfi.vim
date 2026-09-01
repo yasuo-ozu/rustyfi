@@ -20,6 +20,9 @@ command! -bar RustyfiFmt              call rustyfi#fmt#buffer()
 command! -bar RustyfiFmtCheck         call rustyfi#fmt#check()
 command! -bar RustyfiFmtOnSaveToggle  call rustyfi#fmt#toggle_on_save()
 
+command! -bar RustyfiBuild            call rustyfi#build#run(0)
+command! -bar RustyfiBuildOpen        call rustyfi#build#run(1)
+
 command! -bar RustyfiPreview          call rustyfi#preview#open()
 command! -bar RustyfiPreviewClose     call rustyfi#preview#close()
 command! -bar RustyfiPreviewToggle    call rustyfi#preview#toggle()

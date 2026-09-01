@@ -126,20 +126,80 @@ picks exactly one:
 - `lsp` — the server formats, and the settings above do not apply;
 - `off` — no formatter is contributed.
 
+## Building
+
+| Command | What it does |
+|---|---|
+| `rustyfi: Build PDF` | Compiles the document to a PDF beside it |
+| `rustyfi: Build PDF and Open` | …then hands it to the system viewer |
+
+A build is not the preview. The preview renders a scratch copy of the
+in-memory document, continuously, in a webview. A build compiles the file
+**on disk**, once, writes the PDF where the author expects it, and reports
+failures as **diagnostics in the Problems panel** — this editor's answer to
+vim's quickfix list. Errors are attached to the file each one names, which
+may be an `@import:`ed library rather than the document you are editing.
+
+The document is saved first; `rustyfi.build.autoSave = false` makes a dirty
+document refuse instead. `rustyfi.build.timeout` (default 120 s) is higher
+than the preview's, because a build is deliberate and a long document is
+allowed to take its time.
+
+A failure with no location — an unresolvable `@require:`, a missing library
+root — is still shown, pinned to the first line, rather than lost to the
+output channel.
+
+`Build PDF and Open` uses the **OS handler**, not a VS Code tab. For an
+in-editor PDF, that is what `rustyfi.preview.format = pdf` is.
+
 ## Preview
 
-`rustyfi: Open Preview to the Side` compiles the document with
+`rustyfi: Open Preview to the Side` opens a webview beside the editor, in one
+of two modes — `rustyfi.preview.format`.
+
+### `pdf` (the default)
 
 ```
-rustyfi <file> --format markdown --unicode-math
+rustyfi <file> --format pdf
 ```
 
-and renders the Markdown in a webview beside the editor. `--unicode-math`
-writes equations as their characters in reading order (`x²`, `∑ₐᵇ`,
-`(a+b)/(c+d)`), which is plain text and always renders.
-`rustyfi.preview.mathMode` can select `--svg-math`, `--svg-outline-math`,
-`--katex` or `--mathml` instead; note that `katex` and `mathml` emit markup
-this preview does not typeset, so equations will appear as source.
+The real page, laid out by the engine the build uses, rendered page by page
+with [pdf.js]. This is the only mode that shows layout: page breaks, columns,
+figure placement, the actual line breaking. What you see is what ships.
+
+The pages keep a light ground in both editor themes. A PDF is ink on paper,
+and inverting it would misrepresent what the build produces.
+
+pdf.js is bundled (1.7 MB, in `media/`) and loaded **lazily** — it is only
+fetched once a PDF actually arrives, so a Markdown-mode user never pays for
+it. Nothing is loaded from a CDN; the webview's CSP admits the extension's own
+`media/` directory and nothing else.
+
+### `markdown`
+
+```
+rustyfi <file> --format markdown --svg-outline-math   # for example
+```
+
+A reflowed, semantic reading of the document: no pages and no columns, but it
+wraps to the panel width, which is easier while writing prose. Pair it with
+`rustyfi.preview.mathMode`:
+
+- `svg-outline-math` — draws each glyph as an outline path from the document's
+  own face, so equations reproduce **exactly**; the most faithful choice here.
+- `unicode-math` — equations as their characters in reading order (`x²`,
+  `∑ₐᵇ`, `(a+b)/(c+d)`). Plain text, always renders, loses radicals, matrices
+  and nested fractions.
+- `svg-math` — compact SVG with real selectable text; depends on the reader
+  having the document's faces.
+- `katex` / `mathml` — emit markup this preview does **not** typeset, so
+  equations appear as source. Useful for inspecting the output, not for
+  reading it.
+
+`mathMode` applies to Markdown only. A PDF is typeset by the engine, so there
+is nothing to re-express, and the flag is not passed.
+
+[pdf.js]: https://mozilla.github.io/pdf.js/
 
 ### What it costs
 

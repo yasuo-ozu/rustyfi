@@ -3,6 +3,7 @@ src/**
 out/test/**
 out/**/*.map
 tsconfig.json
+scripts/**
 node_modules/**
 !node_modules/vscode-languageclient/**
 !node_modules/vscode-languageserver-protocol/**
@@ -10,3 +11,8 @@ node_modules/**
 !node_modules/vscode-jsonrpc/**
 .gitignore
 *.vsix
+
+# `media/` holds the two pdf.js files `npm run compile` copies out of
+# node_modules. They must ship: node_modules itself is excluded above, so
+# without this the PDF preview would work in development and nowhere else.
+!media/**

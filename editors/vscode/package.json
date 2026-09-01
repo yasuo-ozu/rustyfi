@@ -41,6 +41,15 @@
     ],
     "commands": [
       {
+        "command": "rustyfi.build",
+        "title": "rustyfi: Build PDF",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "rustyfi.buildAndOpen",
+        "title": "rustyfi: Build PDF and Open"
+      },
+      {
         "command": "rustyfi.showPreview",
         "title": "rustyfi: Open Preview to the Side",
         "icon": "$(open-preview)"
@@ -62,6 +71,11 @@
       "editor/title": [
         {
           "command": "rustyfi.showPreview",
+          "when": "editorLangId == satysfi",
+          "group": "navigation"
+        },
+        {
+          "command": "rustyfi.build",
           "when": "editorLangId == satysfi",
           "group": "navigation"
         }
@@ -161,6 +175,29 @@
           "default": null,
           "markdownDescription": "`--wrap-inline-text`: re-wrap the text inside `{ ... }`. `null` omits the flag (built-in default true). Set `false` for a corpus of one-sentence-per-line prose."
         },
+        "rustyfi.build.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Save the document before building. A build that silently compiles the last saved bytes defeats its own purpose; turn this off and a dirty document refuses instead."
+        },
+        "rustyfi.build.timeout": {
+          "type": "number",
+          "default": 120000,
+          "markdownDescription": "Milliseconds before a build is abandoned. Higher than the preview's, because a build is deliberate and a long document is allowed to take its time."
+        },
+        "rustyfi.preview.format": {
+          "type": "string",
+          "enum": [
+            "pdf",
+            "markdown"
+          ],
+          "enumDescriptions": [
+            "The real page, laid out by the same engine the build uses.",
+            "A reflowed, semantic reading: no pages, but it wraps to the panel."
+          ],
+          "default": "pdf",
+          "markdownDescription": "What the preview renders. `pdf` is what the build produces, rendered page by page with pdf.js — the default, and the only mode that shows real layout. `markdown` reflows the document to the panel width and is easier to read while writing prose; pair it with `#rustyfi.preview.mathMode#` (`svg-outline-math` reproduces equations exactly)."
+        },
         "rustyfi.preview.mathMode": {
           "type": "string",
           "enum": [
@@ -171,7 +208,7 @@
             "mathml"
           ],
           "default": "unicode-math",
-          "markdownDescription": "How equations are written in the preview. The default `unicode-math` writes them as their characters in reading order (x², ∑ₐᵇ) — plain text that always renders. The others are passed straight through to the compiler; `katex` and `mathml` emit markup this preview does not typeset, so they will show as source."
+          "markdownDescription": "How equations are written in the preview. **Markdown mode only** — a PDF is typeset by the engine, so there is nothing to re-express. `unicode-math` writes them as their characters in reading order (x², ∑ₐᵇ) — plain text that always renders. The others are passed straight through to the compiler; `katex` and `mathml` emit markup this preview does not typeset, so they will show as source."
         },
         "rustyfi.preview.debounce": {
           "type": "number",
@@ -200,13 +237,14 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "node scripts/copy-pdfjs.mjs && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "test": "node --test out/test/*.test.js",
     "package": "vsce package"
   },
   "dependencies": {
+    "pdfjs-dist": "^4.10.38",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

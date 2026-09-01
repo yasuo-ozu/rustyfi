@@ -2,3 +2,8 @@ node_modules/
 out/
 *.vsix
 .vscode-test/
+
+# Copied out of node_modules by `npm run compile` (scripts/copy-pdfjs.mjs).
+# Generated, not authored: 1.7 MB of pdf.js that `npm ci && npm run compile`
+# reproduces exactly. `.vscodeignore` re-includes it so it ships in the .vsix.
+media/

@@ -84,6 +84,30 @@ Renders are triggered by `TextChanged`, `TextChangedI`, `InsertLeave` and
 
 ---
 
+## Building
+
+    :RustyfiBuild      " compile to a PDF beside the document
+    :RustyfiBuildOpen  " …and hand it to the system viewer
+
+A build is not the preview, and the differences are the point. The preview
+renders a scratch copy of the **buffer**, continuously, into a split — a
+glance, with its errors in a status line. A build compiles the file **on
+disk**, once, writes the PDF where the author expects it, and puts failures
+in the **quickfix list**, because a build failure is something you fix and
+`:cnext` is how that is done here.
+
+The buffer is written first. A build command that silently compiles the last
+saved bytes defeats its own purpose; set `g:rustyfi_build_autowrite = 0` and
+a modified buffer refuses instead.
+
+A success **clears** the quickfix list, so you never chase an error you
+already fixed. `g:rustyfi_build_copen = 0` stops the window opening on
+failure, and `g:rustyfi_build_opener` overrides the viewer (`xdg-open`,
+`open`, `start` by platform). `g:rustyfi_build_args` is appended to the
+command line if you need a flag this plugin does not model.
+
+---
+
 ## Formatting
 
     :RustyfiFmt              " format this buffer

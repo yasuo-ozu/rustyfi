@@ -3,7 +3,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { buildPreviewArgs, humanizeDiagnostic, type MathMode } from './core/previewArgs';
+import {
+  buildPreviewArgs,
+  humanizeDiagnostic,
+  outputExtension,
+  type MathMode,
+  type PreviewFormat,
+} from './core/previewArgs';
 import { renderMarkdown } from './core/markdown';
 import { findBinary } from './binary';
 import { run, type RunHandle } from './run';
@@ -41,14 +47,18 @@ export class Preview {
   private disposed = false;
   private generation = 0;
 
-  static show(doc: vscode.TextDocument, out: vscode.OutputChannel): Preview {
+  static show(
+    doc: vscode.TextDocument,
+    out: vscode.OutputChannel,
+    mediaRoot: vscode.Uri,
+  ): Preview {
     const key = doc.uri.toString();
     const existing = Preview.open.get(key);
     if (existing) {
       existing.panel.reveal(vscode.ViewColumn.Beside, true);
       return existing;
     }
-    const p = new Preview(doc, out);
+    const p = new Preview(doc, out, mediaRoot);
     Preview.open.set(key, p);
     return p;
   }
@@ -64,6 +74,7 @@ export class Preview {
   private constructor(
     private readonly doc: vscode.TextDocument,
     private readonly out: vscode.OutputChannel,
+    private readonly mediaRoot: vscode.Uri,
   ) {
     this.tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rustyfi-preview-'));
 
@@ -71,7 +82,13 @@ export class Preview {
       Preview.VIEW_TYPE,
       `Preview: ${path.basename(doc.uri.fsPath || doc.uri.path)}`,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        // `media/` only: the pdf.js library and its worker. Still no remote
+        // origin anywhere, and nothing else on disk is reachable.
+        localResourceRoots: [mediaRoot],
+      },
     );
 
     this.panel.webview.html = this.shell();
@@ -160,9 +177,11 @@ export class Preview {
     }
 
     const cfg = vscode.workspace.getConfiguration('rustyfi');
-    const outPath = path.join(this.tempDir, 'preview.md');
+    const format = cfg.get<PreviewFormat>('preview.format', 'pdf');
+    const outPath = path.join(this.tempDir, `preview${outputExtension(format)}`);
     const args = buildPreviewArgs({
       inputPath,
+      format,
       outputPath: outPath,
       // Keep the cross-reference aux file in the temp dir so the preview never
       // drops a `.satysfi-aux` beside the user's document, nor clobbers the
@@ -209,6 +228,24 @@ export class Preview {
       return;
     }
 
+    if (format === 'pdf') {
+      let bytes: Buffer;
+      try {
+        bytes = fs.readFileSync(outPath);
+      } catch (e) {
+        this.post({ type: 'error', message: `Compile succeeded but no PDF was produced: ${e}` });
+        return;
+      }
+      // Base64 over postMessage rather than a file URI: the PDF lives in a
+      // temp dir outside `localResourceRoots`, and widening those to a
+      // mutable temp directory to save one copy is a worse trade than the
+      // copy. Structured clone would take a Uint8Array, but the webview's
+      // message channel serialises to JSON, so base64 it is.
+      this.out.appendLine(`[rustyfi] preview compiled in ${ms}ms (${bytes.length} bytes of PDF)`);
+      this.post({ type: 'pdf', data: bytes.toString('base64'), ms });
+      return;
+    }
+
     let md: string;
     try {
       md = fs.readFileSync(outPath, 'utf8');
@@ -249,12 +286,15 @@ export class Preview {
    */
   private shell(): string {
     const n = nonce();
+    const w = this.panel.webview;
+    const pdfLib = w.asWebviewUri(vscode.Uri.joinPath(this.mediaRoot, 'pdf.min.mjs'));
+    const pdfWorker = w.asWebviewUri(vscode.Uri.joinPath(this.mediaRoot, 'pdf.worker.min.mjs'));
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}'; img-src data:;"/>
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}' ${w.cspSource}; worker-src ${w.cspSource} blob:; img-src data: blob:;"/>
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -301,15 +341,25 @@ export class Preview {
   }
   #spinner.on { opacity: .85; }
   #placeholder { opacity: .55; font-style: italic; padding-top: 3rem; text-align: center; }
+  /* PDF mode: pages stacked, each a canvas scaled to the panel width. The
+     page keeps a light ground in BOTH themes -- a PDF is ink on paper and
+     inverting it would misrepresent what the build produces. */
+  body.pdf #content { max-width: none; padding-top: 1rem; }
+  .pdf-page {
+    display: block; margin: 0 auto 1rem; max-width: 100%;
+    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.45);
+  }
 </style>
 </head>
 <body>
 <div id="banner"></div>
 <div id="spinner"></div>
 <div id="content"><div id="placeholder">Compiling preview…</div></div>
-<script nonce="${n}">
+<script type="module" nonce="${n}">
 (function () {
   const vscode = acquireVsCodeApi();
+  const PDF_LIB = "${pdfLib}";
+  const PDF_WORKER = "${pdfWorker}";
   const content = document.getElementById('content');
   const banner  = document.getElementById('banner');
   const spinner = document.getElementById('spinner');
@@ -359,6 +409,7 @@ export class Preview {
     if (m.type === 'render') {
       spinner.classList.remove('on');
       banner.style.display = 'none';
+      document.body.classList.remove('pdf');
       // Preserve the scroll offset across the patch.
       const y = window.scrollY;
       content.innerHTML = m.html;
@@ -366,8 +417,91 @@ export class Preview {
       const s = vscode.getState() || {};
       s.html = m.html; s.scroll = y;
       vscode.setState(s);
+      return;
+    }
+
+    if (m.type === 'pdf') {
+      renderPdf(m.data);
+      return;
     }
   });
+
+  // ---- PDF mode ---------------------------------------------------------
+  //
+  // pdf.js is loaded ONCE, lazily, and only if a PDF actually arrives: it is
+  // 1.7 MB and a Markdown-mode user should never pay for it.
+  let pdfjs = null;
+  let pdfGeneration = 0;
+
+  async function library() {
+    if (!pdfjs) {
+      pdfjs = await import(PDF_LIB);
+      pdfjs.GlobalWorkerOptions.workerSrc = PDF_WORKER;
+    }
+    return pdfjs;
+  }
+
+  function bytesOf(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function renderPdf(b64) {
+    // Every arrival supersedes the one before it; a slow render of an older
+    // document must not paint over a newer one. Same rule the extension side
+    // applies to compiles, enforced again here because rendering is async
+    // too and the two races are independent.
+    const gen = ++pdfGeneration;
+    try {
+      const lib = await library();
+      const doc = await lib.getDocument({ data: bytesOf(b64) }).promise;
+      if (gen !== pdfGeneration) return;
+
+      // Render into a detached fragment and swap it in at the end, so the
+      // pane never shows a half-drawn document.
+      const frag = document.createDocumentFragment();
+      const width = Math.max(320, content.clientWidth || window.innerWidth - 32);
+      const dpr = window.devicePixelRatio || 1;
+
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        if (gen !== pdfGeneration) return;
+        const unscaled = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: width / unscaled.width });
+        const canvas = document.createElement('canvas');
+        canvas.className = 'pdf-page';
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = viewport.width + 'px';
+        canvas.style.height = viewport.height + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        if (gen !== pdfGeneration) return;
+        frag.appendChild(canvas);
+      }
+
+      if (gen !== pdfGeneration) return;
+      spinner.classList.remove('on');
+      banner.style.display = 'none';
+      document.body.classList.add('pdf');
+      const y = window.scrollY;
+      content.replaceChildren(frag);
+      window.scrollTo(0, y);
+      // Canvases cannot go through setState, so PDF mode saves only the
+      // offset. A hidden-then-shown panel re-renders from the next compile
+      // rather than restoring pixels.
+      const st = vscode.getState() || {};
+      st.html = ''; st.scroll = y;
+      vscode.setState(st);
+    } catch (e) {
+      if (gen !== pdfGeneration) return;
+      spinner.classList.remove('on');
+      showBanner('error', 'Could not render the PDF: ' + (e && e.message ? e.message : e));
+    }
+  }
 }());
 </script>
 </body>

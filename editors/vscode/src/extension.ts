@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { RustyfiFormatter } from './formatter';
 import { Preview } from './preview';
+import * as build from './build';
 import * as lsp from './lsp';
 import { resetBinaryWarning } from './binary';
 
@@ -40,7 +41,15 @@ export function activate(ctx: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage('Open a SATySFi document first.');
         return;
       }
-      Preview.show(ed.document, output);
+      Preview.show(ed.document, output, vscode.Uri.joinPath(ctx.extensionUri, 'media'));
+    }),
+
+    vscode.commands.registerCommand('rustyfi.build', () => {
+      void build.build(output, false);
+    }),
+
+    vscode.commands.registerCommand('rustyfi.buildAndOpen', () => {
+      void build.build(output, true);
     }),
 
     vscode.commands.registerCommand('rustyfi.refreshPreview', () => {
@@ -74,10 +83,14 @@ export function activate(ctx: vscode.ExtensionContext): void {
     }),
 
     new vscode.Disposable(() => Preview.disposeAll()),
+    // The build diagnostics live in their own collection; without this the
+    // Problems panel keeps a disabled extension's entries.
+    new vscode.Disposable(() => build.dispose()),
   );
 }
 
 export async function deactivate(): Promise<void> {
   Preview.disposeAll();
+  build.dispose();
   await lsp.stop();
 }

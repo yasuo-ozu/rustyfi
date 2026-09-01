@@ -39,7 +39,18 @@ function! rustyfi#bin#path() abort
     return s:cache[l:dir]
   endif
   let l:found = s:FromCheckout(l:dir)
-  let s:cache[l:dir] = l:found
+  " Only a HIT is cached.  Caching the miss meant that the first thing anyone
+  " does in a fresh checkout -- open a document, discover there is no binary,
+  " run `cargo build --release` in another terminal -- left the plugin saying
+  " `executable not found` for the rest of the session, with no way back short
+  " of restarting or calling rustyfi#bin#clear_cache() by hand.  A miss is also
+  " the cheap case: the walk-up stops at the filesystem root having done a
+  " couple of stat()s per level, once per :Rustyfi* command rather than per
+  " keystroke.  (The Lua half caches nothing at all, which is now the same
+  " answer rather than a second one.)
+  if l:found !=# ''
+    let s:cache[l:dir] = l:found
+  endif
   return l:found
 endfunction
 

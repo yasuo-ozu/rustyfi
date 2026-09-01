@@ -6909,17 +6909,6 @@ in ()
         assert_eq!(fmt(src).as_deref(), Some(src));
     }
 
-    /// **A multi-space run at a command's argument boundary collapses** —
-    /// the defect [`Spacing::cmd_arg`]'s `Keep` -> `Collapse` fixes, in all
-    /// three of the shapes it was reported in.
-    ///
-    /// The census that scopes the exception is a two-column table, tight
-    /// against spaced, and `Keep` answered a third question the table never
-    /// asked. There are **zero** multi-space runs at this boundary in either
-    /// corpus, so nothing measured could have caught it and only a fixture
-    /// can: revert `cmd_arg_boundary` to `Space::Keep` and every one of these
-    /// four comes back unchanged.
-    #[test]
     /// A record or block group with nothing inside is NOT padded.
     ///
     /// `'<>` and `(||)` have no content to put a space beside, and `'< >` would
@@ -6946,28 +6935,50 @@ in ()
         );
     }
 
+    /// **A multi-space run at a command's argument boundary collapses** —
+    /// the defect [`Spacing::cmd_arg`]'s `Keep` -> `Collapse` fixes, in all
+    /// three of the shapes it was reported in.
+    ///
+    /// The census that scopes the exception is a two-column table, tight
+    /// against spaced, and `Keep` answered a third question the table never
+    /// asked. There are **zero** multi-space runs at this boundary in either
+    /// corpus, so nothing measured could have caught it and only a fixture
+    /// can: revert `cmd_arg_boundary` to `Space::Keep` and every one of these
+    /// four comes back unchanged.
+    ///
+    /// **This test did not run for a while**, and the way it stopped is worth
+    /// knowing. A later test was inserted BETWEEN this doc comment and this
+    /// function, so the `#[test]` above ended up attached to that one --
+    /// twice -- and this function became an ordinary private fn nothing
+    /// called. `cargo` said so in two warnings (`duplicated attribute`,
+    /// `function … is never used`) and both were lost in build output.
+    /// While it was dark, slice 3 gave the `let … in` spine its own line, so
+    /// every expectation below wanted `in <content>` on one line. The
+    /// COLLAPSE each case is about never regressed -- all four still turn
+    /// three spaces into one -- only the line structure around it moved.
+    #[test]
     fn a_run_at_a_command_argument_boundary_collapses() {
         for (src, want, why) in [
             (
                 "let-math \\frac a b = a\nin ${\\frac{a}   {6}}\n",
-                "let-math \\frac a b = a\nin ${\\frac{a} {6}}\n",
+                "let-math \\frac a b = a\nin\n${\\frac{a} {6}}\n",
                 "a math command, the reported case",
             ),
             (
                 "let-inline ctx \\c a = read-inline ctx a\nin {\\c   {x}}\n",
-                "let-inline ctx \\c a = read-inline ctx a\nin {\\c {x}}\n",
+                "let-inline ctx \\c a = read-inline ctx a\nin\n{\\c {x}}\n",
                 "an inline command",
             ),
             (
                 "let-block ctx +c a = read-block ctx a\nin '<+c   {x}>\n",
-                "let-block ctx +c a = read-block ctx a\nin '< +c {x} >\n",
+                "let-block ctx +c a = read-block ctx a\nin\n'< +c {x} >\n",
                 "a block command",
             ),
             (
                 // The user's own line: a `+math` whose math argument is
                 // followed by a run before its second group.
                 "let-math \\frac a b = a\nlet-math \\paren a = a\nlet-block +math m = '<>\nin '<+math(${\\frac{\\paren{2n + 1}}   {6}});>\n",
-                "let-math \\frac a b = a\nlet-math \\paren a = a\nlet-block +math m = '<>\nin '< +math(${\\frac{\\paren{2n + 1}} {6}}); >\n",
+                "let-math \\frac a b = a\nlet-math \\paren a = a\nlet-block +math m = '<>\nin\n'< +math(${\\frac{\\paren{2n + 1}} {6}}); >\n",
                 "the reported `+math(…)` line",
             ),
         ] {

@@ -1,3 +1,5 @@
+:RustyfiBuild	rustyfi.txt	/*:RustyfiBuild*
+:RustyfiBuildOpen	rustyfi.txt	/*:RustyfiBuildOpen*
 :RustyfiFmt	rustyfi.txt	/*:RustyfiFmt*
 :RustyfiFmtCheck	rustyfi.txt	/*:RustyfiFmtCheck*
 :RustyfiFmtOnSaveToggle	rustyfi.txt	/*:RustyfiFmtOnSaveToggle*
@@ -23,6 +25,7 @@ g:rustyfi_preview_split	rustyfi.txt	/*g:rustyfi_preview_split*
 g:rustyfi_preview_width	rustyfi.txt	/*g:rustyfi_preview_width*
 g:rustyfi_quiet	rustyfi.txt	/*g:rustyfi_quiet*
 rustyfi	rustyfi.txt	/*rustyfi*
+rustyfi-build	rustyfi.txt	/*rustyfi-build*
 rustyfi-commands	rustyfi.txt	/*rustyfi-commands*
 rustyfi-contents	rustyfi.txt	/*rustyfi-contents*
 rustyfi-filetype	rustyfi.txt	/*rustyfi-filetype*

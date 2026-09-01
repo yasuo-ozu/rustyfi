@@ -726,6 +726,36 @@ pub(crate) struct Breaks {
     /// A `'< … >` block text lays its `+cmd`s out one per line when they do
     /// not fit flat.
     pub(crate) block_items: bool,
+    /// A `'< … >` item the author separated from the previous one by a **blank
+    /// line** starts a new line unconditionally, and that blank line survives
+    /// — clamped to [`Build::max_blank_lines`], exactly as [`Breaks::blocks`]
+    /// clamps a top-level one.
+    ///
+    /// The second legitimate reader of input layout (`engine.md` section 6,
+    /// class 5), and it is admitted on the same terms as the first: a blank
+    /// line survives only where the builder turns the gap into a [`Br::Hard`],
+    /// so the second pass reads back a blank line at exactly the positions the
+    /// first pass wrote one. What makes that self-consistent here is that the
+    /// PREDICATE and the OUTPUT are the same proposition — "this gap holds two
+    /// or more terminators". A gap that satisfies it is emitted with at least
+    /// one blank line still in it (`max_blank_lines >= 1` is part of the
+    /// predicate, which is why `--max-blank-lines 0` turns the rule off rather
+    /// than capping it to nothing), and a gap that does not is never given
+    /// one, because nothing else in a block area emits a [`Doc::BlankLine`].
+    /// So the fixpoint is not "the rule happens to agree with itself"; it is
+    /// that the rule's input is recoverable from its own output.
+    ///
+    /// Subordinate to [`Breaks::block_items`]: that flag is the difference
+    /// between "the renderer decides here" and "there is no break here", and a
+    /// blank line cannot survive at a gap that is not a break at all.
+    ///
+    /// **Only BETWEEN two items.** A blank line just inside `'<` or just
+    /// before `>` is dropped, and that is the same answer
+    /// [`super::render::flush_blanks`] gives a leading blank line at the top
+    /// of a file: a blank line is a separator between two things the printer
+    /// reproduces, and at a delimiter there is only one thing. Pinned by
+    /// `a_blank_line_against_either_block_delimiter_is_dropped`.
+    pub(crate) block_blanks: bool,
     /// A function type breaks before its `->`, all arrows or none.
     pub(crate) type_arrows: bool,
 }
@@ -741,8 +771,19 @@ pub(crate) const SLICE3: Breaks = Breaks {
     clauses: true,
     blocks: true,
     block_items: true,
+    block_blanks: true,
     type_arrows: true,
 };
+
+/// [`super::CstOptions::max_blank_lines`]'s default, and what the two walks
+/// that are not a format — [`walk_desync`] and [`gap_census`] — run under.
+///
+/// It lives here rather than inline in `CstOptions::default` so there is one
+/// 2 rather than three: neither of those two walks produces output, so a
+/// number of their own could drift from the real default without anything
+/// failing, and the walk they measure has to be the walk a default
+/// `format_cst` performs.
+pub(crate) const DEFAULT_MAX_BLANK_LINES: usize = 2;
 
 /// Nothing breaks and nothing groups: the mutation control, and the shape
 /// `Breaks` is measured against one flag at a time.
@@ -757,6 +798,7 @@ pub(crate) const NO_BREAKS: Breaks = Breaks {
     clauses: false,
     blocks: false,
     block_items: false,
+    block_blanks: false,
     type_arrows: false,
 };
 
@@ -1334,6 +1376,30 @@ fn count_terminators(s: &str) -> usize {
     n
 }
 
+/// Does the gap the walk is **about to emit** hold a blank line?
+///
+/// A lookahead rather than a look-back, because the rules that read the
+/// author's blank lines have to decide *before* the gap is emitted — a
+/// [`Br::Hard`] is a request, and [`Build::gap_upto`] is what turns it into
+/// bytes. `byte` is the end of the last atom emitted and `atoms[cursor]` is
+/// the next one, so the gap is exactly the span between them; that is the same
+/// range `gap_upto` will read, which is what makes the predicate and the
+/// output the same proposition.
+///
+/// "Blank line" is two or more terminators: one ends the previous line, and
+/// every further one is a blank. A CRLF counts once
+/// ([`count_terminators`]). Shared by both builders.
+pub(crate) fn blank_line_in_gap(source: &str, atoms: &[Atom], cursor: usize, byte: usize) -> bool {
+    let Some(next) = atoms.get(cursor) else {
+        return false;
+    };
+    let start = next.span.start.byte;
+    let Some(gap) = source.get(byte..start) else {
+        return false;
+    };
+    count_terminators(gap) >= 2
+}
+
 /// Which of the two walks [`build`] runs this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Pass {
@@ -1352,6 +1418,7 @@ pub(crate) enum Pass {
 /// tile and advance, or a gap holding something [`trivia::classify`] refuses —
 /// each of which means this code has misread the stream, and
 /// `format.rs:336-343`'s reflex applies.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build<'s>(
     source: &'s str,
     atoms: &[Atom],
@@ -1360,6 +1427,7 @@ pub(crate) fn build<'s>(
     breaks: Breaks,
     wrap: Option<usize>,
     wrap_inline: bool,
+    max_blank_lines: usize,
 ) -> Option<Doc<'s>> {
     let mut b = Build {
         source,
@@ -1375,6 +1443,7 @@ pub(crate) fn build<'s>(
         broken: false,
         rules: SLICE2,
         breaks,
+        max_blank_lines,
         in_type_chain: false,
         br: None,
         areas: SLICE4,
@@ -1441,6 +1510,7 @@ pub(crate) fn build<'s>(
 /// checks would notice. The invariant has to be asserted from outside.
 pub(crate) fn walk_desync(source: &str, atoms: &[Atom], file: &cst::File, indent: usize) -> usize {
     let breaks = SLICE3;
+    let max_blank_lines = DEFAULT_MAX_BLANK_LINES;
     let mut b = Build {
         source,
         atoms,
@@ -1455,6 +1525,7 @@ pub(crate) fn walk_desync(source: &str, atoms: &[Atom], file: &cst::File, indent
         broken: false,
         rules: SLICE2,
         breaks,
+        max_blank_lines,
         in_type_chain: false,
         br: None,
         areas: SLICE4,
@@ -1488,6 +1559,7 @@ pub(crate) fn walk_desync(source: &str, atoms: &[Atom], file: &cst::File, indent
 #[cfg(test)]
 pub(crate) fn gap_census(source: &str, atoms: &[Atom], file: &cst::File) -> Vec<Obs> {
     let breaks = SLICE3;
+    let max_blank_lines = DEFAULT_MAX_BLANK_LINES;
     let mut b = Build {
         source,
         atoms,
@@ -1502,6 +1574,7 @@ pub(crate) fn gap_census(source: &str, atoms: &[Atom], file: &cst::File) -> Vec<
         broken: false,
         rules: SLICE2,
         breaks,
+        max_blank_lines,
         in_type_chain: false,
         br: None,
         areas: SLICE4,
@@ -1722,6 +1795,17 @@ struct Build<'s, 'a> {
     rules: Spacing,
     /// Which of slice 3's constructs offer the renderer a break.
     breaks: Breaks,
+    /// [`super::CstOptions::max_blank_lines`], as the BUILDER sees it.
+    ///
+    /// The renderer holds the same number and does the actual clamping
+    /// ([`super::render::flush_blanks`]); what this copy answers is the one
+    /// question the clamp cannot be deferred for — is the cap **zero**, in
+    /// which case a rule that reads the author's blank lines must not fire at
+    /// all. Deferring that one would cost idempotence: the first pass would
+    /// hard-break at a gap the renderer then emptied, and the second pass,
+    /// reading a gap with no blank line left in it, would be free to join the
+    /// two items back onto one line. See [`Breaks::block_blanks`].
+    max_blank_lines: usize,
     /// Is the walk already inside an arrow chain's own group?
     /// [`Build::type_expr`] is the only reader; a delimiter resets it, which
     /// is what [`Build::group_open_as`]'s return value carries.
@@ -4453,13 +4537,40 @@ impl<'s> Build<'s, '_> {
         let anchor = self.group_open(&grp.open);
         let outer = self.enter_area(Area::Block);
         for (i, e) in elems.iter().enumerate() {
-            if i > 0 && self.breaks.block_items {
-                self.br(Br::Opportunity);
+            if i > 0 {
+                self.block_item_break();
             }
             self.block_elem(e);
         }
         self.group_close(anchor, &grp.close);
         self.area = outer;
+    }
+
+    /// The gap between two `'< … >` items: a break OPPORTUNITY normally, a
+    /// [`Br::Hard`] when the author put a **blank line** there.
+    ///
+    /// The blank line is the only thing that upgrades it, and it upgrades it
+    /// rather than merely surviving it because a blank line can only exist
+    /// between two lines — [`Build::gap_upto`] carries the author's blank
+    /// lines at a `Br::Hard` position and nowhere else, and the reason it can
+    /// is that a `Br::Hard` is unconditional. An `Br::Opportunity` the
+    /// renderer chose to render flat would put the two items on one line with
+    /// the blank line simply gone, and the second pass would then have nothing
+    /// to read.
+    ///
+    /// See [`Breaks::block_blanks`] for why this stays a fixpoint, and why the
+    /// `max_blank_lines == 0` case turns the rule off instead of clamping it.
+    fn block_item_break(&mut self) {
+        if !self.breaks.block_items {
+            return;
+        }
+        let blank = self.breaks.block_blanks
+            && self.max_blank_lines > 0
+            && blank_line_in_gap(self.source, self.atoms, self.cursor, self.byte);
+        match blank {
+            true => self.br(Br::Hard),
+            false => self.br(Br::Opportunity),
+        }
     }
 
     fn block_elem(&mut self, e: &ast::BlockElem) {
@@ -4910,7 +5021,7 @@ mod tests {
     fn with_every_construct_off_the_authors_breaks_still_do_not_survive() {
         let src = "let x =\n  1\nin\nx\n";
         let (atoms, file) = parsed(src);
-        let doc = build(src, &atoms, &file, 2, NO_BREAKS, None, false)
+        let doc = build(src, &atoms, &file, 2, NO_BREAKS, None, false, DEFAULT_MAX_BLANK_LINES)
             .expect("a file that parses is laid out");
         let out = render::render(
             &doc,
@@ -5467,6 +5578,200 @@ beta
         let before = "let a = 1\n\nlet b = 2\n\n\n\n\nlet c = 3\nin ()\n";
         let after = "let a = 1\n\nlet b = 2\n\n\nlet c = 3\nin\n()\n";
         assert_eq!(fmt(before).as_deref(), Some(after));
+    }
+
+    /// [`fmt`] at an explicit blank-line cap — the option
+    /// [`Breaks::block_blanks`] is a function of.
+    fn fmt_blanks(src: &str, max_blank_lines: usize) -> Option<String> {
+        super::super::format_cst(
+            src,
+            RustyfiVersion::V0_0,
+            &super::super::CstOptions { max_blank_lines, ..Default::default() },
+        )
+    }
+
+    /// **The same rule, one area in.** A blank line the author put between two
+    /// `'< … >` items survives, and it is capped by the same option that caps
+    /// a top-level one.
+    ///
+    /// The layout consequence is the point of the `+p{aaa} +p{bbb}` control
+    /// below: without the rule those two items fit flat, so the blank line was
+    /// not merely capped away, the whole block came back on one line. A blank
+    /// line therefore forces the item list open — a [`Br::Hard`] forces every
+    /// enclosing [`Mode::Auto`] group ([`Doc::forces_break`]) — which is why
+    /// the fourth and fifth items go one per line here too.
+    #[test]
+    fn a_blank_line_between_two_block_text_items_survives_and_is_capped() {
+        // No blank line: the corpus's own flat form, unchanged.
+        let flat = "let d = document (| a = 1 |) '< +p{aaa} +p{bbb} >\nin\n()\n";
+        assert_eq!(
+            fmt("let d = document (| a = 1 |) '<\n+p{aaa}\n+p{bbb}\n>\nin ()\n").as_deref(),
+            Some(flat),
+            "without a blank line a short block still flattens",
+        );
+        // One blank line, and a four-terminator run capped to the default 2.
+        let before = "\
+let d = document (| a = 1 |) '<
++p{aaa}
+
++p{bbb}
+
+
+
++p{ccc}
++p{ddd}
+>
+in ()
+";
+        let after = "\
+let d = document (| a = 1 |) '<
+  +p{aaa}
+
+  +p{bbb}
+
+
+  +p{ccc}
+  +p{ddd}
+>
+in
+()
+";
+        assert_eq!(fmt(before).as_deref(), Some(after));
+        assert_eq!(fmt(after).as_deref(), Some(after), "not a fixpoint");
+        // The cap is the OPTION, not a 2 in this file: at 1 the same input
+        // comes back with one blank line at each of the two positions.
+        let at_one = "\
+let d = document (| a = 1 |) '<
+  +p{aaa}
+
+  +p{bbb}
+
+  +p{ccc}
+  +p{ddd}
+>
+in
+()
+";
+        assert_eq!(fmt_blanks(before, 1).as_deref(), Some(at_one));
+        assert_eq!(fmt_blanks(at_one, 1).as_deref(), Some(at_one), "not a fixpoint at 1");
+    }
+
+    /// **`--max-blank-lines 0` collapses them in block text too**, and the
+    /// collapse is a fixpoint.
+    ///
+    /// The fixpoint half is the whole reason [`Build::max_blank_lines`] is a
+    /// builder field rather than a renderer-only clamp. Were the rule to fire
+    /// at a zero cap, the first pass would hard-break these two items apart
+    /// and the renderer would then delete the blank line that justified it —
+    /// leaving a second pass that reads no blank line, offers a mere
+    /// [`Br::Opportunity`], and joins them back. Two passes, two files.
+    #[test]
+    fn a_zero_cap_collapses_a_block_texts_blank_lines_and_settles() {
+        let before = "let d = document (| a = 1 |) '<\n+p{aaa}\n\n\n+p{bbb}\n>\nin ()\n";
+        let after = "let d = document (| a = 1 |) '< +p{aaa} +p{bbb} >\nin\n()\n";
+        assert_eq!(fmt_blanks(before, 0).as_deref(), Some(after));
+        // The fixpoint asserted from the AUTHOR'S text rather than from the
+        // settled form: a rule that fired at a zero cap would come to rest
+        // eventually, and only the first-pass output tells the two apart.
+        let once = fmt_blanks(before, 0).expect("laid out");
+        assert_eq!(fmt_blanks(&once, 0).as_deref(), Some(once.as_str()), "not a fixpoint at 0");
+        // A zero cap does the same to a top-level blank line, which is what
+        // says the two rules answer to one option.
+        let top = "let a = 1\n\nlet b = 2\nin ()\n";
+        assert_eq!(fmt_blanks(top, 0).as_deref(), Some("let a = 1\nlet b = 2\nin\n()\n"));
+    }
+
+    /// **A blank line against either `'< … >` delimiter is dropped.**
+    ///
+    /// The request did not settle this; the answer is the one
+    /// [`super::render::flush_blanks`] already gives a blank line at the top
+    /// of a file. A blank line is a separator between two things the printer
+    /// reproduces, and at a delimiter there is only one thing — so `'<`
+    /// followed by a blank line is a blank line with nothing on one side of
+    /// it. Keeping it would also mean deciding what a blank line *before* `>`
+    /// separates from, and the honest answer is nothing.
+    ///
+    /// The interior blank line in the same fixture is what makes this a claim
+    /// about the delimiters rather than about the rule being off.
+    #[test]
+    fn a_blank_line_against_either_block_delimiter_is_dropped() {
+        let before = "\
+let d = document (| a = 1 |) '<
+
++p{aaa}
+
++p{bbb}
+
+>
+in ()
+";
+        let after = "\
+let d = document (| a = 1 |) '<
+  +p{aaa}
+
+  +p{bbb}
+>
+in
+()
+";
+        assert_eq!(fmt(before).as_deref(), Some(after));
+        assert_eq!(fmt(after).as_deref(), Some(after), "not a fixpoint");
+    }
+
+    /// A blank line between two `#var;` embeds, and between an embed and a
+    /// `+cmd`: [`ast::BlockElem`] has two variants and the rule is written
+    /// over the gap rather than over either of them, so both boundaries are
+    /// pinned rather than the one the fixtures happened to reach.
+    #[test]
+    fn a_blank_line_survives_between_block_embeds_too() {
+        let before = "let d = document (| a = 1 |) '<\n#x;\n\n#y;\n\n+p{a}\n>\nin ()\n";
+        let after = "\
+let d = document (| a = 1 |) '<
+  #x;
+
+  #y;
+
+  +p{a}
+>
+in
+()
+";
+        assert_eq!(fmt(before).as_deref(), Some(after));
+        assert_eq!(fmt(after).as_deref(), Some(after), "not a fixpoint");
+    }
+
+    /// A blank line inside a **nested** block text, and one in the outer block
+    /// around it: the rule is per-area rather than per-file, and the nested
+    /// items keep their own depth.
+    #[test]
+    fn a_blank_line_survives_inside_a_nested_block_text() {
+        let before = "\
+let d = document (| a = 1 |) '<
++p{a}
+
++q{x}<
++r{y}
+
++r{z}
+>
+>
+in ()
+";
+        let after = "\
+let d = document (| a = 1 |) '<
+  +p{a}
+
+  +q{x}<
+    +r{y}
+
+    +r{z}
+  >
+>
+in
+()
+";
+        assert_eq!(fmt(before).as_deref(), Some(after));
+        assert_eq!(fmt(after).as_deref(), Some(after), "not a fixpoint");
     }
 
     /// **Change 2, variant B.** An own-line comment keeps whatever indentation
@@ -7242,7 +7547,8 @@ mod slice3 {
     }
 
     fn doc_of<'s>(src: &'s str, atoms: &[Atom], file: &cst::File, breaks: Breaks) -> Doc<'s> {
-        build(src, atoms, file, 2, breaks, None, false).expect("laid out")
+        build(src, atoms, file, 2, breaks, None, false, DEFAULT_MAX_BLANK_LINES)
+            .expect("laid out")
     }
 
     fn render_with(doc: &Doc<'_>, max_width: usize) -> String {
@@ -7456,6 +7762,21 @@ in ()
                 Breaks { groups: false, ..SLICE3 },
                 "let r = (| alpha = 1; beta = 2; gamma = 3; |)\nin\n()\n",
                 24,
+            ),
+            (
+                "block_items",
+                Breaks { block_items: false, ..SLICE3 },
+                "let d = document (| a = 1 |) '< +p{aaa} +p{bbb} +p{ccc} >\nin\n()\n",
+                24,
+            ),
+            (
+                // The only arm whose ON output is wider than its OFF output:
+                // the flag does not offer a break, it takes one the author
+                // already wrote and makes it unconditional.
+                "block_blanks",
+                Breaks { block_blanks: false, ..SLICE3 },
+                "let d = document (| a = 1 |) '<\n+p{aaa}\n\n+p{bbb}\n>\nin\n()\n",
+                100,
             ),
             (
                 "type_arrows",

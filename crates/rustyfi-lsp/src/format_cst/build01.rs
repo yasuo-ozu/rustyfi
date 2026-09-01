@@ -90,8 +90,8 @@ use syan::span::Spanned;
 use super::atoms_of;
 use super::comment;
 use super::build006::{
-    default_space, is_column, preserved_lines, Area, Br, Breaks, Flat, Frame, Mark, Pass, Space,
-    Spacing, SLICE2, SLICE3,
+    blank_line_in_gap, default_space, is_column, preserved_lines, Area, Br, Breaks, Flat, Frame,
+    Mark, Pass, Space, Spacing, DEFAULT_MAX_BLANK_LINES, SLICE2, SLICE3,
 };
 use super::doc::{Doc, Mode};
 use super::inline;
@@ -135,6 +135,7 @@ fn count_terminators(s: &str) -> usize {
 /// and advance, or a gap holding something [`trivia::classify`] refuses — each
 /// of which means this code has misread the stream, and `format.rs:336-343`'s
 /// reflex applies.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build<'s>(
     source: &'s str,
     atoms: &[Atom],
@@ -143,8 +144,9 @@ pub(crate) fn build<'s>(
     breaks: Breaks,
     wrap: Option<usize>,
     wrap_inline: bool,
+    max_blank_lines: usize,
 ) -> Option<Doc<'s>> {
-    let mut b = Build::new(source, atoms, indent, breaks, wrap, wrap_inline);
+    let mut b = Build::new(source, atoms, indent, breaks, wrap, wrap_inline, max_blank_lines);
     // Pass 1: for each output line, was anything but a column relaid out on
     // it, and where are its rule-claimed gaps? Skipped entirely when the
     // alignment pass is off.
@@ -193,7 +195,7 @@ pub(crate) fn gap_census(
     atoms: &[Atom],
     file: &v1::FileV1,
 ) -> Vec<super::build006::Obs> {
-    let mut b = Build::new(source, atoms, 2, SLICE3, None, false);
+    let mut b = Build::new(source, atoms, 2, SLICE3, None, false, DEFAULT_MAX_BLANK_LINES);
     b.census = Some(Vec::new());
     b.file(file);
     while b.cursor < b.atoms.len() {
@@ -203,7 +205,7 @@ pub(crate) fn gap_census(
 }
 
 pub(crate) fn walk_desync(source: &str, atoms: &[Atom], file: &v1::FileV1, indent: usize) -> usize {
-    let mut b = Build::new(source, atoms, indent, SLICE3, None, false);
+    let mut b = Build::new(source, atoms, indent, SLICE3, None, false, DEFAULT_MAX_BLANK_LINES);
     b.file(file);
     b.desync
 }
@@ -432,6 +434,10 @@ struct Build<'s, 'a> {
     rules: Spacing,
     /// Which of slice 3's constructs offer the renderer a break.
     breaks: Breaks,
+    /// [`super::CstOptions::max_blank_lines`] as the builder sees it — the
+    /// zero case, which turns [`Breaks::block_blanks`] off rather than
+    /// clamping it. See [`super::build006::Build`]'s field of the same name.
+    max_blank_lines: usize,
     /// What the builder wants of the LINE STRUCTURE at the gap before the next
     /// atom. See [`super::build006::Br`].
     br: Option<Br>,
@@ -470,6 +476,7 @@ struct GroupAnchor {
 }
 
 impl<'s, 'a> Build<'s, 'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         source: &'s str,
         atoms: &'a [Atom],
@@ -477,6 +484,7 @@ impl<'s, 'a> Build<'s, 'a> {
         breaks: Breaks,
         wrap: Option<usize>,
         wrap_inline: bool,
+        max_blank_lines: usize,
     ) -> Self {
         Build {
             source,
@@ -498,6 +506,7 @@ impl<'s, 'a> Build<'s, 'a> {
             space: None,
             rules: V01,
             breaks,
+            max_blank_lines,
             br: None,
             in_type_chain: false,
             #[cfg(test)]
@@ -2738,13 +2747,31 @@ impl<'s, 'a> Build<'s, 'a> {
         let anchor = self.group_open(&grp.open);
         let outer = self.enter_area(Area::Block);
         for (i, e) in elems.iter().enumerate() {
-            if i > 0 && self.breaks.block_items {
-                self.br(Br::Opportunity);
+            if i > 0 {
+                self.block_item_break();
             }
             self.block_elem(e);
         }
         self.group_close(anchor, &grp.close);
         self.area = outer;
+    }
+
+    /// The gap between two `'< … >` items. The 0.0.6 twin, rule for rule:
+    /// see [`super::build006::Build::block_item_break`] and
+    /// [`Breaks::block_blanks`]. The grammar of a block area is the same in
+    /// both generations — a `+cmd …;` / `#var;` sequence whose whitespace is
+    /// gaps — so a fork here would be a difference with no cause.
+    fn block_item_break(&mut self) {
+        if !self.breaks.block_items {
+            return;
+        }
+        let blank = self.breaks.block_blanks
+            && self.max_blank_lines > 0
+            && blank_line_in_gap(self.source, self.atoms, self.cursor, self.byte);
+        match blank {
+            true => self.br(Br::Hard),
+            false => self.br(Br::Opportunity),
+        }
     }
 
     fn block_elem(&mut self, e: &ast::BlockElem) {
@@ -3116,7 +3143,8 @@ mod tests {
     fn with_every_construct_off_the_authors_breaks_still_do_not_survive() {
         let src = "module M = struct\n  val x =\n    1\nend\n";
         let (atoms, file) = parsed(src);
-        let doc = build(src, &atoms, &file, 2, super::super::build006::NO_BREAKS, None, false)
+        let no_breaks = super::super::build006::NO_BREAKS;
+        let doc = build(src, &atoms, &file, 2, no_breaks, None, false, DEFAULT_MAX_BLANK_LINES)
             .expect("a file that parses is laid out");
         let out = render::render(
             &doc,
@@ -3528,6 +3556,72 @@ end
         let before = lib("  val a = 1\n\n  val b = 2\n\n\n\n\n  val c = 3\n");
         let after = lib("  val a = 1\n\n  val b = 2\n\n\n  val c = 3\n");
         assert_eq!(fmt(&before).as_deref(), Some(after.as_str()));
+    }
+
+    /// [`fmt`] at an explicit blank-line cap.
+    fn fmt_blanks(src: &str, max_blank_lines: usize) -> Option<String> {
+        format_cst(
+            src,
+            RustyfiVersion::V0_1,
+            &CstOptions { max_blank_lines, ..Default::default() },
+        )
+    }
+
+    /// **The 0.1 half of [`Breaks::block_blanks`]**, and it is a separate
+    /// measurement rather than an inference: the two builders share the
+    /// predicate ([`blank_line_in_gap`]) and the mechanism
+    /// ([`Br::Hard`] in [`super::build006::Build::gap_upto`]) but not the
+    /// walk, and it is the walk that decides where the rule is asked.
+    ///
+    /// Same three claims as 0.0.6's: the blank line survives, the run is
+    /// capped by the OPTION, and both are fixpoints. The no-blank control is
+    /// what says the surviving blank line also forced the item list open.
+    #[test]
+    fn a_blank_line_between_two_block_text_items_survives_and_is_capped() {
+        let flat = lib("  val d = document (| a = 1 |) '< +p{aaa} +p{bbb} >\n");
+        assert_eq!(
+            fmt(&lib("  val d = document (| a = 1 |) '<\n+p{aaa}\n+p{bbb}\n>\n")).as_deref(),
+            Some(flat.as_str()),
+            "without a blank line a short block still flattens",
+        );
+        let before =
+            lib("  val d = document (| a = 1 |) '<\n+p{aaa}\n\n+p{bbb}\n\n\n\n+p{ccc}\n>\n");
+        let after = lib(
+            "  val d = document (| a = 1 |) '<\n    +p{aaa}\n\n    +p{bbb}\n\n\n    +p{ccc}\n  >\n",
+        );
+        assert_eq!(fmt(&before).as_deref(), Some(after.as_str()));
+        assert_eq!(fmt(&after).as_deref(), Some(after.as_str()), "not a fixpoint");
+        let at_one = lib(
+            "  val d = document (| a = 1 |) '<\n    +p{aaa}\n\n    +p{bbb}\n\n    +p{ccc}\n  >\n",
+        );
+        assert_eq!(fmt_blanks(&before, 1).as_deref(), Some(at_one.as_str()));
+        assert_eq!(fmt_blanks(&at_one, 1).as_deref(), Some(at_one.as_str()), "not a fixpoint at 1");
+    }
+
+    /// **A zero cap collapses them here too**, and settles. `build006.rs`'s
+    /// test of the same name carries why the second assertion — the fixpoint
+    /// taken from the AUTHOR'S text — is the one that justifies the builder
+    /// knowing the cap at all.
+    #[test]
+    fn a_zero_cap_collapses_a_block_texts_blank_lines_and_settles() {
+        let before = lib("  val d = document (| a = 1 |) '<\n+p{aaa}\n\n\n+p{bbb}\n>\n");
+        let after = lib("  val d = document (| a = 1 |) '< +p{aaa} +p{bbb} >\n");
+        assert_eq!(fmt_blanks(&before, 0).as_deref(), Some(after.as_str()));
+        // From the AUTHOR'S text, not from the settled form — see the 0.0.6
+        // twin for why that is the assertion that can fail.
+        let once = fmt_blanks(&before, 0).expect("laid out");
+        assert_eq!(fmt_blanks(&once, 0).as_deref(), Some(once.as_str()), "not a fixpoint at 0");
+    }
+
+    /// A blank line just inside `'<` or just before `>` is dropped — the same
+    /// answer 0.0.6 gives, for the same reason.
+    #[test]
+    fn a_blank_line_against_either_block_delimiter_is_dropped() {
+        let before = lib("  val d = document (| a = 1 |) '<\n\n+p{aaa}\n\n+p{bbb}\n\n>\n");
+        let after =
+            lib("  val d = document (| a = 1 |) '<\n    +p{aaa}\n\n    +p{bbb}\n  >\n");
+        assert_eq!(fmt(&before).as_deref(), Some(after.as_str()));
+        assert_eq!(fmt(&after).as_deref(), Some(after.as_str()), "not a fixpoint");
     }
 
     #[test]

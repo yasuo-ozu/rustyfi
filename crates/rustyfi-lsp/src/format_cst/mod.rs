@@ -133,6 +133,15 @@ use doc::Doc;
 pub struct CstOptions {
     pub max_width: usize,
     pub tab_spaces: usize,
+    /// How many consecutive blank lines survive, at the two positions where
+    /// any blank line does: between two of a block's bindings
+    /// ([`build006::Breaks::blocks`]) and between two items of a `'< … >`
+    /// block text ([`build006::Breaks::block_blanks`]).
+    ///
+    /// **`0` is a value, not "off"**: it drops every blank line, and the
+    /// second rule reads it as an instruction to stop firing rather than as a
+    /// clamp to nothing — see [`build006::Breaks::block_blanks`] for why the
+    /// difference is idempotence.
     pub max_blank_lines: usize,
     /// Reflow an own-line `%` comment that [`comment::is_prose`] accepts and
     /// whose line is wider than [`CstOptions::max_width`].
@@ -228,7 +237,7 @@ impl Default for CstOptions {
             tab_spaces: 2,
             // The corpus uses a two-blank-line gap as a section break and only
             // 12 lines in 24111 exceed it (`format.rs:163-172`).
-            max_blank_lines: 2,
+            max_blank_lines: build006::DEFAULT_MAX_BLANK_LINES,
             // Three comments in 2062 on this corpus, and a real reflow on a
             // codebase whose comments are prose. The user's call, made with
             // the census in front of them — see the field's own
@@ -580,6 +589,7 @@ fn slice1_doc<'s>(
                 build006::SLICE3,
                 wrap_budget(opts),
                 opts.wrap_inline_text,
+                opts.max_blank_lines,
             )
         }
         _ => {
@@ -593,6 +603,7 @@ fn slice1_doc<'s>(
                 build006::SLICE3,
                 wrap_budget(opts),
                 opts.wrap_inline_text,
+                opts.max_blank_lines,
             )
         }
     };

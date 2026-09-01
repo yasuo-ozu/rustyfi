@@ -878,15 +878,81 @@ fn fmt_command() -> Command {
                      the diff-only mode.",
                 ),
         )
+        // The five formatting options, one flag each. Values are taken as
+        // strings and parsed in `fmt_opts` rather than by a clap
+        // `value_parser`, so that a bad flag and a bad environment variable
+        // produce the SAME message with the same range in it — clap's own
+        // wording would apply to one surface and not the other.
+        .arg(
+            Arg::new("max-width")
+                .long("max-width")
+                .value_name("N")
+                .help(
+                    "Line budget in display columns, 20..=1000 (default 100). A \
+                     CJK character counts 2. Also $RUSTYFI_FMT_MAX_WIDTH.",
+                ),
+        )
+        .arg(
+            Arg::new("tab-spaces")
+                .long("tab-spaces")
+                .value_name("N")
+                .help(
+                    "Columns per indentation step, 1..=16 (default 2). Also \
+                     $RUSTYFI_FMT_TAB_SPACES.",
+                ),
+        )
+        .arg(
+            Arg::new("max-blank-lines")
+                .long("max-blank-lines")
+                .value_name("N")
+                .help(
+                    "Consecutive blank lines kept before the rest are dropped, \
+                     0..=32 (default 2). Also $RUSTYFI_FMT_MAX_BLANK_LINES.",
+                ),
+        )
+        .arg(
+            Arg::new("wrap-comments")
+                .long("wrap-comments")
+                .value_name("BOOL")
+                .num_args(0..=1)
+                .default_missing_value("true")
+                .value_parser(["true", "false"])
+                .help(
+                    "Reflow an own-line `%` comment that reads as prose and runs \
+                     past the budget (default true). Bare --wrap-comments means \
+                     true. Also $RUSTYFI_FMT_WRAP_COMMENTS.",
+                ),
+        )
+        .arg(
+            Arg::new("wrap-inline-text")
+                .long("wrap-inline-text")
+                .value_name("BOOL")
+                .num_args(0..=1)
+                .default_missing_value("true")
+                .value_parser(["true", "false"])
+                .help(
+                    "Re-wrap the text inside `{ ... }` to the budget (default \
+                     true). Set false to keep hand-laid-out prose exactly as \
+                     written, which is what a corpus of one-sentence-per-line \
+                     manuals wants. Also $RUSTYFI_FMT_WRAP_INLINE_TEXT.",
+                ),
+        )
         .after_help(
-            "Formatting has no configuration flag yet: it runs on the built-in \
-             defaults (max_width 100, tab_spaces 2, max_blank_lines 2). The \
-             --config listed above is the GLOBAL flag naming the Satyrographos \
-             registry configuration and has no effect on formatting; when a \
-             formatter configuration file is specified, the flag naming it will be \
-             --config-path.\n\nExit codes: 0 clean; 1 --check found files needing \
+            "The five formatting options take their value from, in order: the \
+             flag above, then the environment variable its help names, then the \
+             built-in default (max_width 100, tab_spaces 2, max_blank_lines 2, \
+             wrap_comments true, wrap_inline_text true). Each option is resolved \
+             separately, so a flag and a variable naming different options both \
+             apply. A value out of range is refused, not clamped, and nothing is \
+             written.\n\nThere is still no configuration FILE: the --config listed \
+             above is the GLOBAL flag naming the Satyrographos registry \
+             configuration and has no effect on formatting. When a formatter \
+             configuration file is specified, the flag naming it will be \
+             --config-path, and it will rank below both surfaces above.\n\nExit codes: 0 clean; 1 --check found files needing \
              reformatting; 2 usage; 5 filesystem; 6 at least one file was declined \
-             (it does not lex). Precedence when several apply: 5, 6, 1, 0.",
+             (it does not lex); 7 at least one file LEXED but did not PARSE, so it \
+             was only tidied by the older whitespace formatter rather than laid \
+             out. Precedence when several apply: 5, 6, 7, 1, 0.",
         )
 }
 

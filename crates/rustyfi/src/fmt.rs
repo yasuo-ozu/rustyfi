@@ -225,12 +225,20 @@ pub fn run(m: &ArgMatches) -> i32 {
             return 2;
         }
     };
+    // Flags, then environment, then defaults -- see `fmt_opts`. A refusal
+    // here is a usage error and nothing has been written yet.
+    let opts = match crate::fmt_opts::resolve(m) {
+        Ok(opts) => opts,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
     let cfg = Config {
         check: m.get_flag("check"),
         lang,
         emit,
-        // No config file: see the module doc's "No config file".
-        opts: CstOptions::default(),
+        opts,
     };
 
     let args: Vec<PathBuf> = m

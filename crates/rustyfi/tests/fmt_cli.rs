@@ -814,3 +814,207 @@ fn corpus_bytes(root: &Path, dirs: &[&str]) -> Vec<(PathBuf, Vec<u8>)> {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// The five formatting options: flags, environment variables, and precedence.
+//
+// The flag half is unit-tested in `fmt_opts` against the real clap definition.
+// What can only be tested out here is the ENVIRONMENT half, because a unit
+// test would have to mutate the process environment and race every other test
+// in the binary. A subprocess has its own.
+// ---------------------------------------------------------------------------
+
+/// Like [`fmt`], with environment variables set for the child only.
+fn fmt_env(args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Run {
+    let mut cmd = Command::new(bin());
+    cmd.arg("fmt")
+        .args(args)
+        .stdin(match stdin {
+            Some(_) => Stdio::piped(),
+            None => Stdio::null(),
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(repo_root());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn `rustyfi fmt`");
+    if let Some(text) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(text.as_bytes())
+            .expect("write to `rustyfi fmt`");
+    }
+    let out = child.wait_with_output().expect("wait for `rustyfi fmt`");
+    Run {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// A record wide enough to be flat at 100 columns and broken at 40, so one
+/// document distinguishes every width setting below.
+const WIDE: &str = "let f x = (| alpha = 1; beta = 2; gamma = 3; delta = 4; epsilon = 5 |)\n\
+                    in\n\
+                    document (|title = {P}; author = {r};|) '< +p { hi } >\n";
+
+fn is_flat(text: &str) -> bool {
+    text.contains("(| alpha = 1;") && text.contains("epsilon = 5 |)")
+}
+
+#[test]
+fn the_width_environment_variable_is_read() {
+    let run = fmt_env(
+        &["--emit", "stdout", "-"],
+        &[("RUSTYFI_FMT_MAX_WIDTH", "40")],
+        Some(WIDE),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        !is_flat(&run.stdout),
+        "40 columns should break the record:\n{}",
+        run.stdout
+    );
+    // And the control, so this cannot pass because the record breaks anyway.
+    let plain = fmt_with_stdin(&["--emit", "stdout", "-"], Some(WIDE));
+    assert!(
+        is_flat(&plain.stdout),
+        "the default 100 should keep it flat:\n{}",
+        plain.stdout
+    );
+}
+
+#[test]
+fn a_flag_beats_the_environment_for_the_same_option() {
+    let run = fmt_env(
+        &["--emit", "stdout", "--max-width", "100", "-"],
+        &[("RUSTYFI_FMT_MAX_WIDTH", "40")],
+        Some(WIDE),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        is_flat(&run.stdout),
+        "the flag should win over the variable:\n{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_flag_and_a_variable_naming_different_options_both_apply() {
+    // Width from the flag, indent from the environment: if resolution were
+    // all-or-nothing per surface, one of these two assertions would fail.
+    let run = fmt_env(
+        &["--emit", "stdout", "--max-width", "40", "-"],
+        &[("RUSTYFI_FMT_TAB_SPACES", "4")],
+        Some(WIDE),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!is_flat(&run.stdout), "width applied:\n{}", run.stdout);
+    assert!(
+        run.stdout.contains("\n    alpha = 1;"),
+        "tab_spaces 4 applied:\n{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn an_empty_variable_is_not_set() {
+    // `RUSTYFI_FMT_MAX_WIDTH=` is how a shell script spells "leave it alone".
+    // Parsing it as a number would exit 2 on a job that is asking for the
+    // default.
+    let run = fmt_env(
+        &["--emit", "stdout", "-"],
+        &[("RUSTYFI_FMT_MAX_WIDTH", "")],
+        Some(WIDE),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(is_flat(&run.stdout), "{}", run.stdout);
+}
+
+#[test]
+fn a_bad_variable_is_a_usage_error_that_names_the_variable() {
+    let run = fmt_env(
+        &["--emit", "stdout", "-"],
+        &[("RUSTYFI_FMT_MAX_WIDTH", "5")],
+        Some(WIDE),
+    );
+    assert_eq!(run.code, 2, "out of range is a usage error");
+    assert!(
+        run.stderr.contains("RUSTYFI_FMT_MAX_WIDTH"),
+        "the message must name the VARIABLE, since there is no flag on the \
+         command line to look at: {}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("20..=1000"), "{}", run.stderr);
+    assert!(
+        run.stdout.is_empty(),
+        "nothing is written on a usage error: {}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_bad_variable_refuses_before_writing_anything() {
+    // The dangerous shape: in-place mode, a tree of real files, and a bad
+    // setting. Nothing may be rewritten -- so this must fail at resolution,
+    // before the first file is touched.
+    let dir = Scratch::new("bad-env-writes-nothing");
+    let f = dir.write("a.saty", WIDE);
+    let before = std::fs::read(&f).expect("read back");
+
+    let run = fmt_env(
+        &[f.to_str().expect("utf-8 path")],
+        &[("RUSTYFI_FMT_TAB_SPACES", "0")],
+        None,
+    );
+    assert_eq!(run.code, 2, "{}", run.stderr);
+    assert_eq!(
+        std::fs::read(&f).expect("read after"),
+        before,
+        "the file must be untouched"
+    );
+}
+
+#[test]
+fn the_boolean_options_reach_the_formatter_from_both_surfaces() {
+    // A `%` comment long enough to be reflowed, and prose enough to pass the
+    // classifier. With wrapping off it must come back on one line.
+    let src = "% This is an ordinary English sentence written as documentation \
+               prose, and it is deliberately far longer than the hundred column \
+               budget so that the comment wrapper has something to do with it.\n\
+               let x = 1\n\
+               in\n\
+               document (|title = {P}; author = {r};|) '< +p { hi } >\n";
+
+    let on = fmt_with_stdin(&["--emit", "stdout", "-"], Some(src));
+    assert_eq!(on.code, 0, "{}", on.stderr);
+
+    let off_flag = fmt_with_stdin(
+        &["--emit", "stdout", "--wrap-comments", "false", "-"],
+        Some(src),
+    );
+    assert_eq!(off_flag.code, 0, "{}", off_flag.stderr);
+
+    let off_env = fmt_env(
+        &["--emit", "stdout", "-"],
+        &[("RUSTYFI_FMT_WRAP_COMMENTS", "false")],
+        Some(src),
+    );
+    assert_eq!(off_env.code, 0, "{}", off_env.stderr);
+
+    // The two "off" surfaces must agree with each other...
+    assert_eq!(
+        off_flag.stdout, off_env.stdout,
+        "the flag and the variable must mean the same thing"
+    );
+    // ...and must differ from "on", or this test proves nothing about either.
+    assert_ne!(
+        on.stdout, off_flag.stdout,
+        "wrap_comments must actually change this document, otherwise the \
+         fixture is wrong and the assertions above are vacuous"
+    );
+}

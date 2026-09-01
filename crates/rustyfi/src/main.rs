@@ -11,6 +11,7 @@ use clap::ArgMatches;
 mod cache;
 mod dispatch;
 mod fmt;
+mod fmt_opts;
 mod format;
 mod man;
 

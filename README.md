@@ -881,6 +881,13 @@ It answers **diagnostics**, **hover**, **go-to-definition**, **completion**,
 **symbols** and **formatting** — for both SATySFi generations, and on
 half-typed buffers.
 
+A **Visual Studio Code extension** wrapping this server, the formatter and a
+live Markdown preview lives in [`editors/vscode/`](editors/vscode/README.md).
+
+A **Vim and Neovim plugin** — filetype, `:RustyfiFmt`, this server, and a live
+unicode-math preview in a scratch split — lives in
+[`editors/vim/`](editors/vim/README.md).
+
 ### Diagnostics
 
 **Lex and parse errors** are reported for any buffer at all, under whichever

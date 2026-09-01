@@ -1,0 +1,235 @@
+{
+  "name": "rustyfi",
+  "displayName": "rustyfi (SATySFi)",
+  "description": "Syntax highlighting, formatting, LSP and live Markdown preview for SATySFi documents, powered by the rustyfi compiler.",
+  "version": "0.1.0",
+  "publisher": "yasuo-ozu",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:satysfi"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "satysfi",
+        "aliases": [
+          "SATySFi",
+          "satysfi"
+        ],
+        "extensions": [
+          ".saty",
+          ".satyh",
+          ".satyg"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "satysfi",
+        "scopeName": "source.satysfi",
+        "path": "./syntaxes/satysfi.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "rustyfi.showPreview",
+        "title": "rustyfi: Open Preview to the Side",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "rustyfi.refreshPreview",
+        "title": "rustyfi: Refresh Preview"
+      },
+      {
+        "command": "rustyfi.restartServer",
+        "title": "rustyfi: Restart Language Server"
+      },
+      {
+        "command": "rustyfi.showOutput",
+        "title": "rustyfi: Show Output Channel"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "rustyfi.showPreview",
+          "when": "editorLangId == satysfi",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "rustyfi",
+      "properties": {
+        "rustyfi.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `rustyfi` binary. When empty, the extension looks on `PATH`, then for `target/release/rustyfi` inside the open workspace."
+        },
+        "rustyfi.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `rustyfi lsp` and attach the language client (diagnostics, hover, go-to-definition, completion, symbols)."
+        },
+        "rustyfi.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the LSP traffic in the output channel."
+        },
+        "rustyfi.format.provider": {
+          "type": "string",
+          "enum": [
+            "cli",
+            "lsp",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Format by running `rustyfi fmt -` over the buffer (honours the rustyfi.format.* options below).",
+            "Let the language server's own formatting provider handle it (the rustyfi.format.* options below do not apply).",
+            "Contribute no formatter at all."
+          ],
+          "default": "cli",
+          "markdownDescription": "Who formats a SATySFi document. `rustyfi lsp` also advertises a formatting provider; leaving this at `cli` suppresses the server's so the two do not both register."
+        },
+        "rustyfi.format.lang": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "0.0",
+            "0.1"
+          ],
+          "default": "auto",
+          "markdownDescription": "Passed as `--lang`. `auto` omits the flag, letting the formatter sniff each file's own generation."
+        },
+        "rustyfi.format.maxWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 20,
+          "maximum": 1000,
+          "markdownDescription": "`--max-width`: line budget in display columns (a CJK character counts 2). `null` omits the flag, so `$RUSTYFI_FMT_MAX_WIDTH` or the built-in default (100) applies."
+        },
+        "rustyfi.format.tabSpaces": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 1,
+          "maximum": 16,
+          "markdownDescription": "`--tab-spaces`: columns per indentation step. `null` omits the flag (built-in default 2)."
+        },
+        "rustyfi.format.maxBlankLines": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 0,
+          "maximum": 32,
+          "markdownDescription": "`--max-blank-lines`: consecutive blank lines kept. `null` omits the flag (built-in default 2)."
+        },
+        "rustyfi.format.wrapComments": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "`--wrap-comments`: reflow an own-line `%` comment that reads as prose. `null` omits the flag (built-in default true)."
+        },
+        "rustyfi.format.wrapInlineText": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null,
+          "markdownDescription": "`--wrap-inline-text`: re-wrap the text inside `{ ... }`. `null` omits the flag (built-in default true). Set `false` for a corpus of one-sentence-per-line prose."
+        },
+        "rustyfi.preview.mathMode": {
+          "type": "string",
+          "enum": [
+            "unicode-math",
+            "svg-math",
+            "svg-outline-math",
+            "katex",
+            "mathml"
+          ],
+          "default": "unicode-math",
+          "markdownDescription": "How equations are written in the preview. The default `unicode-math` writes them as their characters in reading order (x², ∑ₐᵇ) — plain text that always renders. The others are passed straight through to the compiler; `katex` and `mathml` emit markup this preview does not typeset, so they will show as source."
+        },
+        "rustyfi.preview.debounce": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "maximum": 10000,
+          "markdownDescription": "Milliseconds of typing quiet before the preview recompiles. The default 300 was chosen from measured compile times on this repo's corpus (0.13–0.22 s typical, ~4 s worst case); see the README."
+        },
+        "rustyfi.preview.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow the preview panel to recompile automatically as you type. When false, the preview only refreshes on the explicit refresh command."
+        },
+        "rustyfi.preview.timeout": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 1000,
+          "markdownDescription": "Milliseconds before an in-flight preview compile is killed."
+        },
+        "rustyfi.libRoot": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Passed as `--lib-root` to preview compiles. Empty uses the compiler's own discovery (`$RUSTYFI_LIB_ROOT`, then `lib-rustyfi/` above the document, and so on)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test out/test/*.test.js",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasuo-ozu/satysfi-rust-converted.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/yasuo-ozu/satysfi-rust-converted/issues"
+  },
+  "homepage": "https://github.com/yasuo-ozu/satysfi-rust-converted/tree/main/editors/vscode",
+  "keywords": [
+    "satysfi",
+    "rustyfi",
+    "typesetting",
+    "latex",
+    "pdf"
+  ]
+}

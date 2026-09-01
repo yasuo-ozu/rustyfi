@@ -1,0 +1,9 @@
+@require: stdja
+
+
+let   x    =    1
+in
+StdJa.document (|title={Messy};author={a};show-title=true;show-toc=false|) '<
+  +p{ Line one. }
+  +p{ Line two. }
+>

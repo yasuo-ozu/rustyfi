@@ -1,0 +1,619 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SATySFi",
+  "scopeName": "source.satysfi",
+  "patterns": [
+    {
+      "include": "#program"
+    }
+  ],
+  "repository": {
+    "program": {
+      "patterns": [
+        {
+          "include": "#header"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#block-text"
+        },
+        {
+          "include": "#math"
+        },
+        {
+          "include": "#inline-text"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#command-name-binding"
+        },
+        {
+          "include": "#module-path"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#variables"
+        }
+      ]
+    },
+    "comment": {
+      "name": "comment.line.percentage.satysfi",
+      "begin": "%",
+      "end": "$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.satysfi"
+        }
+      }
+    },
+    "header": {
+      "match": "^(@)(require|import|stage)(:)\\s*(.*)$",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.keyword.satysfi"
+        },
+        "2": {
+          "name": "keyword.control.import.satysfi"
+        },
+        "3": {
+          "name": "punctuation.separator.satysfi"
+        },
+        "4": {
+          "name": "string.unquoted.header.satysfi"
+        }
+      }
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.other.backtick.satysfi",
+          "begin": "#?```(?!`)",
+          "end": "```#?",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.satysfi"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.other.backtick.satysfi",
+          "begin": "#?``(?!`)",
+          "end": "``#?",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.satysfi"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.other.backtick.satysfi",
+          "begin": "#?`(?!`)",
+          "end": "`#?",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.satysfi"
+            }
+          }
+        }
+      ]
+    },
+    "inline-text": {
+      "name": "meta.inline-text.satysfi",
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.inline-text.begin.satysfi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.inline-text.end.satysfi"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#escape"
+        },
+        {
+          "include": "#math"
+        },
+        {
+          "include": "#block-text"
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#text-interpolation"
+        },
+        {
+          "include": "#inline-text"
+        },
+        {
+          "include": "#inline-text-markup"
+        }
+      ]
+    },
+    "inline-text-body": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#escape"
+        },
+        {
+          "include": "#math"
+        },
+        {
+          "include": "#block-text"
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#text-interpolation"
+        },
+        {
+          "include": "#inline-text"
+        },
+        {
+          "include": "#inline-text-markup"
+        }
+      ]
+    },
+    "block-text": {
+      "name": "meta.block-text.satysfi",
+      "begin": "'<",
+      "end": ">",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.block-text.begin.satysfi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.block-text.end.satysfi"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#escape"
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#text-interpolation"
+        },
+        {
+          "include": "#math"
+        },
+        {
+          "include": "#inline-text"
+        }
+      ]
+    },
+    "math": {
+      "name": "meta.math.satysfi",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.math.begin.satysfi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.math.end.satysfi"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#escape"
+        },
+        {
+          "begin": "!\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#inline-text-body"
+            }
+          ]
+        },
+        {
+          "begin": "!<",
+          "end": ">",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "include": "#command"
+            },
+            {
+              "include": "#inline-text"
+            }
+          ]
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#text-interpolation"
+        },
+        {
+          "name": "keyword.operator.math.satysfi",
+          "match": "[\\^_]"
+        },
+        {
+          "name": "punctuation.section.group.satysfi",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#math-body"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.math.satysfi",
+          "match": "[A-Za-z][A-Za-z0-9]*"
+        },
+        {
+          "name": "constant.numeric.satysfi",
+          "match": "\\d+(\\.\\d+)?"
+        }
+      ]
+    },
+    "math-body": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#escape"
+        },
+        {
+          "begin": "!\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#inline-text-body"
+            }
+          ]
+        },
+        {
+          "begin": "!<",
+          "end": ">",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comment"
+            },
+            {
+              "include": "#command"
+            },
+            {
+              "include": "#inline-text"
+            }
+          ]
+        },
+        {
+          "include": "#command"
+        },
+        {
+          "include": "#text-interpolation"
+        },
+        {
+          "name": "keyword.operator.math.satysfi",
+          "match": "[\\^_]"
+        },
+        {
+          "name": "punctuation.section.group.satysfi",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#math-body"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.math.satysfi",
+          "match": "[A-Za-z][A-Za-z0-9]*"
+        },
+        {
+          "name": "constant.numeric.satysfi",
+          "match": "\\d+(\\.\\d+)?"
+        }
+      ]
+    },
+    "command": {
+      "patterns": [
+        {
+          "match": "(\\\\)((?:[A-Z][A-Za-z0-9]*\\.)*)([a-zA-Z][-a-zA-Z0-9]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.command.satysfi"
+            },
+            "2": {
+              "name": "entity.name.namespace.satysfi"
+            },
+            "3": {
+              "name": "entity.name.function.inline-command.satysfi"
+            }
+          }
+        },
+        {
+          "match": "(\\+)((?:[A-Z][A-Za-z0-9]*\\.)*)([a-zA-Z][-a-zA-Z0-9]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.command.satysfi"
+            },
+            "2": {
+              "name": "entity.name.namespace.satysfi"
+            },
+            "3": {
+              "name": "entity.name.function.block-command.satysfi"
+            }
+          }
+        },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.arguments.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.arguments.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#program"
+            }
+          ]
+        },
+        {
+          "name": "punctuation.terminator.command.satysfi",
+          "match": ";"
+        }
+      ]
+    },
+    "escape": {
+      "name": "constant.character.escape.satysfi",
+      "match": "\\\\[^A-Za-z0-9]"
+    },
+    "text-interpolation": {
+      "patterns": [
+        {
+          "match": "(#)([A-Za-z_][-A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.variable.satysfi"
+            },
+            "2": {
+              "name": "variable.other.interpolation.satysfi"
+            }
+          }
+        },
+        {
+          "begin": "#\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.satysfi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.satysfi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#program"
+            }
+          ]
+        }
+      ]
+    },
+    "inline-text-markup": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.inline.satysfi",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.itemize.satysfi",
+          "match": "^\\s*\\*+"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.satysfi",
+          "match": "(?<![-A-Za-z0-9])(let-rec|let-mutable|let-inline|let-block|let-math|let|in|and|fun|if|then|else|match|with|when|as|type|of|module|struct|signature|sig|val|direct|end|open|include|constraint|before|while|do|not|mod|command|controls|cycle|use|persistent|macro)(?![-A-Za-z0-9])"
+        },
+        {
+          "name": "keyword.other.stage.satysfi",
+          "match": "(?<![-A-Za-z0-9])(persistent)(?![-A-Za-z0-9])"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.satysfi",
+      "match": "(?<![-A-Za-z0-9])(inline-text|block-text|math-text|inline-boxes|block-boxes|math-boxes|inline-cmd|block-cmd|math-cmd|math-char-class|language-system|int|float|bool|string|length|unit|context|pre-path|path|graphics|image|document|color|font|deco-set|deco|paren|script|math|page|code|ref|list|option)(?![-A-Za-z0-9])"
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.satysfi",
+          "match": "(?<![-A-Za-z0-9])(true|false)(?![-A-Za-z0-9])"
+        },
+        {
+          "name": "constant.language.unit.satysfi",
+          "match": "\\(\\s*\\)"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.length.satysfi",
+          "match": "(?<![-A-Za-z0-9])\\d+(\\.\\d+)?(cm|mm|pt|inch|em|ex)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.satysfi",
+          "match": "(?<![-A-Za-z0-9])0[xX][0-9A-Fa-f]+"
+        },
+        {
+          "name": "constant.numeric.satysfi",
+          "match": "(?<![-A-Za-z0-9])\\d+(\\.\\d+)?"
+        }
+      ]
+    },
+    "command-name-binding": {
+      "match": "([\\\\+])([a-zA-Z][-a-zA-Z0-9]*)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.command.satysfi"
+        },
+        "2": {
+          "name": "entity.name.function.command.satysfi"
+        }
+      }
+    },
+    "module-path": {
+      "match": "\\b([A-Z][A-Za-z0-9]*)(?=\\.)",
+      "captures": {
+        "1": {
+          "name": "entity.name.namespace.satysfi"
+        }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.stage.satysfi",
+          "match": "[&~](?=[A-Za-z(])"
+        },
+        {
+          "name": "keyword.operator.record.satysfi",
+          "match": "\\(\\||\\|\\)"
+        },
+        {
+          "name": "keyword.operator.satysfi",
+          "match": "(\\|>|<\\||->|<-|\\+\\+|::|\\+'|-'|\\*'|/'|>=|<=|==|/=|&&|\\|\\||[-+*/<>=!^|&])"
+        },
+        {
+          "name": "punctuation.separator.satysfi",
+          "match": "[;,|]"
+        },
+        {
+          "name": "punctuation.accessor.satysfi",
+          "match": "\\."
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.satysfi",
+          "match": "\\b[a-z_][-A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "entity.name.type.satysfi",
+          "match": "\\b[A-Z][A-Za-z0-9]*\\b"
+        }
+      ]
+    }
+  }
+}

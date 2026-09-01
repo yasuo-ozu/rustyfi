@@ -1,0 +1,6 @@
+@require: stdja
+@import: helper
+
+StdJa.document (|title = {Import test}; author = {t}; show-title = true; show-toc = false|) '<
+  +p{ #greet; And inline math ${x^2} plus ${\frac{a+b}{c+d}} and ${\sum_a^b}. }
+>

@@ -1,0 +1,88 @@
+{
+  "comments": {
+    "lineComment": "%"
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "(|",
+      "|)"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "(|",
+      "close": "|)"
+    },
+    {
+      "open": "${",
+      "close": "}"
+    },
+    {
+      "open": "'<",
+      "close": ">"
+    },
+    {
+      "open": "`",
+      "close": "`",
+      "notIn": [
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ],
+    [
+      "`",
+      "`"
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "(\\{|\\[|\\(|'<|\\$\\{)\\s*$|\\b(let|let-rec|let-inline|let-block|let-math|fun|match|module|struct|sig)\\b.*(?<![};)])\\s*$",
+    "decreaseIndentPattern": "^\\s*(\\}|\\]|\\)|>|\\|\\)|\\bend\\b|\\bin\\b)"
+  },
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_'-]*|\\-?\\d+(\\.\\d+)?",
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*%.*$",
+      "action": {
+        "indent": "none",
+        "appendText": "% "
+      }
+    }
+  ]
+}

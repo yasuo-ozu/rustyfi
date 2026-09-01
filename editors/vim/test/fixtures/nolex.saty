@@ -1,0 +1,2 @@
+@require: stdja
+let broken = `unterminated string literal

@@ -1,0 +1,454 @@
+*rustyfi.txt*  SATySFi support for Vim and Neovim: format, LSP, live preview
+
+                                                    *rustyfi* *rustyfi.vim*
+                         ____           _         __ _
+                        |  _ \ _   _ __| |_ _  _ / _(_)
+                        | |_) | | | / _` | __| || |  _| |
+                        |  _ <| |_| \__ \ |_ \_, | | | |
+                        |_| \_\\__,_|___/\__|/___|_| |_|
+
+
+==============================================================================
+CONTENTS                                                    *rustyfi-contents*
+
+    1. Introduction ......................... |rustyfi-introduction|
+    2. Requirements ......................... |rustyfi-requirements|
+    3. Installation ......................... |rustyfi-installation|
+    4. Filetype ............................. |rustyfi-filetype|
+    5. Commands ............................. |rustyfi-commands|
+    6. Formatting ........................... |rustyfi-fmt|
+       6.1 Exit codes ....................... |rustyfi-fmt-exit-codes|
+       6.2 Cursor preservation .............. |rustyfi-fmt-cursor|
+    7. Preview .............................. |rustyfi-preview|
+       7.1 Cost and debounce ................ |rustyfi-preview-cost|
+       7.2 How the buffer is compiled ....... |rustyfi-preview-scratch|
+       7.3 Errors ........................... |rustyfi-preview-errors|
+    8. Language server ...................... |rustyfi-lsp|
+       8.1 Neovim ........................... |rustyfi-lsp-nvim|
+       8.2 Vim 8 ............................ |rustyfi-lsp-vim|
+    9. Options .............................. |rustyfi-options|
+   10. Tests ................................ |rustyfi-tests|
+   11. Known gaps ........................... |rustyfi-gaps|
+
+
+==============================================================================
+1. INTRODUCTION                                         *rustyfi-introduction*
+
+rustyfi is a native Rust port of SATySFi, the statically typed functional
+typesetting language.  This plugin wires its three editor-facing surfaces into
+Vim and Neovim:
+
+    - `rustyfi fmt`  the source formatter                    |rustyfi-fmt|
+    - `rustyfi lsp`  a language server over stdio            |rustyfi-lsp|
+    - `rustyfi --format markdown --unicode-math`
+                     a plain-text render of the document,
+                     shown live in a scratch split           |rustyfi-preview|
+
+Plus filetype detection, a small syntax file and a bracket-depth indenter.
+
+The preview is the reason this is worth having in a terminal editor.
+`--unicode-math` writes equations as their characters in reading order --
+x-squared as `x²`, a sum as `∑ᵇₐ`, a fraction as `(a + b)/(c + d)` -- which is
+the only output form that is plain text.  So the preview is a BUFFER.  No
+browser, no webview, and it works over ssh.
+
+
+==============================================================================
+2. REQUIREMENTS                                         *rustyfi-requirements*
+
+Vim 8.2 or later, or Neovim 0.9 or later.  plugin/rustyfi.vim checks this
+and declines to load below it.
+
+Verified against Vim 8.2.1522, Vim 9.2.0106, Neovim 0.9.4 and Neovim 0.11.6:
+the full test suite (|rustyfi-tests|) passes in all four.
+
+The `rustyfi` executable.  It is looked up:
+
+    1. `g:rustyfi_bin`, if you set it (used verbatim, never second-guessed)
+    2. `rustyfi` on $PATH
+    3. `target/release/rustyfi` then `target/debug/rustyfi`, walking up from
+       the current file's directory -- so the plugin works inside a rustyfi
+       checkout with nothing installed
+
+Vim needs |+job|, |+channel| and |+timers| for the preview; every mainstream
+build has them.
+
+
+==============================================================================
+3. INSTALLATION                                         *rustyfi-installation*
+
+The plugin root is the `editors/vim` subdirectory of the rustyfi repository,
+not the repository root.
+
+vim-plug: >
+    Plug 'yasuo-ozu/satysfi-rust-converted', {'rtp': 'editors/vim'}
+<
+Native packages: >
+    git clone https://github.com/yasuo-ozu/satysfi-rust-converted \
+        ~/src/rustyfi
+    ln -s ~/src/rustyfi/editors/vim \
+          ~/.vim/pack/rustyfi/start/rustyfi
+<
+and for Neovim >
+    ln -s ~/src/rustyfi/editors/vim \
+          ~/.local/share/nvim/site/pack/rustyfi/start/rustyfi
+<
+Then, once: >
+    :helptags ~/.vim/pack/rustyfi/start/rustyfi/doc
+<
+See editors/vim/README.md for lazy.nvim and the other managers.
+
+
+==============================================================================
+4. FILETYPE                                                 *rustyfi-filetype*
+
+`*.saty`, `*.satyh` and `*.satyg` are detected as filetype `satysfi`.
+
+That name is the established one: it is what qnighy/satysfi.vim sets and what
+nvim-lspconfig's `satysfi_ls` entry lists.  Detection uses |:setf|, which does
+nothing when a filetype is already set, and syntax/satysfi.vim returns early
+on |b:current_syntax| -- so installing this next to another SATySFi plugin is
+not a collision.  Whichever loads first wins.
+
+The syntax file is deliberately minimal, but it does model the one structural
+fact that keeps it honest: SATySFi has a program mode and a text mode:
+`{ ... }` always enters inline text and `'< ... >` block text, so keywords are
+highlighted only where they are keywords.  The English word "in" inside a
+paragraph is left alone.
+
+The indenter is a bracket-depth heuristic and nothing more; |:RustyfiFmt| is
+the authority on layout.  `g:rustyfi_no_indent` turns it off.
+
+The ftplugin sets 'commentstring' to `% %s`, two-space 'shiftwidth' and
+'softtabstop' (matching `rustyfi fmt`'s own defaults), 'suffixesadd' so |gf|
+follows an `@import:` target, and adds `-` to 'iskeyword' so hyphenated
+identifiers are one word.
+
+
+==============================================================================
+5. COMMANDS                                                 *rustyfi-commands*
+
+                                                                *:RustyfiFmt*
+:RustyfiFmt             Format the current buffer.  |rustyfi-fmt|
+
+                                                           *:RustyfiFmtCheck*
+:RustyfiFmtCheck        Report whether the buffer would be reformatted, and
+                        show the unified diff in a scratch window (unless
+                        `g:rustyfi_fmt_check_show_diff` is 0).
+
+                                                    *:RustyfiFmtOnSaveToggle*
+:RustyfiFmtOnSaveToggle Toggle format-on-save for THIS buffer, overriding
+                        `g:rustyfi_fmt_on_save`.
+
+                                                            *:RustyfiPreview*
+:RustyfiPreview         Open the live preview split for the current buffer.
+                        Focus stays in your document.  |rustyfi-preview|
+
+                                                      *:RustyfiPreviewToggle*
+:RustyfiPreviewToggle   Open it, or close it if it is open.
+
+                                                     *:RustyfiPreviewRefresh*
+:RustyfiPreviewRefresh  Re-render now, ignoring the debounce.
+
+                                                      *:RustyfiPreviewErrors*
+:RustyfiPreviewErrors   Open a scratch window with the full compiler output
+                        from the last failed render.
+
+                                                       *:RustyfiPreviewClose*
+:RustyfiPreviewClose    Close the preview, stop any render in flight and
+                        remove the scratch source file.
+
+Inside the preview window: `q` closes it, `R` forces a refresh.
+
+
+==============================================================================
+6. FORMATTING                                                    *rustyfi-fmt*
+
+|:RustyfiFmt| pipes the BUFFER through `rustyfi fmt -` (stdin to stdout).  It
+does not format the file on disk, so an unsaved buffer formats what you can
+actually see, and the file is left alone until you write it.
+
+Extra flags go in `g:rustyfi_fmt_args`, a list: >
+    let g:rustyfi_fmt_args =
+        \ ['--max-width', '80', '--wrap-inline-text', 'false']
+<
+Format on save for every SATySFi buffer: >
+    let g:rustyfi_fmt_on_save = 1
+<
+or per buffer with |:RustyfiFmtOnSaveToggle|.
+
+Neovim users with the language server running have a second route:
+`vim.lsp.buf.format()`, since the server advertises documentFormatting.  It
+formats the same way.  |:RustyfiFmt| is the one that works without a client
+and that acts on the exit codes below.
+
+
+------------------------------------------------------------------------------
+6.1 Exit codes                                        *rustyfi-fmt-exit-codes*
+
+`rustyfi fmt` distinguishes six outcomes and the plugin acts on all of them:
+
+    0   clean                       apply the output
+    1   --check would reformat      reported by |:RustyfiFmtCheck|
+    2   usage error                 error message, buffer untouched
+    5   filesystem error            error message, buffer untouched
+    6   DECLINED: does not lex      error message, buffer untouched
+    7   lexed but did not parse     warning, buffer untouched
+
+Exit 6 is the important one.  When the file does not lex there is no token
+stream to re-emit, so the formatter writes NOTHING to standard output --
+applying that would blank your buffer.  It is reported as an error naming the
+reason and the buffer is not modified, not even marked 'modified'.
+
+Exit 7 does produce text, but it is the older whitespace formatter's tidy
+rather than the real layout.  Treating that as success would silently
+half-format a document whose parse you are still fixing, so by default the
+buffer is left alone and you get a warning.  To take the tidy anyway: >
+    let g:rustyfi_fmt_accept_partial = 1
+<
+Independently of the exit code, empty output over a non-empty buffer is always
+refused.
+
+------------------------------------------------------------------------------
+6.2 Cursor preservation                                   *rustyfi-fmt-cursor*
+
+Replacing the whole buffer and calling |winrestview()| puts the cursor back on
+the same LINE NUMBER, which is the wrong line as soon as the formatter added
+or removed lines above it.
+
+Instead the replacement trims the longest common prefix and the longest common
+suffix and rewrites only the middle.  So:
+
+    - a change below the cursor moves nothing;
+    - a change above the cursor shifts it by exactly the line delta;
+    - the column is preserved;
+    - lines outside the changed region are never touched, so their marks and
+      folds survive.
+
+
+==============================================================================
+7. PREVIEW                                                   *rustyfi-preview*
+
+|:RustyfiPreview| opens a scratch buffer in a split (vertical by default) and
+keeps it filled with
+
+    rustyfi <file> --format markdown --unicode-math
+
+re-run on a debounce as you type.  Focus never leaves your document, and the
+preview window's scroll position survives a re-render.
+
+Triggers: |TextChanged|, |TextChangedI|, |InsertLeave| and |BufWritePost| on
+the source buffer.
+
+The render is asynchronous -- |jobstart()| on Neovim, |job_start()| on Vim,
+behind one interface -- so the editor never blocks.  Starting a render kills
+the one in flight, and a late callback from a killed job is discarded by
+sequence number so it cannot overwrite the pane a newer render is filling.
+Closing the preview stops the job too.
+
+------------------------------------------------------------------------------
+7.1 Cost and debounce                                   *rustyfi-preview-cost*
+
+Compiling is not free.  Measured on the port's own corpus, wall clock, cold
+compile cache, `--format markdown --unicode-math`:
+
+    latexcmds  (403 lines)      0.20 s
+    enumitem   (1492 lines)     0.47 - 0.71 s
+    easytable  (991 lines)      0.89 - 1.34 s
+    figbox     (909 lines)      0.99 - 1.31 s
+    xpath      (486 lines)      2.7 - 3.9 s     (mostly vector graphics)
+    manual     (160 lines)      0.12 s
+
+`g:rustyfi_preview_debounce` therefore defaults to 500 (milliseconds).  A
+debounce shorter than the render only queues work; a longer one stops feeling
+live.  500 ms sits just past a normal inter-keystroke gap, so a typing burst
+produces exactly one render, and because the in-flight job is killed a slow
+document self-throttles rather than backing up.
+
+If your documents look like `xpath`, raise it: >
+    let g:rustyfi_preview_debounce = 1500
+<
+------------------------------------------------------------------------------
+7.2 How the buffer is compiled                       *rustyfi-preview-scratch*
+
+Two facts about the compiler shape this:
+
+1. There is no stdout mode.  `-o -` creates a file literally NAMED `-` in the
+   working directory; it does not write to standard output.  So the render
+   goes to a temp file that the plugin reads back.
+
+2. The compiler does not read a document from standard input, and `@import:`
+   is resolved relative to the INPUT FILE's directory -- `@require:` finds its
+   package root by walking up from there too.
+
+So the buffer is written to `.<name>.rustyfi-preview.saty` BESIDE the real
+document, and that is what is compiled.  It has to be in that directory: from
+anywhere else the compile fails with "cannot resolve `@import: ...`".  The
+file is deleted when the preview closes.
+
+The cross-reference auxiliary file is redirected into $TMPDIR with
+`--aux-file`, so a preview never leaves a `.satysfi-aux` in your tree.
+
+If the document's directory is not writable the preview says so and does
+nothing.  There is no fallback location, because a fallback cannot resolve
+`@import:`.
+
+------------------------------------------------------------------------------
+7.3 Errors                                            *rustyfi-preview-errors*
+
+A document mid-edit is broken most of the time, so a failed compile NEVER
+clears the pane.  The last good render stays on screen and the preview
+window's 'statusline' becomes: >
+    [rustyfi preview] stale: <first line of the compiler's complaint>
+<
+Nothing is echoed to the command line.  The compiler names the scratch file it
+was handed; the plugin puts your document's name back before showing the
+message.  |:RustyfiPreviewErrors| opens the full output when you want it.
+When the render succeeds again the statusline goes back to `ok`.
+
+
+==============================================================================
+8. LANGUAGE SERVER                                               *rustyfi-lsp*
+
+`rustyfi lsp` speaks LSP over stdio and advertises diagnostics, hover,
+go-to-definition, completion, document symbols, workspace symbols and document
+formatting, for both SATySFi generations and on half-typed buffers.
+
+This plugin ships configuration, not a client.
+
+------------------------------------------------------------------------------
+8.1 Neovim                                                  *rustyfi-lsp-nvim*
+
+Neovim 0.11 and later read `lsp/<name>.lua` from the 'runtimepath', and this
+plugin ships `lsp/rustyfi.lua`.  The whole setup is: >
+    vim.lsp.enable('rustyfi')
+<
+On 0.9 and 0.10, or when you want to pass `on_attach`/`capabilities`: >
+    require('rustyfi.lsp').setup({
+      cmd_bin  = '/path/to/rustyfi',   -- optional
+      lib_root = '/path/to/lib-rustyfi', -- optional
+      on_attach = function(client, bufnr) end,
+      capabilities = require('cmp_nvim_lsp').default_capabilities(),
+    })
+<
+That function uses `vim.lsp.config` when it exists, registers with
+nvim-lspconfig when that is installed, and otherwise starts the server itself
+from a FileType autocommand.  All three routes are exercised by the tests.
+
+Should this live upstream in nvim-lspconfig?  Yes, as a NEW entry.  lspconfig
+already ships `satysfi_ls`, which is the OCaml `satysfi-language-server` -- a
+different binary with a different command line.  `rustyfi lsp` is a second
+server for the same filetype, so the upstream shape is a sibling entry named
+`rustyfi`, not a patch to the existing one.
+
+------------------------------------------------------------------------------
+8.2 Vim 8                                                    *rustyfi-lsp-vim*
+
+Install prabirshrestha/vim-lsp and there is nothing else to do: the plugin
+registers the server on vim-lsp's `User lsp_setup` event, so |:LspHover|,
+|:LspDefinition|, |:LspDocumentSymbol| and the rest work in `.saty` buffers.
+
+Why vim-lsp and not ALE: ALE is a linting framework whose LSP support is
+expressed per-linter, so it gives you diagnostics and completion but reaches
+the rest of the server's surface only through its own partial commands.
+vim-lsp is a full client -- one `lsp#register_server()` call and every
+capability above is available.  An ALE recipe, offered untested, is in
+editors/vim/README.md for people who already run ALE.
+
+Extra server flags: >
+    let g:rustyfi_lsp_args = ['--check-libraries']
+    let g:rustyfi_lib_root = '/path/to/lib-rustyfi'
+<
+
+==============================================================================
+9. OPTIONS                                                   *rustyfi-options*
+
+                                                               *g:rustyfi_bin*
+Path to the executable.  Default `'rustyfi'`, which triggers the
+auto-discovery described in |rustyfi-requirements|.  Any other value is used
+verbatim.
+
+                                                             *g:rustyfi_quiet*
+Set to 1 to suppress informational |:echomsg| output.  Errors and warnings
+still appear.  Default 0.
+
+                                                       *g:rustyfi_fmt_on_save*
+Format every `.saty`/`.satyh`/`.satyg` buffer on write.  Default 0.  The
+buffer-local `b:rustyfi_fmt_on_save` overrides it; see
+|:RustyfiFmtOnSaveToggle|.
+
+                                                          *g:rustyfi_fmt_args*
+List of extra arguments for `rustyfi fmt`.  Default `[]`.
+
+                                                *g:rustyfi_fmt_accept_partial*
+Apply the whitespace-only tidy that exit 7 produces.  Default 0; see
+|rustyfi-fmt-exit-codes|.
+
+                                               *g:rustyfi_fmt_check_show_diff*
+Open |:RustyfiFmtCheck|'s unified diff in a scratch window.  Default 1.
+
+                                                  *g:rustyfi_preview_debounce*
+Milliseconds of quiet before a re-render.  Default 500; see
+|rustyfi-preview-cost|.
+
+                                                     *g:rustyfi_preview_split*
+`'vertical'` (default), `'horizontal'` or `'tab'`.
+
+                                    *g:rustyfi_preview_width*
+                                    *g:rustyfi_preview_height*
+Size of the split: 62 columns vertically, 15 lines horizontally.
+
+                                                      *g:rustyfi_preview_args*
+List of extra compiler arguments appended to the render command, e.g.
+`['--lang', '0.1']` or `['--lib-root', '/path']`.  Default `[]`.
+
+                                                  *g:rustyfi_preview_filetype*
+Filetype set on the preview buffer.  Default `'markdown'`.
+
+                                                          *g:rustyfi_lib_root*
+Package root.  Passed to the preview compile and to the language server as
+`--lib-root`, and to the server as `initializationOptions.libRoot` as well.
+Unset by default; without it the compiler and the server each discover a root
+by walking up from the document.
+
+                                                          *g:rustyfi_lsp_args*
+                                                  *g:rustyfi_lsp_init_options*
+Extra arguments and extra `initializationOptions` for `rustyfi lsp`.
+
+                                                         *g:rustyfi_no_indent*
+Set to 1 before the plugin loads to skip indent/satysfi.vim entirely.
+
+
+==============================================================================
+10. TESTS                                                      *rustyfi-tests*
+
+>
+    editors/vim/test/run.sh
+<
+Real headless editors driving real buffers -- `nvim --headless` and `vim -es`.
+`test/run.vim` carries 88 assertions covering filetype detection, the
+formatter round trip through a buffer, cursor preservation, the exit-6 and
+exit-7 decline paths leaving the buffer intact, format-on-save, the preview
+producing non-empty unicode-math output for a document that `@import:`s a
+neighbour, a broken edit keeping the last good render, scratch-file cleanup,
+all three split modes, binary discovery, the syntax file's program-mode /
+text-mode split, the indenter, and the job abstraction.  `test/lsp.vim`
+carries 7 more (Neovim only) and is run in both setup routes.
+
+`RUSTYFI_EXTRA_VIM` takes a space-separated list of extra editor binaries;
+that is how the four-version matrix in |rustyfi-requirements| was produced.
+
+
+==============================================================================
+11. KNOWN GAPS                                                  *rustyfi-gaps*
+
+- |:RustyfiFmtCheck|'s diff comes from `--check` reading standard input, so
+  its hunk headers name `<stdin>` rather than your file.
+- The preview needs to write into the document's own directory
+  (|rustyfi-preview-scratch|).  A read-only directory means no preview.
+- There is no `:RustyfiBuild`.  Compiling to PDF is `:!rustyfi %`.
+- The ALE language-server recipe in the README is offered untested; vim-lsp is
+  the integration that ships and is exercised.
+
+
+vim:tw=78:ts=8:ft=help:norl:

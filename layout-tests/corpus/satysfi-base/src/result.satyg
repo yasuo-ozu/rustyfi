@@ -98,8 +98,8 @@ end = struct
     | Err(e) -> err (f e)
 
   let-rec and-
-  | _ (Err(_) as r) = r
-  | r _             = r
+    | _ (Err(_) as r) = r
+    | r _             = r
 
   let and-then k r =
     match r with
@@ -107,12 +107,12 @@ end = struct
     | Err(e) -> err e
 
   let-rec or
-  | _ (Ok(_) as r) = r
-  | r _            = r
+    | _ (Ok(_) as r) = r
+    | r _            = r
 
   let-rec or-else
-  | _ (Ok(_) as r) = r
-  | f (Err(e))     = f e
+    | _ (Ok(_) as r) = r
+    | f (Err(e))     = f e
 
   let transpose r =
     match r with

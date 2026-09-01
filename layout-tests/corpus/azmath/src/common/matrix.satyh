@@ -115,8 +115,8 @@ end = struct
     match f-lst with
     | [] -> []
     | f1::fs -> (match lst with
-                 | [] -> []
-                 | x1::xs ->  (f1 x1) :: (map-each-list fs xs))
+      | [] -> []
+      | x1::xs ->  (f1 x1) :: (map-each-list fs xs))
 
   let rowmap f-lst mtx = map-each-list (List.map List.map f-lst) mtx
 

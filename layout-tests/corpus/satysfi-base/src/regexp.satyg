@@ -114,17 +114,17 @@ end = struct
   let push x r = r |> Ref.update (fun l -> x :: l)
 
   type char-class =
-  | Single of Char.t
-  | Any
-  | Pred of Char.t -> bool
+    | Single of Char.t
+    | Any
+    | Pred of Char.t -> bool
 
   type anchor = BOF | EOF | BOL | EOL | NOWHERE
 
   type label =
-  | Char of char-class
-  | Anchor of anchor
-  | Save of int
-  | Epsilon
+    | Char of char-class
+    | Anchor of anchor
+    | Save of int
+    | Epsilon
 
   %
   %     label[0]
@@ -197,31 +197,31 @@ end = struct
       Result.err thread#trace
     else
       Result.ok (Ref.get state#next) |> and-then (fun (label, state) -> (
-        match label with
-        | Epsilon ->
+      match label with
+      | Epsilon ->
+        spawn state thread#trace
+        |> and-then step-1
+      | Save(i) ->
+        let trace = (i, Ref.get current-pos) :: thread#trace in
+        spawn state trace
+        |> and-then step-1
+      | Anchor(anthor) ->
+        let hit =
+          let pos = Ref.get current-pos in
+          let input = Ref.get current-input in
+          match anthor with
+          | BOF -> pos == 0
+          | EOF -> pos == String.length input
+          | BOL -> (pos == 0) |||- (fun () -> Eq.equal Char.eq (Char.at (pos - 1) input) Char.newline)
+          | EOL -> (pos == String.length input) |||- (fun () -> Eq.equal Char.eq (Char.at pos input) Char.newline)
+          | NOWHERE -> false in
+        if hit then
           spawn state thread#trace
-            |> and-then step-1
-        | Save(i) ->
-          let trace = (i, Ref.get current-pos) :: thread#trace in
-          spawn state trace
-            |> and-then step-1
-        | Anchor(anthor) ->
-          let hit =
-            let pos = Ref.get current-pos in
-            let input = Ref.get current-input in
-            match anthor with
-            | BOF -> pos == 0
-            | EOF -> pos == String.length input
-            | BOL -> (pos == 0) |||- (fun () -> Eq.equal Char.eq (Char.at (pos - 1) input) Char.newline)
-            | EOL -> (pos == String.length input) |||- (fun () -> Eq.equal Char.eq (Char.at pos input) Char.newline)
-            | NOWHERE -> false in
-          if hit then
-            spawn state thread#trace
-              |> and-then step-1
-          else
-            Result.ok []
-        | Char(class) ->
-          (match Stream.head (Ref.get current-stream) with
+          |> and-then step-1
+        else
+          Result.ok []
+      | Char(class) ->
+        (match Stream.head (Ref.get current-stream) with
           | None ->
             Result.ok []
           | Some(c) ->
@@ -232,13 +232,13 @@ end = struct
               | Pred(f) -> f c in
             if hit then
               spawn state thread#trace
-                |> and-then (fun thread -> (
-                  let () = next-threads |> push thread in
-                  Result.ok []
-                ))
+              |> and-then (fun thread -> (
+                let () = next-threads |> push thread in
+                Result.ok []
+              ))
             else
               Result.ok []
-          )
+        )
       ))
 
   % returns (threads, Some(trace)) if NFA reached an accepting state and there are threads that are not exhausted.
@@ -279,34 +279,34 @@ end = struct
     let input-length = String.length input in
     let current-answer = Ref.make Option.none in
     [spawn-init re] |> Fn.fix (fun loop threads -> (
-      let (next-threads, trace) = step-all threads in
-      let () = match trace with
+    let (next-threads, trace) = step-all threads in
+    let () = match trace with
       | Some(trace) ->
         current-answer |> Ref.set (Option.some trace)
       | None ->
         () in
-      if Ref.get current-pos == input-length || List.null next-threads then
-        Ref.get current-answer
-      else
-        let () = current-id |> Ref.inc in
-        let () = current-pos |> Ref.inc in
-        let () = current-stream |> Ref.update (fun s -> Option.unwrap (Stream.tail s)) in
-        loop next-threads
+    if Ref.get current-pos == input-length || List.null next-threads then
+      Ref.get current-answer
+    else
+      let () = current-id |> Ref.inc in
+      let () = current-pos |> Ref.inc in
+      let () = current-stream |> Ref.update (fun s -> Option.unwrap (Stream.tail s)) in
+      loop next-threads
     ))
 
   type pattern =
-  | PatAlt of pattern * pattern
-  | PatSeq of pattern * pattern
-  | PatAny
-  | PatEmpty
-  | PatChar of Char.t
-  | PatMany of pattern
-  | PatSome of pattern % this cannot be replaced with PatMany because `(a)+` is not equal to `(a)(a)*`.
-  | PatManyNg of pattern
-  | PatSomeNg of pattern
-  | PatGroup of pattern
-  | PatAnchor of anchor
-  | PatSatisfy of Char.t -> bool
+    | PatAlt of pattern * pattern
+    | PatSeq of pattern * pattern
+    | PatAny
+    | PatEmpty
+    | PatChar of Char.t
+    | PatMany of pattern
+    | PatSome of pattern % this cannot be replaced with PatMany because `(a)+` is not equal to `(a)(a)*`.
+    | PatManyNg of pattern
+    | PatSomeNg of pattern
+    | PatGroup of pattern
+    | PatAnchor of anchor
+    | PatSatisfy of Char.t -> bool
 
   type t = pattern
 
@@ -520,13 +520,13 @@ end = struct
           between (string `(`) (string `)`) expr |> map group;
           string `.` >> ret re-any;  % . matches with newline
           string `\` >> choice [
-            string `n` >> ret (re-char Char.newline);
-            string `r` >> ret (re-char Char.return);
-            string `t` >> ret (re-char Char.tab);
-            string `s` >> ret re-space;
-            string `d` >> ret re-digit;
-            string `h` >> ret re-hex-digit;
-            meta |> map re-char;
+          string `n` >> ret (re-char Char.newline);
+          string `r` >> ret (re-char Char.return);
+          string `t` >> ret (re-char Char.tab);
+          string `s` >> ret re-space;
+          string `d` >> ret re-digit;
+          string `h` >> ret re-hex-digit;
+          meta |> map re-char;
           ];
           (string `^` >> ret bol) <|> (string `$` >> ret eol);  % $ and ^ detect boundaries of lines
           between (string `[^`) (string `]`) char-class |> map (Fn.compose re-satisfy Fn.non);

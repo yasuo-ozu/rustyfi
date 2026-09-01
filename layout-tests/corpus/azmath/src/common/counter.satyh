@@ -49,20 +49,20 @@ end = struct
   let-rec reset ctr =
     match ctr with
     | LeafCounter(ctr-value) ->
-        ctr-value |> Ref.set 0
+      ctr-value |> Ref.set 0
     | BranchCounter(ctr-value, children) ->
-        let _ = List.map reset children in
-        ctr-value |> Ref.set 0
+      let _ = List.map reset children in
+      ctr-value |> Ref.set 0
 
   let add addend ctr =
     match ctr with
     | LeafCounter(ctr-value) ->
-        let () = ctr-value |> Ref.set (Ref.get ctr-value + addend) in
-        Ref.get ctr-value
+      let () = ctr-value |> Ref.set (Ref.get ctr-value + addend) in
+      Ref.get ctr-value
     | BranchCounter(ctr-value, children) ->
-        let () = ctr-value |> Ref.set (Ref.get ctr-value + addend) in
-        let _ = List.map reset children in
-        Ref.get ctr-value
+      let () = ctr-value |> Ref.set (Ref.get ctr-value + addend) in
+      let _ = List.map reset children in
+      Ref.get ctr-value
 
   let inc = add 1
 

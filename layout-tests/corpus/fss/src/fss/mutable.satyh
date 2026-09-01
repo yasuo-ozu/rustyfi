@@ -17,7 +17,7 @@ end = struct
 
   let-mutable current-non-standard-context <-
     (| font-set = FssFonts.default-font-set ;
-       font-axes = FssFonts.default-font-axes ;
+      font-axes = FssFonts.default-font-axes ;
     |)
 
   let-mutable current-debug-level <- 0
@@ -40,21 +40,21 @@ end = struct
 
   let with-font-style ?:context (previous-ctx) ss f =
     let context = Option.unwrap-or `with-style` context in
-    let previous-ectx = 
+    let previous-ectx =
       get-current-extended-context previous-ctx
     in
     let ectx = List.fold-left (fun ectx s -> s ectx) previous-ectx ss in
     let () = debug-message
-        1
-        context
-        (FssExtendedContext.to-string previous-ectx
+      1
+      context
+      (FssExtendedContext.to-string previous-ectx
         ^ #` -> `#
         ^ FssExtendedContext.to-string ectx) in
     let () = current-non-standard-context <-
-        FssExtendedContext.get-non-standard-context ectx in
+      FssExtendedContext.get-non-standard-context ectx in
     let result = f ectx in
     let () = current-non-standard-context <-
-        FssExtendedContext.get-non-standard-context previous-ectx in
+      FssExtendedContext.get-non-standard-context previous-ectx in
     result
 
 end

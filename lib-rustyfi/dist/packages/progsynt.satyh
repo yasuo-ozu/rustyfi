@@ -72,27 +72,27 @@ end = struct
     let mx = x#math in
     let m1 = to-math e1 in
     let m2 = to-math e2 in
-      (|
-        math = ${\token{let}\sp #mx = #m1 \sp\token{in}\sp #m2};
-        assoc = 0;
-      |)
+    (|
+      math = ${\token{let}\sp #mx = #m1 \sp\token{in}\sp #m2};
+      assoc = 0;
+    |)
 
 
   let app e1 e2 =
     let m1 = to-math ?:1 e1 in
     let m2 = to-math ?:0 e2 in
-      (|
-        math = ${#m1\sp#m2};
-        assoc = 1;
-      |)
+    (|
+      math = ${#m1\sp#m2};
+      assoc = 1;
+    |)
 
   let abs x e =
     let mx = to-math x in
     let me = to-math e in
-      (|
-        math = ${\token{\lambda}#mx.\sp#me};
-        assoc = 2;
-      |)
+    (|
+      math = ${\token{\lambda}#mx.\sp#me};
+      assoc = 2;
+    |)
 
   let-math \term tm =
     to-math tm

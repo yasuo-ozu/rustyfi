@@ -75,7 +75,7 @@ end = struct
     (fs *' 0.5, fs *' 0.5, fs *' 0.4, fs *' 0.4)
 
   let default-cellfmt ctx it =
-      NormalCell(default-pads ctx, (read-inline ctx it) ++ inline-fil)
+    NormalCell(default-pads ctx, (read-inline ctx it) ++ inline-fil)
 
   let empty-cellfmt ctx it = EmptyCell
 
@@ -85,11 +85,11 @@ end = struct
       (inline-graphics w h d (fun (x, y) -> [])) ++ inline-fil
     in
     match cfmt ctx it with
-      | NormalCell(pads, ib) ->
-          NormalCell(pads, phantomf ib)
-      | MultiCell(i, j, pads, ib) ->
-          MultiCell(i, j, pads, phantomf ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell(pads, ib) ->
+      NormalCell(pads, phantomf ib)
+    | MultiCell(i, j, pads, ib) ->
+      MultiCell(i, j, pads, phantomf ib)
+    | EmptyCell -> EmptyCell
 
   let-rec concat-ruleptn ruleptn-lst xs ys =
     match ruleptn-lst with
@@ -199,14 +199,14 @@ end = struct
   let align-col fmtlst self =
     let (row, col) = self#fmt |> Matrix.shape in
     if not ((fmtlst |> List.length) == col) then self else
-    let fmtmat = fmtlst |> Matrix.copy-row row in
-    set-fmt fmtmat self
+      let fmtmat = fmtlst |> Matrix.copy-row row in
+      set-fmt fmtmat self
 
   let align-row fmtlst self =
     let (row, col) = self#fmt |> Matrix.shape in
     if not ((fmtlst |> List.length) == row) then self else
-    let fmtmat = fmtlst |> Matrix.copy-col col in
-    set-fmt fmtmat self
+      let fmtmat = fmtlst |> Matrix.copy-col col in
+      set-fmt fmtmat self
 
   let merge (rfrom, cfrom) (rto, cto) fmt self =
     let (rfrom, cfrom) = self |> convenient-idx (rfrom, cfrom) in
@@ -222,7 +222,7 @@ end = struct
     let emptyfmtmat = empty-cellfmt |> Matrix.tile (row-size, col-size) in
     let fmtmat =
       self#fmt |> Matrix.embed (rfrom, cfrom) emptyfmtmat
-               |> Matrix.set (rfrom, cfrom) multicell-fmt
+        |> Matrix.set (rfrom, cfrom) multicell-fmt
     in
     set-fmt fmtmat self
 
@@ -254,4 +254,3 @@ end = struct
     let new-text = Matrix.eachmap textfmat (self#text) in
     self |> set-text new-text
 end
-

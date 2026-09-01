@@ -10,6 +10,7 @@ use clap::ArgMatches;
 
 mod cache;
 mod dispatch;
+mod fmt;
 mod format;
 mod man;
 
@@ -53,7 +54,14 @@ fn main() {
 /// Exit codes: `0` success; `2` clap usage error (clap exits `2`
 /// itself on parse failure); `3` root resolution; `4` receipt collision /
 /// not-installed; `5` filesystem/archive/manifest; `1` compile error or a
-/// `status` mismatch.
+/// `status` mismatch; `6` `fmt` declined at least one file.
+///
+/// `6` belongs to [`fmt`] alone and is the only code added since the original
+/// five. It is deliberately not folded into `1`: `fmt --check` uses `1` for
+/// "these files need reformatting", which is a one-command fix, and `6` for
+/// "this file does not lex", which is a broken commit. A CI job has to be able
+/// to tell those apart, and `fmt`'s module doc gives the full precedence
+/// (`5 > 6 > 1 > 0`).
 fn run() -> i32 {
     // `dispatch::get_matches` (not a bare `build_cli().get_matches()`) so a
     // global flag given BEFORE the subcommand (`rustyfi --config F install
@@ -65,6 +73,7 @@ fn run() -> i32 {
             Some((name, sm)) if is_package_command(name) => run_package(name, sm),
             Some(("multicall", sm)) => run_multicall(sm),
             Some(("lsp", sm)) => run_lsp(sm),
+            Some(("fmt", sm)) => fmt::run(sm),
             Some(("man", _)) => match man::render(&mut std::io::stdout().lock()) {
                 Ok(()) => 0,
                 Err(e) => {

@@ -28,10 +28,10 @@ end = struct
 
   let rectangle (x1, y1) (x2, y2) =
     start-path (x1, y1)
-      |> line-to (x1, y2)
-      |> line-to (x2, y2)
-      |> line-to (x2, y1)
-      |> close-with-line
+    |> line-to (x1, y2)
+    |> line-to (x2, y2)
+    |> line-to (x2, y1)
+    |> close-with-line
 
 
   let rectangle-round r (xA, yA) (xB, yB) =
@@ -40,15 +40,15 @@ end = struct
     let x2 = length-max xA xB in
     let y1 = length-min yA yB in
     let y2 = length-max yA yB in
-      start-path                                 (x1, y1 +' r)
-        |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
-        |> line-to                               (x2 -' r, y1)
-        |> bezier-to (x2 -' t, y1) (x2, y1 +' t) (x2, y1 +' r)
-        |> line-to                               (x2, y2 -' r)
-        |> bezier-to (x2, y2 -' t) (x2 -' t, y2) (x2 -' r, y2)
-        |> line-to                               (x1 +' r, y2)
-        |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y2 -' r)
-        |> close-with-line
+    start-path                                 (x1, y1 +' r)
+    |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
+    |> line-to                               (x2 -' r, y1)
+    |> bezier-to (x2 -' t, y1) (x2, y1 +' t) (x2, y1 +' r)
+    |> line-to                               (x2, y2 -' r)
+    |> bezier-to (x2, y2 -' t) (x2 -' t, y2) (x2 -' r, y2)
+    |> line-to                               (x1 +' r, y2)
+    |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y2 -' r)
+    |> close-with-line
 
 
   let rectangle-round-left r (xA, yA) (xB, yB) =
@@ -57,13 +57,13 @@ end = struct
     let x2 = length-max xA xB in
     let y1 = length-min yA yB in
     let y2 = length-max yA yB in
-      start-path                                 (x1, y1 +' r)
-        |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
-        |> line-to                               (x2, y1)
-        |> line-to                               (x2, y2)
-        |> line-to                               (x1 +' r, y2)
-        |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y2 -' r)
-        |> close-with-line
+    start-path                                 (x1, y1 +' r)
+    |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
+    |> line-to                               (x2, y1)
+    |> line-to                               (x2, y2)
+    |> line-to                               (x1 +' r, y2)
+    |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y2 -' r)
+    |> close-with-line
 
 
   let rectangle-round-left-lower r (xA, yA) (xB, yB) =
@@ -72,12 +72,12 @@ end = struct
     let x2 = length-max xA xB in
     let y1 = length-min yA yB in
     let y2 = length-max yA yB in
-      start-path                                 (x1, y1 +' r)
-        |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
-        |> line-to                               (x2, y1)
-        |> line-to                               (x2, y2)
-        |> line-to                               (x1, y2)
-        |> close-with-line
+    start-path                                 (x1, y1 +' r)
+    |> bezier-to (x1, y1 +' t) (x1 +' t, y1) (x1 +' r, y1)
+    |> line-to                               (x2, y1)
+    |> line-to                               (x2, y2)
+    |> line-to                               (x1, y2)
+    |> close-with-line
 
 
   let rectangle-round-left-upper r (xA, yA) (xB, yB) =
@@ -86,12 +86,12 @@ end = struct
     let x2 = length-max xA xB in
     let y1 = length-min yA yB in
     let y2 = length-max yA yB in
-      start-path                                 (x1, y1)
-        |> line-to                               (x2, y1)
-        |> line-to                               (x2, y2)
-        |> line-to                               (x1 +' r, y2)
-        |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y1 -' t)
-        |> close-with-line
+    start-path                                 (x1, y1)
+    |> line-to                               (x2, y1)
+    |> line-to                               (x2, y2)
+    |> line-to                               (x1 +' r, y2)
+    |> bezier-to (x1 +' t, y2) (x1, y2 -' t) (x1, y1 -' t)
+    |> close-with-line
 
 
   let rectangle-round-right r (xA, yA) (xB, yB) =
@@ -100,13 +100,13 @@ end = struct
     let x2 = length-max xA xB in
     let y1 = length-min yA yB in
     let y2 = length-max yA yB in
-      start-path                                 (x1, y1)
-        |> line-to                               (x2 -' r, y1)
-        |> bezier-to (x2 -' t, y1) (x2, y1 +' t) (x2, y1 +' r)
-        |> line-to                               (x2, y2 -' r)
-        |> bezier-to (x2, y2 -' t) (x2 -' t, y2) (x2 -' r, y2)
-        |> line-to                               (x1, y2)
-        |> close-with-line
+    start-path                                 (x1, y1)
+    |> line-to                               (x2 -' r, y1)
+    |> bezier-to (x2 -' t, y1) (x2, y1 +' t) (x2, y1 +' r)
+    |> line-to                               (x2, y2 -' r)
+    |> bezier-to (x2, y2 -' t) (x2 -' t, y2) (x2 -' r, y2)
+    |> line-to                               (x1, y2)
+    |> close-with-line
 
 
   let poly-line ptinit ptlst =
@@ -127,18 +127,18 @@ end = struct
 
   let circle (cx, cy) r =
     let t = r *' 0.55228 in
-      start-path (cx -' r, cy)
-        |> bezier-to (cx -' r, cy +' t) (cx -' t, cy +' r) (cx, cy +' r)
-        |> bezier-to (cx +' t, cy +' r) (cx +' r, cy +' t) (cx +' r, cy)
-        |> bezier-to (cx +' r, cy -' t) (cx +' t, cy -' r) (cx, cy -' r)
-        |> close-with-bezier (cx -' t, cy -' r) (cx -' r, cy -' t)
+    start-path (cx -' r, cy)
+    |> bezier-to (cx -' r, cy +' t) (cx -' t, cy +' r) (cx, cy +' r)
+    |> bezier-to (cx +' t, cy +' r) (cx +' r, cy +' t) (cx +' r, cy)
+    |> bezier-to (cx +' r, cy -' t) (cx +' t, cy -' r) (cx, cy -' r)
+    |> close-with-bezier (cx -' t, cy -' r) (cx -' r, cy -' t)
 
 
   let text-centering pt ib =
     let gr = draw-text pt ib in
     let ((xmin, _), (xmax, _)) = get-graphics-bbox gr in
     let wid = xmax -' xmin in
-      shift-graphics (0pt -' wid *' 0.5, 0pt) gr
+    shift-graphics (0pt -' wid *' 0.5, 0pt) gr
 
 
   let text-rightward =
@@ -149,7 +149,7 @@ end = struct
     let gr = draw-text pt ib in
     let ((xmin, _), (xmax, _)) = get-graphics-bbox gr in
     let wid = xmax -' xmin in
-      shift-graphics (0pt -' wid, 0pt) gr
+    shift-graphics (0pt -' wid, 0pt) gr
 
 
   let arrow-scheme strokef color lenL lenM lenP ((x1, y1) as pt1) ((x2, y2) as pt2) =
@@ -159,10 +159,10 @@ end = struct
     let phi = theta +. math-pi /. 2. in
     let (p1, q1) = (cx +' lenP *' (cos phi), cy +' lenP *' (sin phi)) in
     let (p2, q2) = (cx -' lenP *' (cos phi), cy -' lenP *' (sin phi)) in
-      [
-        strokef color (line pt1 (mx, my));
-        fill color (polygon pt2 [(p1, q1); (mx, my); (p2, q2)]);
-      ]
+    [
+      strokef color (line pt1 (mx, my));
+      fill color (polygon pt2 [(p1, q1); (mx, my); (p2, q2)]);
+    ]
 
 
   let arrow thkns =
@@ -177,29 +177,29 @@ end = struct
     let (centx, centy) = centpt in
     let rad = angle *. math-pi /. 180. in
     path |> shift-path (0pt -' centx, 0pt -' centy)
-         |> linear-transform-path (cos rad) (0. -. (sin rad)) (sin rad) (cos rad)
-         |> shift-path centpt
+      |> linear-transform-path (cos rad) (0. -. (sin rad)) (sin rad) (cos rad)
+      |> shift-path centpt
 
 
   let scale-path centpt scalex scaley path =
     let (centx, centy) = centpt in
     path |> shift-path (0pt -' centx, 0pt -' centy)
-         |> linear-transform-path scalex 0. 0. scaley
-         |> shift-path centpt
+      |> linear-transform-path scalex 0. 0. scaley
+      |> shift-path centpt
 
 
   let rotate-graphics centpt angle gr =
     let (centx, centy) = centpt in
     let rad = angle *. math-pi /. 180. in
     gr |> shift-graphics (0pt -' centx, 0pt -' centy)
-       |> linear-transform-graphics (cos rad) (0. -. (sin rad)) (sin rad) (cos rad)
-       |> shift-graphics centpt
+      |> linear-transform-graphics (cos rad) (0. -. (sin rad)) (sin rad) (cos rad)
+      |> shift-graphics centpt
 
 
   let scale-graphics centpt scalex scaley gr =
     let (centx, centy) = centpt in
     gr |> shift-graphics (0pt -' centx, 0pt -' centy)
-       |> linear-transform-graphics scalex 0. 0. scaley
-       |> shift-graphics centpt
+      |> linear-transform-graphics scalex 0. 0. scaley
+      |> shift-graphics centpt
 
 end

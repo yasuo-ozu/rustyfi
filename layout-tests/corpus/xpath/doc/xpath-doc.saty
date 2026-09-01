@@ -10,26 +10,26 @@
 % @import: ../src/visualizer
 
 let-inline ctx \test-path m gs =
-    let ((x1, y1), (x2, y2)) = match gs with
-        | [] -> ((0pt, 0pt), (0pt, 0pt))
-        | g::gs -> gs |> List.fold-left (fun ret g -> (
-              let (bb1, bb2) = get-graphics-bbox g in
-              concat-bbox ret (bb1,bb2)
-        )) (get-graphics-bbox g)
-    in
-    let b = 0.1pt in
-    let m = m +' (b *' 0.5) in
-    let w = x2 -' x1 +' (m *' 2.0) in
-    let h = y2 -' y1 +' (m *' 2.0) in
-    inline-graphics w h 0pt (fun (x, y) -> (
-        (
-            start-path (x, y) |> line-to (x +' w, y)
-            |> line-to (x +' w, y +' h) |> line-to (x, y +' h)
-            |> close-with-line |> stroke 1pt Color.black
-        )::(
-            gs |> List.map (shift-graphics (x -' x1 +' m, y -' y1 +' m))
-        )
-    ))
+  let ((x1, y1), (x2, y2)) = match gs with
+    | [] -> ((0pt, 0pt), (0pt, 0pt))
+    | g::gs -> gs |> List.fold-left (fun ret g -> (
+      let (bb1, bb2) = get-graphics-bbox g in
+      concat-bbox ret (bb1,bb2)
+    )) (get-graphics-bbox g)
+  in
+  let b = 0.1pt in
+  let m = m +' (b *' 0.5) in
+  let w = x2 -' x1 +' (m *' 2.0) in
+  let h = y2 -' y1 +' (m *' 2.0) in
+  inline-graphics w h 0pt (fun (x, y) -> (
+    (
+      start-path (x, y) |> line-to (x +' w, y)
+      |> line-to (x +' w, y +' h) |> line-to (x, y +' h)
+      |> close-with-line |> stroke 1pt Color.black
+    )::(
+      gs |> List.map (shift-graphics (x -' x1 +' m, y -' y1 +' m))
+    )
+  ))
 
 let-block +test-path m gs = '< +p { \test-path(m)(gs); } >
 

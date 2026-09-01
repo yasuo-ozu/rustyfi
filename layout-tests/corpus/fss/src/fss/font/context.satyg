@@ -3,13 +3,13 @@
 
 type fss-extended-context =
   (| context : context ;
-     font-set : fss-font-set ;
-     font-axes : fss-font-axes ;
+    font-set : fss-font-set ;
+    font-axes : fss-font-axes ;
   |)
 
 type fss-extended-context-non-standard =
   (| font-set : fss-font-set ;
-     font-axes : fss-font-axes ;
+    font-axes : fss-font-axes ;
   |)
 
 module FssExtendedContext : sig
@@ -36,12 +36,12 @@ end = struct
 
   let get-non-standard-context ectx =
     (| font-set = ectx#font-set ;
-       font-axes = ectx#font-axes ;
+      font-axes = ectx#font-axes ;
     |)
   let from-non-standard-context nsctx ctx =
     (| context = ctx ;
-       font-set = nsctx#font-set ;
-       font-axes = nsctx#font-axes ;
+      font-set = nsctx#font-set ;
+      font-axes = nsctx#font-axes ;
     |)
 
   let get-context ectx = ectx#context
@@ -66,14 +66,14 @@ end = struct
 
   let to-string ectx =
     `{size=` ^ show-float (get-font-size ectx /' 1pt)
-    ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
-    ^ `;` ^ `font-set=` ^ FssFontSet.to-string (get-font-set ectx)
-    ^ `}`
+      ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
+      ^ `;` ^ `font-set=` ^ FssFontSet.to-string (get-font-set ectx)
+      ^ `}`
 
   let to-string-for-font-selection ectx =
     `{size=` ^ show-float (get-font-size ectx /' 1pt)
-    ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
-    ^ `}`
+      ^ `;` ^ `font-axes=` ^ FssFontAxes.to-string (get-font-axes ectx)
+      ^ `}`
 
 
 end

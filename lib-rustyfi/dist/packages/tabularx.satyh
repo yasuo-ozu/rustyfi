@@ -11,9 +11,9 @@ module Tabular : sig
 
   direct \tabular : [
     (cell-record option -> inline-text -> cell) ->
-      (cell-record option -> int -> int -> inline-text -> cell) ->
-      cell ->
-      (cell list) list;
+    (cell-record option -> int -> int -> inline-text -> cell) ->
+    cell ->
+    (cell list) list;
     length list -> length list -> graphics list;
   ] inline-cmd
 
@@ -29,13 +29,13 @@ end = struct
     let pads = (5pt, 5pt, 2pt, 2pt) in
     let cellf ropt it =
       let (alignL, alignR) = make-alignments ropt in
-        NormalCell(pads, alignL ++ read-inline ctx it ++ alignR)
+      NormalCell(pads, alignL ++ read-inline ctx it ++ alignR)
     in
     let multif ropt nr nc it =
       let (alignL, alignR) = make-alignments ropt in
-        MultiCell(nr, nc, pads, alignL ++ (read-inline ctx it) ++ alignR)
+      MultiCell(nr, nc, pads, alignL ++ (read-inline ctx it) ++ alignR)
     in
     let empty = EmptyCell in
-      tabular (lstf cellf multif empty)
+    tabular (lstf cellf multif empty)
 
 end

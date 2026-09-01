@@ -27,33 +27,33 @@ end = struct
         num-ib-w *' (float (-1)) |> inline-skip
       in
       let main-ib = read-inline ctx it in
-        line-break true true ctx (inline-space ++ num-ib ++ main-ib ++ inline-fil)
+      line-break true true ctx (inline-space ++ num-ib ++ main-ib ++ inline-fil)
     in
     let parent-indent = item-indent *' (float depth) in
     let main-bb =
       match itemize with
       | Item(it, [])  -> (
-          let bullet-width = get-natural-width (f ctx index-lst depth) in
-          let pads =
-            (parent-indent +' bullet-width, 0pt, 0pt, 0pt)
-          in
-          block-frame-breakable ctx pads deco (fun ctx -> make-bb ctx it index-lst depth)
-        )
+        let bullet-width = get-natural-width (f ctx index-lst depth) in
+        let pads =
+          (parent-indent +' bullet-width, 0pt, 0pt, 0pt)
+        in
+        block-frame-breakable ctx pads deco (fun ctx -> make-bb ctx it index-lst depth)
+      )
       | Item(it, lst) -> (
-          let bullet-width = get-natural-width (f ctx index-lst depth) in
-          let pads =
-            (parent-indent +' bullet-width, 0pt, 0pt, 0pt)
-          in
-          let index-bb =
-            block-frame-breakable ctx pads deco (fun ctx -> make-bb ctx it index-lst depth)
-          in
-          let bb-lst =
-            List.mapi (fun i -> itemize2 f f-item-indent ((i + 1) :: index-lst) (depth + 1) ctx) lst
-          in
-            index-bb +++ (List.fold-left (+++) block-nil bb-lst)
-        )
+        let bullet-width = get-natural-width (f ctx index-lst depth) in
+        let pads =
+          (parent-indent +' bullet-width, 0pt, 0pt, 0pt)
+        in
+        let index-bb =
+          block-frame-breakable ctx pads deco (fun ctx -> make-bb ctx it index-lst depth)
+        in
+        let bb-lst =
+          List.mapi (fun i -> itemize2 f f-item-indent ((i + 1) :: index-lst) (depth + 1) ctx) lst
+        in
+        index-bb +++ (List.fold-left (+++) block-nil bb-lst)
+      )
     in
-      main-bb
+    main-bb
 
 end
 
@@ -76,7 +76,6 @@ end = struct
     let str-num = arabic num in
     let it-num = `(` ^ str-num ^ `)` |> embed-string in
     let ib-num = read-inline ctx {#it-num;\ } in
-      ib-num
+    ib-num
 
 end
-

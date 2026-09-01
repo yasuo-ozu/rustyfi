@@ -31,7 +31,7 @@ end = struct
       % まずは math list を列数が ncol になるよう並べた tabular を作る
       let math-matrix = AZTypeMatrix.from-list ncol ${} mlst in
       let ib-matrix = AZTypeMatrix.map (embed-math ctx) math-matrix in
-      let ib-to-cell i j ib = 
+      let ib-to-cell i j ib =
         NormalCell(
           (pad-width, pad-width, pad-height, pad-height),
           aligner i j ib

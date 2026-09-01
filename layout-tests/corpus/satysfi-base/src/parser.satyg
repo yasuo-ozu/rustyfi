@@ -143,10 +143,10 @@ end = struct
     match p s with
     | (Some (s, a), c1, e1) ->
       (match (k a) s with
-      | (Some (s, b), c2, e2) ->
-        (Option.some (s, b), c1 <+> c2, List.append e2 e1)
-      | (None, c2, e2) ->
-        (Option.none, c1 <+> c2, List.append e2 e1))
+        | (Some (s, b), c2, e2) ->
+          (Option.some (s, b), c1 <+> c2, List.append e2 e1)
+        | (None, c2, e2) ->
+          (Option.none, c1 <+> c2, List.append e2 e1))
     | (None, c1, e1) ->
       (Option.none, c1, e1)
 
@@ -177,8 +177,8 @@ end = struct
     match p1 s with
     | (None, Virgin, e1) ->
       (match p2 s with
-      | (None, c, e2) -> (Option.none, c, List.append e2 e1)
-      | r -> r)
+        | (None, c, e2) -> (Option.none, c, List.append e2 e1)
+        | r -> r)
     | r -> r
 
   let (<|>) = alt
@@ -307,8 +307,8 @@ end = struct
 
   let string str =
     let-rec aux
-    | [] = ret str
-    | (c :: cs) = char c >> aux cs
+      | [] = ret str
+      | (c :: cs) = char c >> aux cs
     in try (aux (String.to-list str))
 
   let lex-string input =

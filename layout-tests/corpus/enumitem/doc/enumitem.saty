@@ -36,15 +36,15 @@ let font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
 let-inline ctx \emph inner =
   let ctx-bf =
     ctx |> set-font Latin font-latin-italic
-        |> set-font HanIdeographic font-cjk-gothic
-        |> set-font Kana font-cjk-gothic
+      |> set-font HanIdeographic font-cjk-gothic
+      |> set-font Kana font-cjk-gothic
   in
-    read-inline ctx-bf inner
+  read-inline ctx-bf inner
 
-let-block +code code = 
+let-block +code code =
   '<+ctx[set-font-size 10pt; set-paragraph-margin 6pt 6pt; set-leading 16pt;]<+Code.code(code);>>
 
-let-block ctx +block-frame bt = 
+let-block ctx +block-frame bt =
   let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
   block-frame-breakable ctx (7pt, 7pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
 
@@ -85,8 +85,8 @@ let-block +rouba it = '< +item?:(text-label{老婆「}){#it;」}<> >
 let-inline ctx \textbf it =
   let ctx =
     ctx |> set-font Latin          font-latin-bold
-        |> set-font Kana           font-cjk-gothic
-        |> set-font HanIdeographic font-cjk-gothic
+      |> set-font Kana           font-cjk-gothic
+      |> set-font HanIdeographic font-cjk-gothic
   in
   read-inline ctx it
 
@@ -96,8 +96,8 @@ let question =
     {\textbf{設問#num;}.\ }
   in
   index-label labelf
-    |> EnumitemFormat.set-label-inherit
-    |> EnumitemFormat.set-indent (fun ctx wid-label -> get-font-size ctx *' 1.0)
+  |> EnumitemFormat.set-label-inherit
+  |> EnumitemFormat.set-indent (fun ctx wid-label -> get-font-size ctx *' 1.0)
 
 let-inline \jugem = {
   寿限無，寿限無，五劫のすりきれ，

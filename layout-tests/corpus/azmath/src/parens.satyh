@@ -70,14 +70,14 @@ end = struct
 
   let half-height-default hgt dpt hgtaxis fontsize =
     let minhalflen = fontsize *' 0.5 in
-      length-max minhalflen (length-max (hgt -' hgtaxis) (hgtaxis +' dpt))
+    length-max minhalflen (length-max (hgt -' hgtaxis) (hgtaxis +' dpt))
 
   let half-height-with-paddings vpadr hgt dpt hgtaxis fontsize =
     half-height-default hgt dpt hgtaxis fontsize +' fontsize *' vpadr
 
   % あたかも中身が hgt-objective の高さを持っているかのように振る舞わせる．
   let half-height-fixed hgt-objective hgt dpt hgtaxis fontsize =
-      length-max (hgt-objective -' hgtaxis) hgtaxis
+    length-max (hgt-objective -' hgtaxis) hgtaxis
 
 
   % 一般的な括弧を描く．
@@ -165,12 +165,12 @@ end = struct
 
     let path =
       start-path (x0, y0)
-        |> bezier-to (x0 +' p0out, y0 +' q0out) (x1 +' p1in, y1 +' q1in) (x1, y1)
-        |> bezier-to (x1 +' p1out, y1 +' q1out) (x2 +' p2in, y2 +' q2in) (x2, y2)
-        |> bezier-to (x2 +' p2out, y2 +' q2out) (x3 +' p3in, y3 +' q3in) (x3, y3)
-        |> bezier-to (x3 +' p3out, y3 +' q3out) (x4 +' p4in, y4 +' q4in) (x4, y4)
-        |> bezier-to (x4 +' p4out, y4 +' q4out) (x5 +' p5in, y5 +' q5in) (x5, y5)
-        |> close-with-bezier (x5 +' p5out, y5 +' q5out) (x0 +' p0in, y0 +' q0in)
+      |> bezier-to (x0 +' p0out, y0 +' q0out) (x1 +' p1in, y1 +' q1in) (x1, y1)
+      |> bezier-to (x1 +' p1out, y1 +' q1out) (x2 +' p2in, y2 +' q2in) (x2, y2)
+      |> bezier-to (x2 +' p2out, y2 +' q2out) (x3 +' p3in, y3 +' q3in) (x3, y3)
+      |> bezier-to (x3 +' p3out, y3 +' q3out) (x4 +' p4in, y4 +' q4in) (x4, y4)
+      |> bezier-to (x4 +' p4out, y4 +' q4out) (x5 +' p5in, y5 +' q5in) (x5, y5)
+      |> close-with-bezier (x5 +' p5out, y5 +' q5out) (x0 +' p0in, y0 +' q0in)
     in
     let path = if is-open then path else reflect-x path in
     let xmin = if is-open then hmin else minus hmax in
@@ -190,8 +190,8 @@ end = struct
     in
     math-paren
       (paren-scheme (gr-round-bracket true) half-height)
-        (paren-scheme (gr-round-bracket false) half-height)
-          m
+      (paren-scheme (gr-round-bracket false) half-height)
+      m
 
 % curly-bracket
 
@@ -245,22 +245,22 @@ end = struct
     let (p04out, q04out) = (0pt, 0pt) in
     let (p10in , q10in ) = (0pt, 0pt) in
 
-    let path = 
+    let path =
       start-path (x00, y00)
-        |> bezier-to (x00 +' p00out, y00 +' q00out) (x01 +' p01in, y01 +' q01in) (x01, y01)
-        |> line-to (x02, y02)
-        |> bezier-to (x02 +' p02out, y02 +' q02out) (x03 +' p03in, y03 +' q03in) (x03, y03)
-        |> line-to (x04, y04)
-        |> bezier-to (x04 +' p04out, y04 +' q04out) (x05 +' p05in, y05 +' q05in) (x05, y05)
-        |> line-to (x06, y06)
-        |> bezier-to (x06 +' p06out, y06 +' q06out) (x07 +' p07in, y07 +' q07in) (x07, y07)
-        |> bezier-to (x07 +' p07out, y07 +' q07out) (x08 +' p08in, y08 +' q08in) (x08, y08)
-        |> line-to (x09, y09)
-        |> bezier-to (x09 +' p09out, y09 +' q09out) (x10 +' p10in, y10 +' q10in) (x10, y10)
-        |> line-to (x11, y11)
-        |> bezier-to (x11 +' p11out, y11 +' q11out) (x12 +' p12in, y12 +' q12in) (x12, y12)
-        |> line-to (x13, y13)
-        |> close-with-bezier (x13 +' p13out, y13 +' q13out) (x00 +' p00in, y00 +' q00in)
+      |> bezier-to (x00 +' p00out, y00 +' q00out) (x01 +' p01in, y01 +' q01in) (x01, y01)
+      |> line-to (x02, y02)
+      |> bezier-to (x02 +' p02out, y02 +' q02out) (x03 +' p03in, y03 +' q03in) (x03, y03)
+      |> line-to (x04, y04)
+      |> bezier-to (x04 +' p04out, y04 +' q04out) (x05 +' p05in, y05 +' q05in) (x05, y05)
+      |> line-to (x06, y06)
+      |> bezier-to (x06 +' p06out, y06 +' q06out) (x07 +' p07in, y07 +' q07in) (x07, y07)
+      |> bezier-to (x07 +' p07out, y07 +' q07out) (x08 +' p08in, y08 +' q08in) (x08, y08)
+      |> line-to (x09, y09)
+      |> bezier-to (x09 +' p09out, y09 +' q09out) (x10 +' p10in, y10 +' q10in) (x10, y10)
+      |> line-to (x11, y11)
+      |> bezier-to (x11 +' p11out, y11 +' q11out) (x12 +' p12in, y12 +' q12in) (x12, y12)
+      |> line-to (x13, y13)
+      |> close-with-bezier (x13 +' p13out, y13 +' q13out) (x00 +' p00in, y00 +' q00in)
     in
     (path, (0pt, minus vlen), (hd, vlen))
 
@@ -290,13 +290,13 @@ end = struct
     in
     math-paren
       (paren-scheme (gr-curly-bracket true) half-height)
-        (paren-scheme (gr-curly-bracket false) half-height)
-          m
+      (paren-scheme (gr-curly-bracket false) half-height)
+      m
 
 
 % square-bracket
 
-let pads-square-bracket is-open fsize =
+  let pads-square-bracket is-open fsize =
     let (pad-inner, pad-outer) = (fsize *' 0.02, fsize *' 0.12) in
     if is-open then (pad-outer, pad-inner, 0pt) else (pad-inner, pad-outer, 0pt)
 
@@ -317,10 +317,10 @@ let pads-square-bracket is-open fsize =
 
     let path =
       start-path (x0, y0)
-        |> line-to (x1, y1)
-        |> line-to (x2, y2)
-        |> line-to (x3, y3)
-        |> terminate-path
+      |> line-to (x1, y1)
+      |> line-to (x2, y2)
+      |> line-to (x3, y3)
+      |> terminate-path
     in
     let path = if is-open then path else reflect-x path in
     let xmin = if is-open then hmin else minus hmax in
@@ -340,8 +340,8 @@ let pads-square-bracket is-open fsize =
     in
     math-paren
       (paren-scheme (gr-square-bracket 0.5pt true) half-height)
-        (paren-scheme (gr-square-bracket 0.5pt false) half-height)
-          m
+      (paren-scheme (gr-square-bracket 0.5pt false) half-height)
+      m
 
 
 % abs-bracket
@@ -360,8 +360,8 @@ let pads-square-bracket is-open fsize =
 
     let path =
       start-path (x0, y0)
-        |> line-to (x1, y1)
-        |> terminate-path
+      |> line-to (x1, y1)
+      |> terminate-path
     in
     let xmin = if is-open then hmin else minus hmax in
     let xmax = if is-open then hmax else minus hmin in
@@ -385,8 +385,8 @@ let pads-square-bracket is-open fsize =
 
     let path =
       start-path (x0, y0)
-        |> line-to (x1, y1)
-        |> terminate-path
+      |> line-to (x1, y1)
+      |> terminate-path
     in
     let xmin = hmin in
     let xmax = hmax in
@@ -406,8 +406,8 @@ let pads-square-bracket is-open fsize =
     in
     math-paren
       (paren-scheme (gr-abs-bracket 0.5pt true) half-height)
-        (paren-scheme (gr-abs-bracket 0.5pt false) half-height)
-          m
+      (paren-scheme (gr-abs-bracket 0.5pt false) half-height)
+      m
 
 
 % norm-bracket
@@ -429,13 +429,13 @@ let pads-square-bracket is-open fsize =
 
     let path1 =
       start-path (x0, y0)
-        |> line-to (x1, y1)
-        |> terminate-path
+      |> line-to (x1, y1)
+      |> terminate-path
     in
     let path2 =
       start-path (x2, y2)
-        |> line-to (x3, y3)
-        |> terminate-path
+      |> line-to (x3, y3)
+      |> terminate-path
     in
     let path2 = if is-open then path2 else reflect-x path2 in
     let xmin = if is-open then hmin else minus hmax in
@@ -455,8 +455,8 @@ let pads-square-bracket is-open fsize =
     in
     math-paren
       (paren-scheme (gr-norm-bracket 0.5pt true) half-height)
-        (paren-scheme (gr-norm-bracket 0.5pt false) half-height)
-          m
+      (paren-scheme (gr-norm-bracket 0.5pt false) half-height)
+      m
 
 
 % angle-bracket
@@ -477,9 +477,9 @@ let pads-square-bracket is-open fsize =
 
     let path =
       start-path (x0, y0)
-        |> line-to (x1, y1)
-        |> line-to (x2, y2)
-        |> terminate-path
+      |> line-to (x1, y1)
+      |> line-to (x2, y2)
+      |> terminate-path
     in
     let path = if is-open then path else reflect-x path in
     let xmin = if is-open then hmin else minus hmax in
@@ -499,8 +499,8 @@ let pads-square-bracket is-open fsize =
     in
     math-paren
       (paren-scheme (gr-angle-bracket 0.5pt true) half-height)
-        (paren-scheme (gr-angle-bracket 0.5pt false) half-height)
-          m
+      (paren-scheme (gr-angle-bracket 0.5pt false) half-height)
+      m
 
 
 % other commands

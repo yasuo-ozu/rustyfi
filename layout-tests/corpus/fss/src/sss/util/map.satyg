@@ -68,8 +68,8 @@ end = struct
     | Some v-existing ->
       let v = f v-existing v in
       m
-      |> remove key
-      |> insert-non-overlap key v
+        |> remove key
+        |> insert-non-overlap key v
 
   let insert-override key v m =
     insert-with (fun _ v -> v) key v m

@@ -61,20 +61,20 @@ end = struct
   let some x = Some x
 
   let-rec is-none
-  | (None) = true
-  | (Some(_)) = false
+    | (None) = true
+    | (Some(_)) = false
 
   let-rec is-some
-  | (None) = false
-  | (Some(_)) = true
+    | (None) = false
+    | (Some(_)) = true
 
   let-rec unwrap-or
-  | a (None)    = a
-  | _ (Some(a)) = a
+    | a (None)    = a
+    | _ (Some(a)) = a
 
   let-rec unwrap-or-else
-  | f (None)    = f ()
-  | _ (Some(a)) = a
+    | f (None)    = f ()
+    | _ (Some(a)) = a
 
   let expect msg opt =
     opt |> unwrap-or-else (fun () -> panic msg)
@@ -82,14 +82,14 @@ end = struct
   let unwrap opt = opt |> expect `unwrap error`
 
   let-rec expect-none
-  | _   (None)    = ()
-  | msg (Some(_)) = panic msg
+    | _   (None)    = ()
+    | msg (Some(_)) = panic msg
 
   let unwrap-none opt = opt |> expect-none `unwrap error`
 
   let-rec map
-  | f (None)    = None
-  | f (Some(v)) = Some(f v)
+    | f (None)    = None
+    | f (Some(v)) = Some(f v)
 
   let-rec map-or b f opt = opt |> map f |> unwrap-or b
   let-rec map-or-else g f opt = opt |> map f |> unwrap-or-else g
@@ -100,29 +100,29 @@ end = struct
   let err-or-else f opt = opt |> map Result.err |> unwrap-or-else (fun () -> Result.ok (f ()))
 
   let-rec and-
-  | _   (None) = none
-  | opt _      = opt
+    | _   (None) = none
+    | opt _      = opt
 
   let-rec and-then
-  | f (None)    = None
-  | f (Some(v)) = f v
+    | f (None)    = None
+    | f (Some(v)) = f v
 
   let-rec or
-  | opt (None) = opt
-  | _   opt    = opt
+    | opt (None) = opt
+    | _   opt    = opt
 
   let-rec or-else
-  | f (None) = f ()
-  | _ opt    = opt
+    | f (None) = f ()
+    | _ opt    = opt
 
   let-rec xor
-  | (Some(_) as opt) (None)           = opt
-  | (None)           (Some(_) as opt) = opt
-  | _                _                = none
+    | (Some(_) as opt) (None)           = opt
+    | (None)           (Some(_) as opt) = opt
+    | _                _                = none
 
   let-rec transpose
-  | (None) = Result.ok none
-  | (Some(r)) = r |> Result.map some
+    | (None) = Result.ok none
+    | (Some(r)) = r |> Result.map some
 
   let flatten opt = opt |> and-then Fn.id
   let ret x = some x
@@ -138,8 +138,8 @@ end = struct
     | (x::xs) -> init |> f x |> and-then (fold-list xs f)
 
   let-rec iter
-  | f (None) = ()
-  | f (Some(v)) = f v
+    | f (None) = ()
+    | f (Some(v)) = f v
 
   let bind m f = and-then f m
   let join m = flatten m

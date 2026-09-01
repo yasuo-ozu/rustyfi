@@ -18,17 +18,17 @@ end = struct
 
   let to-string fa =
     `{ width:` ^ arabic fa#width
-    ^ `, weight:` ^ show-float fa#weight
-    ^ `, slant:` ^ arabic fa#slant
-    ^ `, style:` ^ FssFontStyle.to-string fa#style
-    ^ `}`
+      ^ `, weight:` ^ show-float fa#weight
+      ^ `, slant:` ^ arabic fa#slant
+      ^ `, style:` ^ FssFontStyle.to-string fa#style
+      ^ `}`
 
   let extended-context-to-string (ctx, fa) =
     `{ width:` ^ arabic fa#width
-    ^ `, weight:` ^ show-float fa#weight
-    ^ `, slant:` ^ arabic fa#slant
-    ^ `, style:` ^ FssFontStyle.to-string fa#style
-    ^ `, size:` ^ show-float (get-font-size ctx /' 1pt) ^ `pt`
-    ^ `}`
+      ^ `, weight:` ^ show-float fa#weight
+      ^ `, slant:` ^ arabic fa#slant
+      ^ `, style:` ^ FssFontStyle.to-string fa#style
+      ^ `, size:` ^ show-float (get-font-size ctx /' 1pt) ^ `pt`
+      ^ `}`
 
 end

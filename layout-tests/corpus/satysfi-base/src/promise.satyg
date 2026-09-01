@@ -11,8 +11,8 @@ module Promise : sig
 end = struct
 
   type 'a state =
-  | Value of 'a
-  | Thunk of ('a t) thunk
+    | Value of 'a
+    | Thunk of ('a t) thunk
   and 'a t = (('a state) ref) ref
 
   let make v =

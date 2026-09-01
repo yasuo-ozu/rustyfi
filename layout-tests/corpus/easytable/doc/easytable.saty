@@ -33,9 +33,9 @@ let-block +example str bt =
 let-inline ctx \emph inner =
   let ctx-strong =
     ctx |> set-font Latin StdJaBook.font-latin-italic
-        |> StdJaBook.set-cjk-font StdJaBook.font-cjk-gothic
+      |> StdJaBook.set-cjk-font StdJaBook.font-cjk-gothic
   in
-    read-inline ctx-strong inner
+  read-inline ctx-strong inner
 
 let-block +dd dt bt-dd =
   '<

@@ -22,8 +22,8 @@ let-block ctx +row ?:space-opt lst =
   in
   let ib =
     lst
-    |> List.map (read-inline ctx)
-    |> List.fold-lefti join inline-nil
+      |> List.map (read-inline ctx)
+      |> List.fold-lefti join inline-nil
   in
   line-break true true ctx (inline-fil ++ ib ++ inline-fil)
 
@@ -43,17 +43,16 @@ let-block ctx +caption caption bt =
   let font-size = get-font-size ctx in
   let main-bb-ctx =
     ctx |> set-paragraph-margin font-size 5pt
-        |> set-min-gap-of-lines 5pt
+      |> set-min-gap-of-lines 5pt
   in
   let caption-ctx =
     ctx |> set-paragraph-margin 5pt font-size
-        |> set-min-gap-of-lines 5pt
+      |> set-min-gap-of-lines 5pt
   in
   let main-bb = read-block main-bb-ctx bt in
   let caption-ib = read-inline caption-ctx caption in
   let caption-bb = line-break false true caption-ctx (inline-fil ++ caption-ib ++ inline-fil) in
   main-bb +++ caption-bb
-
 
 
 let-block ctx +code-syntax-demo-lst lst =
@@ -81,10 +80,9 @@ let-block ctx +code-syntax-demo-lst lst =
       ib1 ++ break-point ++ ib2
   in
   lst
-  |> List.map (fun data -> data |> f |> read-inline ctx)
-  |> List.fold-lefti join inline-nil
-  |> (fun ib -> line-break true true ctx (ib ++ inline-fil))
-
+    |> List.map (fun data -> data |> f |> read-inline ctx)
+    |> List.fold-lefti join inline-nil
+    |> (fun ib -> line-break true true ctx (ib ++ inline-fil))
 
 
 let-block ctx +code-theme-demo-lst lst =
@@ -112,6 +110,6 @@ let-block ctx +code-theme-demo-lst lst =
       ib1 ++ break-point ++ ib2
   in
   lst
-  |> List.map (fun data -> data |> f |> read-inline ctx)
-  |> List.fold-lefti join inline-nil
-  |> (fun ib -> line-break true true ctx (ib ++ inline-fil))
+    |> List.map (fun data -> data |> f |> read-inline ctx)
+    |> List.fold-lefti join inline-nil
+    |> (fun ib -> line-break true true ctx (ib ++ inline-fil))

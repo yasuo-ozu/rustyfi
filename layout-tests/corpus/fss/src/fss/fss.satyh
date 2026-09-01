@@ -63,8 +63,8 @@ end = struct
     let ctx =
       let ectx =
         (| context = ctx ;
-           font-set = font-set ;
-           font-axes = font-axes ;
+          font-set = font-set ;
+          font-axes = font-axes ;
         |)
       in
       with-font ectx
@@ -76,12 +76,12 @@ end = struct
     | None ->
       FssMutableInternal.with-font-style ?* ctx ss (fun ectx ->
         (let ctx = with-font ectx in
-        f ctx)
+          f ctx)
       )
     | Some msg-context ->
       FssMutableInternal.with-font-style ?:msg-context ctx ss (fun ectx ->
         (let ctx = with-font ectx in
-        f ctx)
+          f ctx)
       )
 
   let-inline ctx \font-style ss it =

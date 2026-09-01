@@ -33,13 +33,13 @@ end = struct
     |)
 
   let default-font-combination-ja-r : fss-font-combination =
-  [ font-default-Jpan FssFontScript.hani `ipaexm` ;
-    font-default-Jpan FssFontScript.kana `ipaexm` ;
-  ]
+    [ font-default-Jpan FssFontScript.hani `ipaexm` ;
+      font-default-Jpan FssFontScript.kana `ipaexm` ;
+    ]
   let default-font-combination-la-r : fss-font-combination =
-  [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode` ;
-    font-default-Latn FssFontScript.other `fonts-junicode:Junicode` ;
-  ]
+    [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode` ;
+      font-default-Latn FssFontScript.other `fonts-junicode:Junicode` ;
+    ]
   let default-font-axes : fss-font-axes =
     (| width = 100 ;
       weight = 80. ;
@@ -56,13 +56,13 @@ end = struct
       |)
 
   let default-font-combination-ja-i : fss-font-combination =
-  [ font-default-Jpan FssFontScript.hani `ipaexg` ;
-    font-default-Jpan FssFontScript.kana `ipaexg` ;
-  ]
+    [ font-default-Jpan FssFontScript.hani `ipaexg` ;
+      font-default-Jpan FssFontScript.kana `ipaexg` ;
+    ]
   let default-font-combination-la-i : fss-font-combination =
-  [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-Italic` ;
-    font-default-Latn FssFontScript.other `fonts-junicode:Junicode-Italic` ;
-  ]
+    [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-Italic` ;
+      font-default-Latn FssFontScript.other `fonts-junicode:Junicode-Italic` ;
+    ]
   let default-font-cond-i : fss-font-selection-cond =
     FssFontSelectionCond.of-simple-config
       (| font-size = None ;
@@ -73,13 +73,13 @@ end = struct
       |)
 
   let default-font-combination-ja-b : fss-font-combination =
-  [ font-default-Jpan FssFontScript.hani `ipaexg` ;
-    font-default-Jpan FssFontScript.kana `ipaexg` ;
-  ]
+    [ font-default-Jpan FssFontScript.hani `ipaexg` ;
+      font-default-Jpan FssFontScript.kana `ipaexg` ;
+    ]
   let default-font-combination-la-b : fss-font-combination =
-  [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-Bold` ;
-    font-default-Latn FssFontScript.other `fonts-junicode:Junicode-Bold` ;
-  ]
+    [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-Bold` ;
+      font-default-Latn FssFontScript.other `fonts-junicode:Junicode-Bold` ;
+    ]
   let default-font-cond-b : fss-font-selection-cond =
     FssFontSelectionCond.of-simple-config
       (| font-size = None ;
@@ -90,13 +90,13 @@ end = struct
       |)
 
   let default-font-combination-ja-bi : fss-font-combination =
-  [ font-default-Jpan FssFontScript.hani `ipaexg` ;
-    font-default-Jpan FssFontScript.kana `ipaexg` ;
-  ]
+    [ font-default-Jpan FssFontScript.hani `ipaexg` ;
+      font-default-Jpan FssFontScript.kana `ipaexg` ;
+    ]
   let default-font-combination-la-bi : fss-font-combination =
-  [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-BoldItalic` ;
-    font-default-Latn FssFontScript.other `fonts-junicode:Junicode-BoldItalic` ;
-  ]
+    [ font-default-Latn FssFontScript.latn `fonts-junicode:Junicode-BoldItalic` ;
+      font-default-Latn FssFontScript.other `fonts-junicode:Junicode-BoldItalic` ;
+    ]
   let default-font-cond-bi : fss-font-selection-cond =
     FssFontSelectionCond.of-simple-config
       (| font-size = None ;
@@ -115,9 +115,9 @@ end = struct
           (default-font-cond-bi, default-font-combination-ja-bi) ;
         ];
       covered-area = Set.of-list [
-          FssFontScript.hani ;
-          FssFontScript.kana ;
-        ];
+        FssFontScript.hani ;
+        FssFontScript.kana ;
+      ];
     |)
   let default-font-set-la : fss-font-set =
     (| default-font = default-font-combination-la-r ;
@@ -128,9 +128,9 @@ end = struct
           (default-font-cond-bi, default-font-combination-la-bi) ;
         ];
       covered-area = Set.of-list [
-          FssFontScript.latn ;
-          FssFontScript.other ;
-        ];
+        FssFontScript.latn ;
+        FssFontScript.other ;
+      ];
     |)
 
   let default-font-set : fss-font-set =

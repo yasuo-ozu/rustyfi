@@ -81,8 +81,8 @@ end = struct
       if Float.(a < b)
       then Lt
       else if Float.(a > b)
-            then Gt
-            else Eq
+        then Gt
+        else Eq
 
     let ord =
       Ord.make compare
@@ -196,8 +196,8 @@ end = struct
             font
         in
         font
-        |> List.map (fun fp ->
-          (score, fp))
+          |> List.map (fun fp ->
+            (score, fp))
       in
       let calc-score (cond, font) =
         let score = score-f cond in
@@ -237,24 +237,24 @@ end = struct
             (-1)
             `find-optimal-font`
             (`Not perfect match: `#
-            ^ FssFontCombination.font-combination-pair-to-string fp
-            ^ #` (score `# ^ show-float score ^ `)`
-            ^ #`: fontset `#
-            ^ FssFontSet.to-string font-set
-            ^ #` axes `#
-            ^ FssExtendedContext.to-string-for-font-selection ectx
+              ^ FssFontCombination.font-combination-pair-to-string fp
+              ^ #` (score `# ^ show-float score ^ `)`
+              ^ #`: fontset `#
+              ^ FssFontSet.to-string font-set
+              ^ #` axes `#
+              ^ FssExtendedContext.to-string-for-font-selection ectx
             )
-        
+
       in
       fp
     in
     sort-by-score-desc
       (fun cond -> font-selection-score cond ectx)
       font-set#conditional-fonts
-    |> List.append (List.map (fun fp -> (Score.unit-disj, fp)) font-set#default-font)
-    |> List.reverse
+      |> List.append (List.map (fun fp -> (Score.unit-disj, fp)) font-set#default-font)
+      |> List.reverse
     % TODO Optimize font-combination to reduce invocations of set-font
-    |> normalize-font-comb
-    |> List.map warn-fuzzy-match
+      |> normalize-font-comb
+      |> List.map warn-fuzzy-match
 
 end

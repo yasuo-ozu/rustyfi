@@ -165,8 +165,8 @@ end = struct
     match lst |> List.nth idx with
     | None -> lst  % その要素がなければ何も変更しない
     | Some(_) ->
-        let (head, tail) = lst |> List.split-at idx in
-        List.concat [head; [v]; tail |> List.drop 1]
+      let (head, tail) = lst |> List.split-at idx in
+      List.concat [head; [v]; tail |> List.drop 1]
 
   let embed-nth idx lst-dist lst-orig =
     lst-orig |> List.mapi (
@@ -178,15 +178,15 @@ end = struct
     match row with
     | None -> mtx
     | Some(row) ->
-        let new-row = row |> set-nth j v in
-        mtx |> set-nth i new-row
+      let new-row = row |> set-nth j v in
+      mtx |> set-nth i new-row
 
   let embed (idx-i, idx-j) mtx-dist mtx-orig =
     mtx-orig |> List.mapi (
       fun i row -> (
-        row |> List.mapi (
-          fun j elem -> Option.from elem (mtx-dist |> get (i - idx-i, j - idx-j))
-        )
+      row |> List.mapi (
+        fun j elem -> Option.from elem (mtx-dist |> get (i - idx-i, j - idx-j))
+      )
       )
     )
 
@@ -201,8 +201,8 @@ end = struct
     match f-lst with
     | [] -> []
     | f1::fs -> (match lst with
-                 | [] -> []
-                 | x1::xs ->  (f1 x1) :: (map-each-list fs xs))
+      | [] -> []
+      | x1::xs ->  (f1 x1) :: (map-each-list fs xs))
 
   let rowmap f-lst mtx = map-each-list (List.map List.map f-lst) mtx
 

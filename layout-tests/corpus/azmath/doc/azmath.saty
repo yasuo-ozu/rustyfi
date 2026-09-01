@@ -17,8 +17,8 @@ let sbr-labelfmt ctx label-meta =
   let it = match tagstr with
     | Some(tagstr) -> embed-string tagstr
     | None -> (
-        let v = AZMathEquation.ctr |> Counter.inc in
-        embed-string (arabic v)
+      let v = AZMathEquation.ctr |> Counter.inc in
+      embed-string (arabic v)
     )
   in
   Some(read-inline ctx {[[#it;]]})

@@ -35,7 +35,7 @@ let-block ctx +block-frame bt =
   let decoset = VDecoSet.simple-frame 0.5pt Color.black Color.white in
   block-frame-breakable ctx (5pt, 5pt, 10pt, 10pt) decoset (fun ctx -> read-block ctx bt)
 
-let-block +code code = 
+let-block +code code =
   '<+ctx[set-font-size 10pt; set-paragraph-margin 6pt 6pt; set-leading 16pt;]<+Code.code(code);>>
 
 let-block +example str bt =

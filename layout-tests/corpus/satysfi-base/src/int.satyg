@@ -76,18 +76,18 @@ end = struct
         acc
       else if p mod 2 == 1 then
         aux (p / 2) (pp * pp) (acc * pp)
-      else
-        aux (p / 2) (pp * pp) acc
+        else
+          aux (p / 2) (pp * pp) acc
     in aux p base 1
   let bitsize = 63 % assume 64-bit machine
   let max-value = (2 |> pow (bitsize - 1)) - 1
   let min-value = max-value + 1
   let-rec sup
-  | [] = min-value
-  | (x :: xs) = max x (sup xs)
+    | [] = min-value
+    | (x :: xs) = max x (sup xs)
   let-rec inf
-  | [] = max-value
-  | (x :: xs) = min x (inf xs)
+    | [] = max-value
+    | (x :: xs) = min x (inf xs)
 
   let lnot i = (-i) - 1
 
@@ -123,12 +123,12 @@ end = struct
     match String.index c digit with
     | Some(i) -> Some(i)
     | None ->
-    (match String.index c upperalpha with
-    | Some(i) -> Some(i + 10)
-    | None ->
-    (match String.index c loweralpha with
-    | Some(i) -> Some(i + 10)
-    | None -> None))
+      (match String.index c upperalpha with
+        | Some(i) -> Some(i + 10)
+        | None ->
+          (match String.index c loweralpha with
+            | Some(i) -> Some(i + 10)
+            | None -> None))
 
 
   let to-string = arabic
@@ -150,10 +150,10 @@ end = struct
           match char-to-int c with
           | None -> Option.none
           | Some(i) ->
-          if i < radix then
-            Option.some (acc * radix + i)
-          else
-            Option.none
+            if i < radix then
+              Option.some (acc * radix + i)
+            else
+              Option.none
         ))) (Option.some 0) in
       match num-opt with
       | None -> Option.none

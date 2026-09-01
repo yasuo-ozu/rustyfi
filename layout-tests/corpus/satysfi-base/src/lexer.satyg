@@ -21,11 +21,11 @@ end = struct
       else
         let s = src |> String.sub i (len - i) in
         let-rec iter rules = match rules with
-        | [] -> None
-        | (r :: rules) -> let (m :: _) = RegExp.exec (RegExp.seq RegExp.bof r#regexp) s in
-          (match m with
-          | None -> iter rules
-          | (Some (_, m)) -> loop (i + String.length m) ((| kind = r#kind; data = m |) :: acc)) in
+          | [] -> None
+          | (r :: rules) -> let (m :: _) = RegExp.exec (RegExp.seq RegExp.bof r#regexp) s in
+            (match m with
+              | None -> iter rules
+              | (Some (_, m)) -> loop (i + String.length m) ((| kind = r#kind; data = m |) :: acc)) in
         iter rules in
     loop 0 []
 

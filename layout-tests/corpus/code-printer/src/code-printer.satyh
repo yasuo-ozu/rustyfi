@@ -92,7 +92,6 @@ end = struct
   let syntax-rule-fun f = SyntaxRuleFunction(f)
 
 
-
   type syntax = (|
     line-comment : syntax-rule;
     block-comment : syntax-rule;
@@ -146,12 +145,12 @@ end = struct
   let basic-theme-fun ctx =
     let font-size = get-font-size ctx in
     ctx |> set-font Latin default-latin-font
-        |> set-font Kana default-cjk-font
-        |> set-font HanIdeographic default-cjk-font
-        |> set-font OtherScript default-latin-font
-        |> set-leading 0pt
-        |> set-paragraph-margin 0pt 5pt
-        |> set-min-gap-of-lines 5pt
+      |> set-font Kana default-cjk-font
+      |> set-font HanIdeographic default-cjk-font
+      |> set-font OtherScript default-latin-font
+      |> set-leading 0pt
+      |> set-paragraph-margin 0pt 5pt
+      |> set-min-gap-of-lines 5pt
 
 
   let default-theme =
@@ -164,8 +163,6 @@ end = struct
       identifier = (fun ctx -> ctx);
       others = [];
     |)
-
-
 
 
   type design = (|
@@ -209,7 +206,6 @@ end = struct
   |)
 
 
-
   let default-number-fun ctx i =
     let new-ctx = set-text-color Color.black ctx in
     i |> arabic |> embed-string |> read-inline new-ctx
@@ -242,8 +238,8 @@ end = struct
               (x +' 4pt, y +' 6pt);
               (x +' 4pt, y +' 0pt);
             ]
-          |> fill text-color
-          |> Gr.scale-graphics (x,y) rate rate
+            |> fill text-color
+            |> Gr.scale-graphics (x,y) rate rate
         );
       ]))
     in
@@ -274,8 +270,8 @@ end = struct
               (x +' 8pt, y +' 6pt);
               (x +' 8pt, y +' 0pt);
             ]
-          |> fill text-color
-          |> Gr.scale-graphics (x,y) rate rate
+            |> fill text-color
+            |> Gr.scale-graphics (x,y) rate rate
         );
       ]))
     in
@@ -392,7 +388,7 @@ end = struct
   let set-basic-font-size size config =
     let f ctx =
       ctx |> set-font-size size
-          |> config#theme#basic
+        |> config#theme#basic
     in
     (|
       config with
@@ -469,26 +465,26 @@ end = struct
         let s = string-sub str (n - 1) 1 in
         sub (s::lst) (n - 1)
     in
-  sub [] str-len
+    sub [] str-len
 
   %%% string list内の単語を表す正規表現データを生成する
   let strlst-to-syntax-rule strlst =
     let escape str =
       str |> string-to-list
-          |> List.map (fun c -> (
-            match c with
-            | `$` -> `\$`
-            | `^` -> `\^`
-            | `.` -> `\.`
-            | `*` -> `\*`
-            | `+` -> `\+`
-            | `\` -> `\\`
-            | `?` -> `\?`
-            | `[` -> `\[`
-            | `]` -> `\]`
-            | _ -> c
-          ))
-          |> List.fold-left (^) null-string
+        |> List.map (fun c -> (
+          match c with
+          | `$` -> `\$`
+          | `^` -> `\^`
+          | `.` -> `\.`
+          | `*` -> `\*`
+          | `+` -> `\+`
+          | `\` -> `\\`
+          | `?` -> `\?`
+          | `[` -> `\[`
+          | `]` -> `\]`
+          | _ -> c
+        ))
+        |> List.fold-left (^) null-string
     in
     let join i s1 s2 =
       if i <= 0 then
@@ -496,13 +492,13 @@ end = struct
       else
         s1^`\|`^s2
     in
-  if List.length strlst == 0  then
-    syntax-rule-fun (fun _ -> None)
-  else
-    strlst
-      |> List.map escape
-      |> List.fold-lefti join null-string
-      |> syntax-rule-line
+    if List.length strlst == 0  then
+      syntax-rule-fun (fun _ -> None)
+    else
+      strlst
+        |> List.map escape
+        |> List.fold-lefti join null-string
+        |> syntax-rule-line
 
   %%% 終了タグの正規表現がマッチするまで文字を探索し続ける関数
   %%% 終了タグにマッチする前に文字が無くなったらNoneを返す
@@ -532,15 +528,14 @@ end = struct
       | Some(begin-code, other-code) -> (
         let end-re = regexp-of-string end-re-s in
         match block-rule-match-end end-re null-string other-code with
-          | None -> None
-          | Some(tail-code, other-code) -> Some(begin-code^tail-code, other-code)
+        | None -> None
+        | Some(tail-code, other-code) -> Some(begin-code^tail-code, other-code)
       )
     ))
     | SyntaxRuleLine(re-s) -> (fun code -> (
       let re = regexp-of-string re-s in
       string-scan re code
     ))
-
 
 
   %%% keyと解析関数のペアのリストと、文字列を受け取り、
@@ -556,7 +551,6 @@ end = struct
       | None -> serch-lex-fun fs code
       | Some(result) -> Some(key, result)
     )
-
 
 
   %%% トークンの中身の改行に合わせてトークンを分割し、LFとSpaceを入れる
@@ -668,7 +662,7 @@ end = struct
                 | None -> (
                   match keywords-fun code with
                   | Some(code, other-code) -> (
-                      lexer-sub (KeyWord(code)::token-lst) other-code
+                    lexer-sub (KeyWord(code)::token-lst) other-code
                   )
                   | None -> (
                     let head-str = string-sub code 0 1 in
@@ -677,11 +671,11 @@ end = struct
                       lexer-sub (Space::token-lst) tail-code
                     else if string-same head-str tab-string then
                       lexer-sub (Tab::token-lst) tail-code
-                    else if string-same head-str cr-string then
-                      lexer-sub (CR::token-lst) tail-code
-                    else if string-same head-str lf-string then
-                      lexer-sub (LF::token-lst) tail-code
-                    else lexer-sub (Basic(head-str)::token-lst) tail-code
+                      else if string-same head-str cr-string then
+                        lexer-sub (CR::token-lst) tail-code
+                        else if string-same head-str lf-string then
+                          lexer-sub (LF::token-lst) tail-code
+                          else lexer-sub (Basic(head-str)::token-lst) tail-code
                   )
                 )
               )
@@ -713,23 +707,23 @@ end = struct
       )
       | x::y::zs when (is-LF x && is-CR y) -> organize (CRLF::token-lst) false null-string zs
       | x::ys -> (
-          match x with
-          | Basic(s) -> organize token-lst true (s^basic-str) ys
-          | _ -> (
+        match x with
+        | Basic(s) -> organize token-lst true (s^basic-str) ys
+        | _ -> (
             %%% トークンを分割
-            let xs = split-token-of-line x in
-            if is-basic then
-              organize (List.reverse-append xs ((Basic(basic-str))::token-lst)) false null-string ys
-            else
-              organize (List.reverse-append xs token-lst) false null-string ys
-          )
+          let xs = split-token-of-line x in
+          if is-basic then
+            organize (List.reverse-append xs ((Basic(basic-str))::token-lst)) false null-string ys
+          else
+            organize (List.reverse-append xs token-lst) false null-string ys
+        )
       )
     in
-  code
-    |> lexer-sub []
-    |> organize [] false null-string
+    code
+      |> lexer-sub []
+      |> organize [] false null-string
 
-let-mutable indent-ref <- inline-nil
+  let-mutable indent-ref <- inline-nil
 
 
   %%% themeに合わせて組み上げて行ごとにinline-boxes型にし、リストで返す
@@ -744,7 +738,7 @@ let-mutable indent-ref <- inline-nil
     let identifier-ctx = basic-ctx |> theme#identifier in
     let other-ctx-lst =
       theme#others
-      |> List.map (fun (key,f) -> (key, f basic-ctx))
+        |> List.map (fun (key,f) -> (key, f basic-ctx))
     in
     let line-break-point is-space =
       if is-block-code then
@@ -776,9 +770,9 @@ let-mutable indent-ref <- inline-nil
           else if string-same s tab-string then
             let ib = inline-skip (default-width *' design#tab-size) in
             ib ++ ibs
-          else
-            let ib = s |> embed-string |> read-inline ctx in
-            ib ++ ibs
+            else
+              let ib = s |> embed-string |> read-inline ctx in
+              ib ++ ibs
         )
         | x::y::zs -> (
           if string-same x space-string then
@@ -787,12 +781,12 @@ let-mutable indent-ref <- inline-nil
           else if string-same x tab-string then
             let ib = inline-skip (default-width *' design#tab-size) in
             sub2 (y::zs) (ib ++ (line-break-point true) ++ ibs)
-          else
-            let ib = x |> embed-string |> read-inline ctx in
-            if string-same y space-string || string-same y tab-string then
-              sub2 (y::zs) (ib ++ (line-break-point true) ++ ibs)
             else
-              sub2 (y::zs) (ib ++ (line-break-point false) ++ ibs)
+              let ib = x |> embed-string |> read-inline ctx in
+              if string-same y space-string || string-same y tab-string then
+                sub2 (y::zs) (ib ++ (line-break-point true) ++ ibs)
+              else
+                sub2 (y::zs) (ib ++ (line-break-point false) ++ ibs)
         )
       in
       sub2 str-lst inline-nil
@@ -809,8 +803,8 @@ let-mutable indent-ref <- inline-nil
         else
           let ib =
             stack
-            |> List.reverse
-            |> List.fold-left (++) inline-nil
+              |> List.reverse
+              |> List.fold-left (++) inline-nil
           in
           ib::ib-lst
       )
@@ -867,17 +861,16 @@ let-mutable indent-ref <- inline-nil
           let () = indent-ref <- inline-nil in
           let ib =
             stack
-            |> List.reverse
-            |> List.fold-left (++) inline-nil
+              |> List.reverse
+              |> List.fold-left (++) inline-nil
           in
           printer-sub (ib::ib-lst) xs [] true
         )
       )
     in
-  List.reverse (printer-sub [] token-lst [] true)
+    List.reverse (printer-sub [] token-lst [] true)
 
   let minus-float = float (-1)
-
 
 
   %%% 色があったら塗る・色が無かったら塗らない
@@ -892,13 +885,13 @@ let-mutable indent-ref <- inline-nil
   let make-set-basic-ctx config ctx =
     let basic-ctx=
       ctx |> basic-theme-fun
-          |> config#theme#basic
-          |> set-hyphen-penalty 100000
+        |> config#theme#basic
+        |> set-hyphen-penalty 100000
     in
     let default-width =
       {0}
-      |> read-inline basic-ctx
-      |> get-natural-width
+        |> read-inline basic-ctx
+        |> get-natural-width
     in
     let font-size = get-font-size basic-ctx in
     let basic-ctx=
@@ -932,8 +925,8 @@ let-mutable indent-ref <- inline-nil
     let set-basic-ctx ctx = make-set-basic-ctx config ctx in
     let default-width =
       {0}
-      |> read-inline (set-basic-ctx ctx)
-      |> get-natural-width
+        |> read-inline (set-basic-ctx ctx)
+        |> get-natural-width
     in
     let token-lst = lexer syntax code-str in
     let num-after-margin = 6pt in
@@ -943,14 +936,14 @@ let-mutable indent-ref <- inline-nil
       let len = List.length ib-lst in
       let f i =
         i
-        |> design#number-fun (set-basic-ctx ctx)
-        |> get-natural-width
+          |> design#number-fun (set-basic-ctx ctx)
+          |> get-natural-width
       in
       let ord = (Ord.make (fun i j -> Length.(if i == j then Eq else if i < j then Lt else Gt))) in
       let opt =
         List.iterate len (fun i -> i + 1) 1 % 1スタートでlenの長さの整数のリスト
-          |> List.map f
-          |> List.max ord
+        |> List.map f
+        |> List.max ord
       in
       match opt with
       | None -> 0pt
@@ -981,8 +974,8 @@ let-mutable indent-ref <- inline-nil
           ))
       in
       ib-lst
-      |> List.mapi make-line-bb
-      |> List.fold-left (+++) block-nil
+        |> List.mapi make-line-bb
+        |> List.fold-left (+++) block-nil
     in
     let block-vdeco-set = design#block-vdeco-set backcolor in
     let f ctx =
@@ -1000,8 +993,8 @@ let-mutable indent-ref <- inline-nil
     let set-basic-ctx ctx = make-set-basic-ctx config ctx in
     let default-width =
       {0}
-      |> read-inline (set-basic-ctx ctx)
-      |> get-natural-width
+        |> read-inline (set-basic-ctx ctx)
+        |> get-natural-width
     in
     let token-lst = lexer syntax code-str in
     let ib-lst = printer (set-basic-ctx ctx) default-width theme design token-lst false in
@@ -1009,7 +1002,6 @@ let-mutable indent-ref <- inline-nil
     match ib-lst with
     | [] -> inline-nil
     | code::_ -> inline-frame-breakable design#inline-paddings inline-hdeco-set code
-
 
 
   let-block ctx +code-printer ?:config-opt code-str =

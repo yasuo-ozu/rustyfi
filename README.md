@@ -1081,6 +1081,56 @@ The two exceptions are where the filesystem enters: the whole-program tier is
 searching a project for a symbol means reading it, so that part lives in the
 server half.
 
+## Formatting from the command line
+
+`rustyfi fmt` reformats source files, and `rustyfi fmt --check` is what a CI job
+runs:
+
+```console
+$ rustyfi fmt                          # rewrite the project in place
+$ rustyfi fmt --check                  # unified diff on stdout, exit 1 if dirty
+$ rustyfi fmt --check src lib          # named files and directories
+$ rustyfi fmt --emit stdout doc.saty   # one file to stdout, touching nothing
+$ rustyfi fmt - < doc.saty             # a filter over stdin
+```
+
+With no paths it formats **the project**: the directory holding the nearest
+`Satyristes` at or above the working directory, walked for
+`.saty`/`.satyh`/`.satyg`. With no `Satyristes` and no paths that is a usage
+error rather than a walk of whatever directory you were standing in — a tool
+that rewrites files in place should not guess at which files. A directory is
+extension-filtered; a file you name is formatted whatever it is called.
+
+Each file's SATySFi generation is detected from its own headers, with the other
+generation tried as a fallback, so a file that lexes under either one is
+formatted. `--lang 0.0` / `--lang 0.1` **pins** it instead, which means a file
+that does not lex as the pinned generation is reported rather than quietly
+formatted as the other.
+
+Exit codes are the contract:
+
+| code | meaning |
+|---|---|
+| 0 | clean |
+| 1 | `--check` found files that need reformatting |
+| 2 | usage |
+| 5 | filesystem |
+| 6 | at least one file was **declined** |
+
+`6` is separate from `1` on purpose. A file is declined when it does not lex:
+there is no token stream to re-emit, so the formatter has no reliable answer and
+writes nothing at all for that file. CI has to be able to tell "somebody forgot
+to run the formatter", which is a one-command fix, from "somebody committed a
+file that does not parse", which is not. When several codes apply the precedence
+is 5, 6, 1, 0.
+
+Formatting has no configuration file yet, so it runs on the built-in defaults
+(`max_width` 100, `tab_spaces` 2, `max_blank_lines` 2), each of them the
+measured corpus majority rather than a taste call. The global `--config` names
+the Satyrographos registry configuration and has nothing to do with formatting;
+when a formatter configuration file is specified, the flag naming it will be
+`--config-path`.
+
 ## Performance
 
 Minimum CPU time over three interleaved runs against SATySFi

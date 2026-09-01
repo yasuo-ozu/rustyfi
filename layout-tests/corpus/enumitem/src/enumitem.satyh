@@ -99,29 +99,29 @@ end = struct
         let (w, h, d) = get-natural-metrics ib in
         match (Length.(w == 0pt && h == 0pt && d == 0pt), record#label-with-empty-body) with
         | (false, _) ->  % 本文がある場合。
-            let () = push-label ib-label indent in
-            let (ib-label-all, indent-all) = pop-labels () in
-            let ib-label-with-skip =
-              inline-skip (0pt -' indent-all) ++ ib-label-all
-            in
-            line-break true true ctx (
-              ib-label-with-skip ++ ib ++ inline-fil
-            )
+          let () = push-label ib-label indent in
+          let (ib-label-all, indent-all) = pop-labels () in
+          let ib-label-with-skip =
+            inline-skip (0pt -' indent-all) ++ ib-label-all
+          in
+          line-break true true ctx (
+            ib-label-with-skip ++ ib ++ inline-fil
+          )
         | (true, LabelDisplay) ->  % 本文がないがかまわずラベルを描画してほしい場合。
             % length != 0pt のときに同じ。 2度書かなくて良い文法がほしい
-            let () = push-label ib-label indent in
-            let (ib-label-all, indent-all) = pop-labels () in
-            let ib-label-with-skip =
-              inline-skip (0pt -' indent-all) ++ ib-label-all
-            in
-            line-break true true ctx (
-              ib-label-with-skip ++ ib ++ inline-fil
-            )
+          let () = push-label ib-label indent in
+          let (ib-label-all, indent-all) = pop-labels () in
+          let ib-label-with-skip =
+            inline-skip (0pt -' indent-all) ++ ib-label-all
+          in
+          line-break true true ctx (
+            ib-label-with-skip ++ ib ++ inline-fil
+          )
         | (true, LabelInherit) ->
-            let () = push-label ib-label indent in
-            block-nil
+          let () = push-label ib-label indent in
+          block-nil
         | (true, LabelIgnore) ->
-            block-nil
+          block-nil
       in
 
       let bb-inner =
@@ -162,7 +162,7 @@ end = struct
   let-rec convert-item-to-bt itemfmt (Item(it, children)) =
     let bt-children =
       children |> List.map (convert-item-to-bt itemfmt)
-               |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+        |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
     in
     '< +item?:(itemfmt)(it)(bt-children); >
 
@@ -171,14 +171,14 @@ end = struct
   let-inline ctx \sublist itemfmt (Item(_, children)) =
     let bt-children =
       children |> List.map (convert-item-to-bt itemfmt)
-               |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+        |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
     in
     let () = sublist-stack |> EnumitemParam.set bt-children in
     inline-nil
 
   let-block +sublist itemfmt (Item(_, children)) =
     children |> List.map (convert-item-to-bt itemfmt)
-             |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+      |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
 
   let-inline ctx \subitem bt =
     let () = sublist-stack |> EnumitemParam.set bt in
@@ -402,14 +402,14 @@ end = struct
       | idx :: _ -> itf idx
     in
     (|
-    indent = id;
-    indent-right = 0pt;
-    label = (read-inline ctx it);
-    label-with-empty-body = LabelIgnore;
-    margin-top = 0pt;
-    margin-bottom = 0pt;
-    context-body = id;
-  |)
+      indent = id;
+      indent-right = 0pt;
+      label = (read-inline ctx it);
+      label-with-empty-body = LabelIgnore;
+      margin-top = 0pt;
+      margin-bottom = 0pt;
+      context-body = id;
+    |)
 
   let with-depth labellst  ctx idxlst =
     let len-cycle = labellst |> List.length in
@@ -418,7 +418,7 @@ end = struct
         init
       else
         labellst |> List.nth (((idxlst |> List.length) - 1) mod len-cycle)
-                 |> Option.from init
+          |> Option.from init
     in
     label ctx idxlst
 
@@ -427,7 +427,7 @@ end = struct
     let labelf ctx idx =
       let fsizer r = get-font-size ctx *' r in
       (enumeratef ctx idx |> EnumitemFormatUtil.align-right (fsizer 1.5))
-        ++ inline-skip (fsizer 0.5)
+      ++ inline-skip (fsizer 0.5)
     in
     EnumitemFormat.new-ordered labelf
 
@@ -462,13 +462,13 @@ end = struct
     in
     let label =
       idxlst |> List.map arabic |> List.map embed-string
-             |> List.fold-left (fun it1 it2 -> {#it2;.#it1;}) {}
-             |> read-inline ctx
+        |> List.fold-left (fun it1 it2 -> {#it2;.#it1;}) {}
+        |> read-inline ctx
     in
     (|
       (EnumitemFormat.init ctx idxlst) with
-        indent = indentf;
-        label = label ++ inline-skip (get-font-size ctx *' 0.5);
+      indent = indentf;
+      label = label ++ inline-skip (get-font-size ctx *' 0.5);
     |)
 
   let-inline ctx \hskip wid-ratio =
@@ -499,7 +499,7 @@ end = struct
   let-rec convert-item-to-bt (Item(it, children)) =
     let bt-children =
       children |> List.map convert-item-to-bt
-               |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+        |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
     in
     '< +item(it)(bt-children); >
 
@@ -507,7 +507,7 @@ end = struct
     let itemfmt = itemfmt |> Option.from listing-default-label in
     let bt-children =
       children |> List.map convert-item-to-bt
-               |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+        |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
     in
     read-block ctx '<
       +itemize(itemfmt)(bt-children);
@@ -521,7 +521,7 @@ end = struct
     let itemfmt = itemfmt |> Option.from enumerate-default-label in
     let bt-children =
       children |> List.map convert-item-to-bt
-               |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
+        |> List.fold-left (fun bt1 bt2 -> '<#bt1;#bt2;>) '<>
     in
     read-block ctx '<
       +itemize(itemfmt)(bt-children);
@@ -545,9 +545,9 @@ end = struct
     in
     (|
       (EnumitemFormat.init ctx []) with
-        indent = (fun _ -> get-font-size ctx *' 2.0);
-        label = label;
-        label-with-empty-body = LabelDisplay;
+      indent = (fun _ -> get-font-size ctx *' 2.0);
+      label = label;
+      label-with-empty-body = LabelDisplay;
     |)
 
   % let description-newline ?:itf it ctx _ =

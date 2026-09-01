@@ -44,59 +44,59 @@ end = struct
     let (label, ib-num, bb) =
       match info with
       | Numbered(ibf, bbf) ->
-          let () = footnote-ref <- !footnote-ref + 1 in
-          let num = !footnote-ref in
-          let label = generate-footnote-label num in
-          let it-num = embed-string (arabic num) in
-          let ib-num = ibf num in
-          let bb = bbf num in
-          (label, ib-num, bb)
+        let () = footnote-ref <- !footnote-ref + 1 in
+        let num = !footnote-ref in
+        let label = generate-footnote-label num in
+        let it-num = embed-string (arabic num) in
+        let ib-num = ibf num in
+        let bb = bbf num in
+        (label, ib-num, bb)
 
       | NonNumbered(ibk, bbk) ->
-          let ib-num = ibk () in
-          let bb = bbk () in
-          (`(non-numbered)`, ib-num, bb)
+        let ib-num = ibk () in
+        let bb = bbk () in
+        (`(non-numbered)`, ib-num, bb)
     in
     let bb-before =
       match get-cross-reference label with
       | Some(`T`) ->
-          let () = display-message (`'` ^ label ^ `': T`) in  % for debug
-          let bar-top-margin = size in
-          let bar-bottom-margin = size *' 0.125 in
-          let wid = get-text-width ctx *' bar-ratio in
-          let ib =
-            inline-graphics wid bar-top-margin bar-bottom-margin (fun (x, y) ->
-              [ stroke 0.5pt Color.black (Gr.line (x, y) (x +' wid, y)); ]
-            ) ++ inline-fil
-          in
-          line-break false false (ctx |> set-paragraph-margin 0pt 0pt) ib
+        let () = display-message (`'` ^ label ^ `': T`) in  % for debug
+        let bar-top-margin = size in
+        let bar-bottom-margin = size *' 0.125 in
+        let wid = get-text-width ctx *' bar-ratio in
+        let ib =
+          inline-graphics wid bar-top-margin bar-bottom-margin (fun (x, y) ->
+            [ stroke 0.5pt Color.black (Gr.line (x, y) (x +' wid, y)); ]
+          ) ++ inline-fil
+        in
+        line-break false false (ctx |> set-paragraph-margin 0pt 0pt) ib
 
       | _ ->
-          let () = display-message (`'` ^ label ^ `': F`) in  % for debug
-          block-skip (size *' 0.5)
+        let () = display-message (`'` ^ label ^ `': F`) in  % for debug
+        block-skip (size *' 0.5)
     in
-      no-break
-        (add-footnote (bb-before +++ bb) ++ ib-num
-          ++ hook-page-break (fun _ _ -> (
-            let () =
-              if !first-footnote then
-                match get-cross-reference label with
-                | Some(`T`) ->
-                    ()
+    no-break
+      (add-footnote (bb-before +++ bb) ++ ib-num
+        ++ hook-page-break (fun _ _ -> (
+          let () =
+            if !first-footnote then
+              match get-cross-reference label with
+              | Some(`T`) ->
+                ()
 
-                | _ ->
-                    let () = promote-another-trial () in
-                    register-cross-reference label `T`
-              else
-                match get-cross-reference label with
-                | Some(`F`) ->
-                    ()
+              | _ ->
+                let () = promote-another-trial () in
+                register-cross-reference label `T`
+            else
+              match get-cross-reference label with
+              | Some(`F`) ->
+                ()
 
-                | _ ->
-                    let () = promote-another-trial () in
-                    register-cross-reference label `F`
-            in
-            first-footnote <- false)))
+              | _ ->
+                let () = promote-another-trial () in
+                register-cross-reference label `F`
+          in
+          first-footnote <- false)))
 
 
   let main ctx ibf bbf =

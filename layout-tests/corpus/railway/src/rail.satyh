@@ -44,55 +44,55 @@ let (^.^) (x, y) angle =
     x *' (sin rad) +' y *' (cos rad)
   )
 
-  let inner-point pt1 pt2 t = pt1 *.. (1. -. t) +.+ pt2 *.. t
+let inner-point pt1 pt2 t = pt1 *.. (1. -. t) +.+ pt2 *.. t
 
-  let bezier-at t c =
-    let p00 = (0pt, 0pt) in
-    let (p03, v01, v02) = c in
-    let p01 = p00 +.+ v01 in
-    let p02 = p03 +.+ v02 in
-    let p10 = inner-point p00 p01 t in
-    let p11 = inner-point p01 p02 t in
-    let p12 = inner-point p02 p03 t in
-    let p20 = inner-point p10 p11 t in
-    let p21 = inner-point p11 p12 t in
-    inner-point p20 p21 t
+let bezier-at t c =
+  let p00 = (0pt, 0pt) in
+  let (p03, v01, v02) = c in
+  let p01 = p00 +.+ v01 in
+  let p02 = p03 +.+ v02 in
+  let p10 = inner-point p00 p01 t in
+  let p11 = inner-point p01 p02 t in
+  let p12 = inner-point p02 p03 t in
+  let p20 = inner-point p10 p11 t in
+  let p21 = inner-point p11 p12 t in
+  inner-point p20 p21 t
 
   % Bezier 曲線を、曲線上の1点で分割
-  let split-bezier t c =
+let split-bezier t c =
     % pij と pi(j+1) を t : (1 - t) に内分して p(i+1)j ができるとする
-    let p00 = (0pt, 0pt) in
-    let (p03, v01, v02) = c in
-    let p01 = p00 +.+ v01 in
-    let p02 = p03 +.+ v02 in
-    let p10 = inner-point p00 p01 t in
-    let p11 = inner-point p01 p02 t in
-    let p12 = inner-point p02 p03 t in
-    let p20 = inner-point p10 p11 t in
-    let p21 = inner-point p11 p12 t in
-    let p30 = inner-point p20 p21 t in
+  let p00 = (0pt, 0pt) in
+  let (p03, v01, v02) = c in
+  let p01 = p00 +.+ v01 in
+  let p02 = p03 +.+ v02 in
+  let p10 = inner-point p00 p01 t in
+  let p11 = inner-point p01 p02 t in
+  let p12 = inner-point p02 p03 t in
+  let p20 = inner-point p10 p11 t in
+  let p21 = inner-point p11 p12 t in
+  let p30 = inner-point p20 p21 t in
 
     % 分割後のベジェ曲線1は、 p00, p10, p20, p30 を制御点に持つ
-    let split-curve-1 = ((p30 -.- p00), (p10 -.- p00), (p20 -.- p30)) in
+  let split-curve-1 = ((p30 -.- p00), (p10 -.- p00), (p20 -.- p30)) in
     % 分割後のベジェ曲線2は、 p30, p21, p12, p03 を制御点に持つ
-    let split-curve-2 = ((p03 -.- p30), (p21 -.- p30), (p12 -.- p03)) in
+  let split-curve-2 = ((p03 -.- p30), (p21 -.- p30), (p12 -.- p03)) in
 
-    (split-curve-1, split-curve-2)
+  (split-curve-1, split-curve-2)
 
   % Bezier 曲線の一部を抜き出す。
-  let partial-bezier t1 t2 c =
+let partial-bezier t1 t2 c =
     % 0. <= t1 < t2 <= 1. の時以外は有効な曲線の一部ではないとする
-    if not Float.(0. <= t1 && t1 < t2 && t2 <= 1.0) then
+  if not Float.(0. <= t1 && t1 < t2 && t2 <= 1.0) then
+    ((0pt, 0pt), (0pt, 0pt), (0pt, 0pt))
+  else
+    if Float.(t1 == 1.) then
+        % 上の条件からここに来ることはないはずだが、零割を確実に避けるよう念の為
       ((0pt, 0pt), (0pt, 0pt), (0pt, 0pt))
     else
-      if Float.(t1 == 1.) then
-        % 上の条件からここに来ることはないはずだが、零割を確実に避けるよう念の為
-        ((0pt, 0pt), (0pt, 0pt), (0pt, 0pt))
-      else
-        let (_, c1) = split-bezier t1 c in
-        let t = (t2 -. t1) /. (1. -. t1) in
-        let (c2, _) = split-bezier t c1 in
-        c2
+      let (_, c1) = split-bezier t1 c in
+      let t = (t2 -. t1) /. (1. -. t1) in
+      let (c2, _) = split-bezier t c1 in
+      c2
 
 module Rail : sig
 
@@ -175,7 +175,7 @@ end = struct
   let push-smooth-curve v v-ctl rail =
     let (_, _, (x-last-ctl, y-last-ctl)) =
       rail |> List.last
-           |> Option.from ((0pt, 0pt), (0pt, 0pt), (0pt, 0pt))
+        |> Option.from ((0pt, 0pt), (0pt, 0pt), (0pt, 0pt))
     in
     List.append rail [(v, (minus x-last-ctl, minus y-last-ctl), v-ctl)]
 
@@ -191,21 +191,21 @@ end = struct
     let-rec aux rail-rev =
       match rail-rev with
       | [] ->
-          (pt |> start-path, pt)
+        (pt |> start-path, pt)
       | curve :: rest -> (
-          let (v-dest, v-ctl1, v-ctl2) = curve in
-          let (pth, pt-tmp) = aux rest in
-          if v-ctl1 =' (0pt, 0pt) && v-ctl2 =' (0pt, 0pt) then
-            (
-              pth |> line-to (pt-tmp +.+ v-dest),
-              pt-tmp +.+ v-dest
-            )
-          else
-            (
-              pth |> bezier-to (pt-tmp +.+ v-ctl1)
-                (pt-tmp +.+ v-dest +.+ v-ctl2) (pt-tmp +.+ v-dest),
-              pt-tmp +.+ v-dest
-            )
+        let (v-dest, v-ctl1, v-ctl2) = curve in
+        let (pth, pt-tmp) = aux rest in
+        if v-ctl1 =' (0pt, 0pt) && v-ctl2 =' (0pt, 0pt) then
+          (
+            pth |> line-to (pt-tmp +.+ v-dest),
+            pt-tmp +.+ v-dest
+          )
+        else
+          (
+            pth |> bezier-to (pt-tmp +.+ v-ctl1)
+              (pt-tmp +.+ v-dest +.+ v-ctl2) (pt-tmp +.+ v-dest),
+            pt-tmp +.+ v-dest
+          )
       )
     in
 
@@ -247,25 +247,25 @@ end = struct
     let-rec aux rail-rev =
       match rail-rev with
       | [] ->
-          (grlst-vertex pt, pt)
+        (grlst-vertex pt, pt)
       | curve :: rest -> (
-          let (v-dest, v-ctl1, v-ctl2) = curve in
-          let (gr-lst, pt-tmp) = aux rest in
-          let pt-next = pt-tmp +.+ v-dest in
-          if v-ctl1 =' (0pt, 0pt) && v-ctl2 =' (0pt, 0pt) then
-            (
-              List.concat [ grlst-vertex pt-next ; gr-lst; ],
-              pt-next
-            )
-          else
-            (
-              List.concat [
-                grlst-handle pt-tmp (pt-tmp +.+ v-ctl1);
-                grlst-handle pt-next (pt-next +.+ v-ctl2);
-                gr-lst;
-              ],
-              pt-next
-            )
+        let (v-dest, v-ctl1, v-ctl2) = curve in
+        let (gr-lst, pt-tmp) = aux rest in
+        let pt-next = pt-tmp +.+ v-dest in
+        if v-ctl1 =' (0pt, 0pt) && v-ctl2 =' (0pt, 0pt) then
+          (
+            List.concat [ grlst-vertex pt-next ; gr-lst; ],
+            pt-next
+          )
+        else
+          (
+            List.concat [
+              grlst-handle pt-tmp (pt-tmp +.+ v-ctl1);
+              grlst-handle pt-next (pt-next +.+ v-ctl2);
+              gr-lst;
+            ],
+            pt-next
+          )
       )
     in
 

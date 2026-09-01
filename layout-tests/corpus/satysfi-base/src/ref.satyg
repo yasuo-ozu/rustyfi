@@ -50,7 +50,7 @@ end = struct
   let swap r1 r2 =
     let v1 = r1 |> get in
     r1 |> set (r2 |> get) before
-    r2 |> set v1
+      r2 |> set v1
 
   let set-temporarily v f r =
     let v-orig = r |> get in

@@ -71,28 +71,28 @@ end = struct
   let get-every-word-break = get-every-word-break
 
   let get-leading ctx =
-      let s = `aa` in
+    let s = `aa` in
       % NOTE: font size should be small enough to get correct value
-      let ctx = ctx |> set-font-size 5pt |> set-min-gap-of-lines 0pt in
-      let ib = read-inline ctx (embed-string s) in
-      let ib = ib ++ (discretionary 0 inline-nil inline-nil inline-nil) ++ ib in
-      let (w, h, d) = get-natural-metrics ib in
-      let wid = w *' 0.5 in
-      let ib1 = embed-block-top ctx wid (fun ctx -> line-break false false ctx ib) in
-      let (_, h1, d1) = get-natural-metrics ib1 in
-      let () = display-message (show-float ((h1 +' d1 -' h -' d) /' 1pt)) in
-      h1 +' d1 -' h -' d
+    let ctx = ctx |> set-font-size 5pt |> set-min-gap-of-lines 0pt in
+    let ib = read-inline ctx (embed-string s) in
+    let ib = ib ++ (discretionary 0 inline-nil inline-nil inline-nil) ++ ib in
+    let (w, h, d) = get-natural-metrics ib in
+    let wid = w *' 0.5 in
+    let ib1 = embed-block-top ctx wid (fun ctx -> line-break false false ctx ib) in
+    let (_, h1, d1) = get-natural-metrics ib1 in
+    let () = display-message (show-float ((h1 +' d1 -' h -' d) /' 1pt)) in
+    h1 +' d1 -' h -' d
 
   let get-min-gap-of-lines ctx =
-      let s = `aa` in
-      let ctx = ctx |> set-leading 0pt in
-      let ib = read-inline ctx (embed-string s) in
-      let ib = ib ++ (discretionary 0 inline-nil inline-nil inline-nil) ++ ib in
-      let (w, h, d) = get-natural-metrics ib in
-      let wid = w *' 0.5 in
-      let ib1 = embed-block-top ctx wid (fun ctx -> line-break false false ctx ib) in
-      let (_, h1, d1) = get-natural-metrics ib1 in
-      h1 +' d1 -' (h +' d) *' 2.0
+    let s = `aa` in
+    let ctx = ctx |> set-leading 0pt in
+    let ib = read-inline ctx (embed-string s) in
+    let ib = ib ++ (discretionary 0 inline-nil inline-nil inline-nil) ++ ib in
+    let (w, h, d) = get-natural-metrics ib in
+    let wid = w *' 0.5 in
+    let ib1 = embed-block-top ctx wid (fun ctx -> line-break false false ctx ib) in
+    let (_, h1, d1) = get-natural-metrics ib1 in
+    h1 +' d1 -' (h +' d) *' 2.0
 
   let-inline ctx \math m =
     Inline.of-math m ctx

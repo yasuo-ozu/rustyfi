@@ -6,11 +6,11 @@
 module CD : sig
   type obj
   val \diagram : [length; length; (|
-      obj             : point -> math -> obj;
-      draw-obj        : obj -> graphics list;
-      draw-arr        : math -> float?-> length ?-> obj -> obj -> graphics list;
-      draw-dashed-arr : math -> float?-> length ?-> obj -> obj -> graphics list;
-    |) -> graphics list] inline-cmd
+    obj             : point -> math -> obj;
+    draw-obj        : obj -> graphics list;
+    draw-arr        : math -> float?-> length ?-> obj -> obj -> graphics list;
+    draw-dashed-arr : math -> float?-> length ?-> obj -> obj -> graphics list;
+  |) -> graphics list] inline-cmd
 end = struct
 
   type obj = point * graphics
@@ -20,7 +20,7 @@ end = struct
     let h = get-axis-height ctx in
     let gr = Gr.text-centering (x, y -' h) (embed-math ctx m) in
     let bbox = get-graphics-bbox gr in
-      (pt, gr)
+    (pt, gr)
 
   let draw-obj (_, gr) = [gr]
 
@@ -55,39 +55,39 @@ end = struct
         if y1 >' y2 then ((x1, yL1), (x1, yG2)) else ((x1, yG1), (x1, yL2))
       else if length-abs (y2 -' x1) <' 0.01pt then
         ((xG1, y1), (xL2, y1))
-      else
-        let a = (y2 -' y1) /' (x2 -' x1) in
-        let ainv = 1. /. a in
-        let b = y2 *' (x1 /' (x1 -' x2)) -' y1 *' (x2 /' (x1 -' x2)) in
-        let (yL1, yG1, yL2, yG2) =
-          if y1 >' y2 then (yL1, yG1, yL2, yG2) else (yG1, yL1, yG2, yL2)
-        in
-        let pt1 =
-          let xC1 = (yL1 -' b) *' ainv in
-          let yC1 = xG1 *' a +' b in
+        else
+          let a = (y2 -' y1) /' (x2 -' x1) in
+          let ainv = 1. /. a in
+          let b = y2 *' (x1 /' (x1 -' x2)) -' y1 *' (x2 /' (x1 -' x2)) in
+          let (yL1, yG1, yL2, yG2) =
+            if y1 >' y2 then (yL1, yG1, yL2, yG2) else (yG1, yL1, yG2, yL2)
+          in
+          let pt1 =
+            let xC1 = (yL1 -' b) *' ainv in
+            let yC1 = xG1 *' a +' b in
             if xC1 <' xG1 then (xC1, yL1) else (xG1, yC1)
-        in
-        let pt2 =
-          let xC2 = (yG2 -' b) *' ainv in
-          let yC2 = xL2 *' a +' b in
+          in
+          let pt2 =
+            let xC2 = (yG2 -' b) *' ainv in
+            let yC2 = xL2 *' a +' b in
             if xC2 >' xL2 then (xC2, yG2) else (xL2, yC2)
-        in
+          in
           (pt1, pt2)
     in
     let theta = Geom.atan2-point (x2, y2) (x1, y1) in
     let axishgt = get-axis-height ctx in
-      if not reversed then
-        let (xM, yM) = Geom.div-perp pt2 pt1 (1. -. t-name) len-name in
-        let ptm = (xM, yM -' axishgt) in
-          List.append (arrowf color pt1 pt2) [
-            (if y1 >' y2 then Gr.text-leftward else Gr.text-rightward) ptm (embed-math ctx m);
-          ]
-      else
-        let (xM, yM) = Geom.div-perp pt1 pt2 (1. -. t-name) len-name in
-        let ptm = (xM, yM -' axishgt) in
-          List.append (arrowf color pt2 pt1) [
-            (if y2 >' y1 then Gr.text-leftward else Gr.text-rightward) ptm (embed-math ctx m);
-          ]
+    if not reversed then
+      let (xM, yM) = Geom.div-perp pt2 pt1 (1. -. t-name) len-name in
+      let ptm = (xM, yM -' axishgt) in
+      List.append (arrowf color pt1 pt2) [
+        (if y1 >' y2 then Gr.text-leftward else Gr.text-rightward) ptm (embed-math ctx m);
+      ]
+    else
+      let (xM, yM) = Geom.div-perp pt1 pt2 (1. -. t-name) len-name in
+      let ptm = (xM, yM -' axishgt) in
+      List.append (arrowf color pt2 pt1) [
+        (if y2 >' y1 then Gr.text-leftward else Gr.text-rightward) ptm (embed-math ctx m);
+      ]
 
 
   let draw-arr =
@@ -107,9 +107,9 @@ end = struct
         draw-dashed-arr = draw-dashed-arr ctx;
       |)
     in
-      inline-graphics wid hgt 0cm (fun ptorg -> (
-        ((stroke 1pt Color.black (Gr.rectangle (0cm, 0cm) (wid, hgt))) :: (diagf r))
-          |> List.map (shift-graphics ptorg)
-      ))
+    inline-graphics wid hgt 0cm (fun ptorg -> (
+      ((stroke 1pt Color.black (Gr.rectangle (0cm, 0cm) (wid, hgt))) :: (diagf r))
+      |> List.map (shift-graphics ptorg)
+    ))
 
 end

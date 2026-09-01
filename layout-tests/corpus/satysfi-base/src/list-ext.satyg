@@ -154,23 +154,23 @@ end = struct
     let-rec aux leftopt init lst =
       match lst with
       | [] ->
-          init
+        init
 
       | head :: [] ->
-          let initnew = f init head leftopt None in
-          initnew
+        let initnew = f init head leftopt None in
+        initnew
 
       | head :: ((right :: _) as tail) ->
-          let initnew = f init head leftopt (Some(right)) in
-          aux (Some(head)) initnew tail
+        let initnew = f init head leftopt (Some(right)) in
+        aux (Some(head)) initnew tail
     in
     aux None
 
 
   let map-adjacent f lst =
-      lst |> fold-left-adjacent (fun acc x leftopt rightopt -> (
-        f x leftopt rightopt :: acc
-      )) [] |> reverse
+    lst |> fold-left-adjacent (fun acc x leftopt rightopt -> (
+      f x leftopt rightopt :: acc
+    )) [] |> reverse
 
 
   let mapi-adjacent f lst =
@@ -179,7 +179,7 @@ end = struct
         (i + 1, f i x leftopt rightopt :: acc)
       )) (0, [])
     in
-      reverse acc
+    reverse acc
 
 
   let length lst =
@@ -192,13 +192,13 @@ end = struct
       | []           -> None
       | head :: tail -> if n == i then Some(head) else aux (i + 1) n tail
     in
-      aux 0 lst
+    aux 0 lst
 
   let eq eq =
     let-rec aux
-    | [] [] = true
-    | (x::xs) (y::ys) = (Eq.equal eq x y) &&&- (fun () -> aux xs ys)
-    | _ _ = false
+      | [] [] = true
+      | (x::xs) (y::ys) = (Eq.equal eq x y) &&&- (fun () -> aux xs ys)
+      | _ _ = false
     in Eq.make aux
 
   let intersperse s xs =
@@ -224,10 +224,10 @@ end = struct
     match lst with
     | []      -> []
     | x :: xs -> (
-        if i <= 0 then
-          []
-        else
-          x :: (take (i - 1) xs)
+      if i <= 0 then
+        []
+      else
+        x :: (take (i - 1) xs)
     )
 
 
@@ -246,10 +246,10 @@ end = struct
     match lst with
     | []      -> []
     | x :: xs -> (
-        if f x then
-          x :: take-while f xs
-        else
-          take-while f xs
+      if f x then
+        x :: take-while f xs
+      else
+        take-while f xs
     )
 
   let takewhile f lst = take-while f lst
@@ -258,10 +258,10 @@ end = struct
     match lst with
     | []      -> []
     | x :: xs -> (
-        if f x then
-          drop-while f xs
-        else
-          x :: drop-while f xs
+      if f x then
+        drop-while f xs
+      else
+        x :: drop-while f xs
     )
 
   let dropwhile f lst = drop-while f lst
@@ -275,28 +275,28 @@ end = struct
     let-rec span-sub lst1 lst2 =
       match lst2 with
       | y :: ys -> (
-          if f y then
-            span-sub (y :: lst1) ys
-          else
-            (List.reverse lst1, lst2)
-        )
+        if f y then
+          span-sub (y :: lst1) ys
+        else
+          (List.reverse lst1, lst2)
+      )
       | _ -> (List.reverse lst1, lst2)
     in
-      span-sub [] lst
+    span-sub [] lst
 
 
   let break f lst =
     let-rec break-sub lst1 lst2 =
       match lst2 with
       | y :: ys -> (
-          if f y then
-            (List.reverse lst1, lst2)
-          else
-            break-sub (y :: lst1) ys
-        )
+        if f y then
+          (List.reverse lst1, lst2)
+        else
+          break-sub (y :: lst1) ys
+      )
       | [] -> (List.reverse lst1, lst2)
     in
-      break-sub [] lst
+    break-sub [] lst
 
 
   let head lst =
@@ -337,7 +337,7 @@ end = struct
       | []        -> accu
       | (x :: xs) -> rmap-f (f x :: accu) xs
     in
-      rmap-f [] lst
+    rmap-f [] lst
 
   let-rec all-and lst =
     match lst with
@@ -387,11 +387,11 @@ end = struct
 
   let partition f lst =
     let-rec part yes no lst =
-    match lst with
+      match lst with
       | []      -> (List.reverse yes, List.reverse no)
       | x :: xs -> if f x then part (x :: yes) no xs else part yes (x :: no) xs
     in
-      part [] [] lst
+    part [] [] lst
 
 
   let-rec unzip lst =
@@ -472,52 +472,52 @@ end = struct
   let-rec bubblesort ord lst =
     let-rec last lst =
       match lst with
-        | [] -> panic `List.bubblesort: empty list`
-        | x :: [] -> x
-        | _ :: xs -> last xs
+      | [] -> panic `List.bubblesort: empty list`
+      | x :: [] -> x
+      | _ :: xs -> last xs
     in
     let-rec init lst =
       match lst with
-        | [] -> panic `List.bubblesort: empty list`
-        | _ :: [] -> []
-        | x :: xs -> x :: (init xs)
+      | [] -> panic `List.bubblesort: empty list`
+      | _ :: [] -> []
+      | x :: xs -> x :: (init xs)
     in
     let-rec bs-sub lst =
       match lst with
-        | (x :: y :: zs) -> (
-            if Ord.le ord x y then
-              y :: bs-sub (x :: zs)
-            else
-              x :: bs-sub (y :: zs)
-          )
-        | _ -> lst
+      | (x :: y :: zs) -> (
+        if Ord.le ord x y then
+          y :: bs-sub (x :: zs)
+        else
+          x :: bs-sub (y :: zs)
+      )
+      | _ -> lst
     in
-      match lst with
-        | []      -> []
-        | x :: [] -> [x]
-        | _ -> (
-            let a = bs-sub lst in
-            let x = last a in
-            let xs = init a in
-              match xs with
-                | [] -> x :: []
-                | _  -> x :: (bubblesort ord xs)
-        )
+    match lst with
+    | []      -> []
+    | x :: [] -> [x]
+    | _ -> (
+      let a = bs-sub lst in
+      let x = last a in
+      let xs = init a in
+      match xs with
+      | [] -> x :: []
+      | _  -> x :: (bubblesort ord xs)
+    )
 
   let-rec insertsort ord lst =
     let-rec is-sub x lst =
       match lst with
       | [] -> [x]
       | y :: ys -> (
-          if Ord.le ord x y then
-            x :: y :: ys
-          else
-            y :: is-sub x (ys)
-        )
+        if Ord.le ord x y then
+          x :: y :: ys
+        else
+          y :: is-sub x (ys)
+      )
     in
-      match lst with
-      | [] -> []
-      | x :: xs -> is-sub x (insertsort ord xs)
+    match lst with
+    | [] -> []
+    | x :: xs -> is-sub x (insertsort ord xs)
 
   let-rec mergesort ord lst =
     let-rec merge lst1 lst2 =
@@ -535,7 +535,7 @@ end = struct
     | [x] -> [x]
     | _ ->
       let (ys, zs) = splitat ((length lst) / 2) lst in
-        merge (mergesort ord ys) (mergesort ord zs)
+      merge (mergesort ord ys) (mergesort ord zs)
 
   let acons k v alist = (k, v) :: alist
 

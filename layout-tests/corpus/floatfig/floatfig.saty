@@ -30,12 +30,12 @@ let-inline ctx \bars n =
   let h = 14pt in
   inline-graphics w h 0pt (fun (x, y) -> (
     [0; 1; 2; 3; 4] |> List.map (fun i -> (
-      let fi = float (i + n) in
-      let bw = w *' 0.14 in
-      let bx = x +' w *' (0.02 +. float i *. 0.2) in
-      let bh = h *' (0.22 +. fi *. 0.13) in
-      fill (Color.gray (0.78 -. fi *. 0.09))
-        (Gr.rectangle (bx, y) (bx +' bw, y +' bh))
+    let fi = float (i + n) in
+    let bw = w *' 0.14 in
+    let bx = x +' w *' (0.02 +. float i *. 0.2) in
+    let bh = h *' (0.22 +. fi *. 0.13) in
+    fill (Color.gray (0.78 -. fi *. 0.09))
+      (Gr.rectangle (bx, y) (bx +' bw, y +' bh))
     ))
   ))
 

@@ -13,7 +13,7 @@ end = struct
 
   let empty =
     let deco _ _ _ _ = [] in
-      (deco, deco, deco, deco)
+    (deco, deco, deco, deco)
 
 
   let simple-frame-stroke t scolor =
@@ -39,7 +39,7 @@ end = struct
         strokef (Gr.poly-line (x, y +' h) [(x, y -' d); (x +' w, y -' d); (x +' w, y +' h)])
       ]
     in
-      (decoS, decoH, decoM, decoT)
+    (decoS, decoH, decoM, decoT)
 
 
   let simple-frame t scolor fcolor =
@@ -72,7 +72,7 @@ end = struct
         strokef (Gr.poly-line (x, y +' h) [(x, y -' d); (x +' w, y -' d); (x +' w, y +' h)])
       ]
     in
-      (decoS, decoH, decoM, decoT)
+    (decoS, decoH, decoM, decoT)
 
 
   let paper =
@@ -84,11 +84,11 @@ end = struct
     let shadowL (x, y) w h d =
       fill shadow-color
         (Gr.polygon (x +' w, y +' h) [
-            (x +' w +' xshift, y +' h -' yshift);
-            (x +' w +' xshift, y -' d -' yshift);
-            (x +' xshift, y -' d -' yshift);
-            (x, y -' d);
-            (x +' w, y -' d);
+          (x +' w +' xshift, y +' h -' yshift);
+          (x +' w +' xshift, y -' d -' yshift);
+          (x +' xshift, y -' d -' yshift);
+          (x, y -' d);
+          (x +' w, y -' d);
         ])
     in
     let shadowI (x, y) w h d =
@@ -114,7 +114,7 @@ end = struct
             (x +' w, y +' h);
             (x +' w, y -' d);
           ]);
-        ]
+      ]
     in
     let decoM (x, y) w h d =
       [
@@ -140,18 +140,18 @@ end = struct
   let quote-round qw r color =
     let decoS (x, y) _ h d =
       [ fill color (Gr.rectangle-round-left r
-          (x, y -' d) (x +' qw, y +' h)); ]
+        (x, y -' d) (x +' qw, y +' h)); ]
     in
     let decoH (x, y) _ h d =
       [ fill color (Gr.rectangle-round-left-upper r
-          (x, y -' d) (x +' qw, y +' h)); ]
+        (x, y -' d) (x +' qw, y +' h)); ]
     in
     let decoM (x, y) _ h d =
       [ fill color (Gr.rectangle (x, y -' d) (x +' qw, y +' h)); ]
     in
     let decoT (x, y) _ h d =
       [ fill color (Gr.rectangle-round-left-lower r
-          (x, y -' d) (x +' qw, y +' h)); ]
+        (x, y -' d) (x +' qw, y +' h)); ]
     in
     (decoS, decoH, decoM, decoT)
 

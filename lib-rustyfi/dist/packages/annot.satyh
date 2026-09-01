@@ -16,14 +16,14 @@ end = struct
     let deco (x, y) w h d =
       let () = register-link-to-uri uri (x, y) w h d borderopt in []
     in
-      (deco, deco, deco, deco)
+    (deco, deco, deco, deco)
 
 
   let link-to-location-frame name borderopt =
     let deco (x, y) w h d =
       let () = register-link-to-location name (x, y) w h d borderopt in []
     in
-      (deco, deco, deco, deco)
+    (deco, deco, deco, deco)
 
 
   let-inline ctx \href ?:borderopt uri inner =
@@ -49,6 +49,6 @@ end = struct
       let () = register-destination key (x, y +' h) in []
     in
     let decoI _ _ _ _ = [] in
-      (decoR, decoR, decoI, decoI)
+    (decoR, decoR, decoI, decoI)
 
 end

@@ -78,7 +78,7 @@ end = struct
     if wid-ib >' wid then
       let ib-block = embed-block-top ctx wid
         (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
-        NormalCell(default-pads ctx, ib-block)
+      NormalCell(default-pads ctx, ib-block)
     else
       let skp = inline-skip (wid -' wid-ib) in
       NormalCell(default-pads ctx, ib ++ skp ++ inline-fil)
@@ -89,7 +89,7 @@ end = struct
     if wid-ib >' wid then
       let ib-block = embed-block-top ctx wid
         (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
-        NormalCell(default-pads ctx, ib-block)
+      NormalCell(default-pads ctx, ib-block)
     else
       let skp = inline-skip ((wid -' wid-ib) *' 0.5) in
       NormalCell(default-pads ctx, inline-fil ++ skp ++ ib ++ skp ++ inline-fil)
@@ -100,7 +100,7 @@ end = struct
     if wid-ib >' wid then
       let ib-block = embed-block-top ctx wid
         (fun ctx1 -> line-break false false ctx1 (ib ++ inline-fil)) in
-        NormalCell(default-pads ctx, ib-block)
+      NormalCell(default-pads ctx, ib-block)
     else
       let skp = inline-skip (wid -' wid-ib) in
       NormalCell(default-pads ctx, inline-fil ++ skp ++ ib)
@@ -122,35 +122,35 @@ end = struct
 
   let hmargin l r cfmt ctx it =
     match cfmt ctx it with
-      | NormalCell((pl, pr, pt, pb), ib) ->
-          NormalCell((l, r, pt, pb), ib)
-      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
-          MultiCell(i, j, (l, r, pt, pb), ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell((pl, pr, pt, pb), ib) ->
+      NormalCell((l, r, pt, pb), ib)
+    | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+      MultiCell(i, j, (l, r, pt, pb), ib)
+    | EmptyCell -> EmptyCell
 
   let hmargin-ratio l r cfmt ctx it =
     match cfmt ctx it with
-      | NormalCell((pl, pr, pt, pb), ib) ->
-          NormalCell((pl *' l, pr *' r, pt, pb), ib)
-      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
-          MultiCell(i, j, (pl *' l, pr *' r, pt, pb), ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell((pl, pr, pt, pb), ib) ->
+      NormalCell((pl *' l, pr *' r, pt, pb), ib)
+    | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+      MultiCell(i, j, (pl *' l, pr *' r, pt, pb), ib)
+    | EmptyCell -> EmptyCell
 
   let vmargin t b cfmt ctx it =
     match cfmt ctx it with
-      | NormalCell((pl, pr, pt, pb), ib) ->
-          NormalCell((pl, pr, t, b), ib)
-      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
-          MultiCell(i, j, (pl, pr, t, b), ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell((pl, pr, pt, pb), ib) ->
+      NormalCell((pl, pr, t, b), ib)
+    | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+      MultiCell(i, j, (pl, pr, t, b), ib)
+    | EmptyCell -> EmptyCell
 
   let vmargin-ratio t b cfmt ctx it =
     match cfmt ctx it with
-      | NormalCell((pl, pr, pt, pb), ib) ->
-          NormalCell((pl, pr, pt *' t, pb *' b), ib)
-      | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
-          MultiCell(i, j, (pl, pr, pt *' t, pb *' b), ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell((pl, pr, pt, pb), ib) ->
+      NormalCell((pl, pr, pt *' t, pb *' b), ib)
+    | MultiCell(i, j, (pl, pr, pt, pb), ib) ->
+      MultiCell(i, j, (pl, pr, pt *' t, pb *' b), ib)
+    | EmptyCell -> EmptyCell
 
   let phantom cfmt ctx it =
     let phantomf ib =
@@ -158,11 +158,11 @@ end = struct
       inline-graphics w h d (fun (x, y) -> [])
     in
     match cfmt ctx it with
-      | NormalCell(pads, ib) ->
-          NormalCell(pads, phantomf ib)
-      | MultiCell(i, j, pads, ib) ->
-          MultiCell(i, j, pads, phantomf ib)
-      | EmptyCell -> EmptyCell
+    | NormalCell(pads, ib) ->
+      NormalCell(pads, phantomf ib)
+    | MultiCell(i, j, pads, ib) ->
+      MultiCell(i, j, pads, phantomf ib)
+    | EmptyCell -> EmptyCell
 
 % rule pattern
 
@@ -191,7 +191,7 @@ end = struct
     let yj = ys |> convenient-nth rowj in
     match (xi, xj, yi, yj) with
     | (Some(xi), Some(xj), Some(yi), Some(yj)) ->
-        grf (xi, yi) (xj, yj)
+      grf (xi, yi) (xj, yj)
     | _ -> []
 
   let simple-rule linewid clr (xi, yi) (xj, yj) =
@@ -246,9 +246,9 @@ end = struct
     let takef idx = idx >= start-row && ( (idx - start-row) mod 2 == 0) in
 
     (range 0 (List.length ys))
-      |> List.take-while takef
-      |> List.map gr
-      |> List.concat
+    |> List.take-while takef
+    |> List.map gr
+    |> List.concat
 
   let stripe-col ?:start-col clr xs ys =
     let start-col = start-col |> Option.from 0 in
@@ -256,9 +256,9 @@ end = struct
     let takef idx = idx >= start-col && ( (idx - start-col) mod 2 == 0) in
 
     (range 0 (List.length xs))
-      |> List.take-while takef
-      |> List.map gr
-      |> List.concat
+    |> List.take-while takef
+    |> List.map gr
+    |> List.concat
 
 % commands
 
@@ -290,11 +290,11 @@ end = struct
     let tbconvflst = tbconvflst |> Option.from [] in
     let tbconvertf = tbconvflst |> List.fold-left (fun a b t -> b (a t)) (fun t -> t) in
     TableBuilder.(
-    it-vector |> from-list (cfmtlst |> List.length)
-              |> align-col cfmtlst
-              |> tbconvertf
-              |> set-rules rules-lst
-              |> build ctx
+      it-vector |> from-list (cfmtlst |> List.length)
+        |> align-col cfmtlst
+        |> tbconvertf
+        |> set-rules rules-lst
+        |> build ctx
     )
 
   let itemize-to-it-matrix (Item(_, lst-item)) =
@@ -312,10 +312,10 @@ end = struct
     let tbconvertf = tbconvflst |> List.fold-left (fun a b t -> b (a t)) (fun t -> t) in
     TableBuilder.(
       item |> from-itemize
-           |> align-col cfmtlst
-           |> tbconvertf
-           |> set-rules rules-lst
-           |> build ctx
+        |> align-col cfmtlst
+        |> tbconvertf
+        |> set-rules rules-lst
+        |> build ctx
     )
 
   let-block ctx +easytable ?:rules-lst-opt ?:tbconvflst cfmtlst it-vector =

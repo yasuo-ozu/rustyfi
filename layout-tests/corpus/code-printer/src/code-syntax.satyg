@@ -151,21 +151,19 @@ end = struct
   |)
 
 
-
   % ref: http://fortranwiki.org/fortran/show/Keywords
   let fortran = CodePrinter.make-syntax (|
     line-comment = CodePrinter.syntax-rule-block `^!` `$`;
     block-comment = null-syntax-rule;
     string = CodePrinter.syntax-rule-line (` "[^"]*"\|'[^']*' `);
     keywords = [`assign`; `backspace`; `block data`; `call`; `close`; `common`; `continue`; `data`; `dimension`; `do`; `else`; `else if`; `end`; `endfile`; `endif`; `entry`; `equivalence`; `external`; `format`; `function`; `goto`; `if`; `implicit`; `inquire`; `intrinsic`; `open`; `parameter`; `pause`; `print`; `program`; `read`; `return`; `rewind`; `rewrite`; `save`; `stop`; `subroutine`; `then`; `write`;
-    `allocatable`; `allocate`; `case`; `contains`; `cycle`; `deallocate`; `elsewhere`; `exit?`; `include`; `interface`; `intent`; `module`; `namelist`; `nullify`; `only`; `operator`; `optional`; `pointer`; `private`; `procedure`; `public`; `recursive`; `result`; `select`; `sequence`; `target`; `use`; `while`; `where`;
-    `elemental`; `forall`; `pure`;
-    `abstract`; `associate`; `asynchronous`; `bind`; `class`; `deferred`; `enum`; `enumerator`; `extends`; `final`; `flush`; `generic`; `import`; `non_overridable`; `nopass`; `pass`; `protected`; `value`; `volatile`; `wait`;
-    `block`; `codimension`; `do concurrent`; `contiguous`; `critical`; `error stop`; `submodule`; `sync all`; `sync images`; `sync memory`; `lock`; `unlock`;];
+      `allocatable`; `allocate`; `case`; `contains`; `cycle`; `deallocate`; `elsewhere`; `exit?`; `include`; `interface`; `intent`; `module`; `namelist`; `nullify`; `only`; `operator`; `optional`; `pointer`; `private`; `procedure`; `public`; `recursive`; `result`; `select`; `sequence`; `target`; `use`; `while`; `where`;
+      `elemental`; `forall`; `pure`;
+      `abstract`; `associate`; `asynchronous`; `bind`; `class`; `deferred`; `enum`; `enumerator`; `extends`; `final`; `flush`; `generic`; `import`; `non_overridable`; `nopass`; `pass`; `protected`; `value`; `volatile`; `wait`;
+      `block`; `codimension`; `do concurrent`; `contiguous`; `critical`; `error stop`; `submodule`; `sync all`; `sync images`; `sync memory`; `lock`; `unlock`;];
     identifier = CodePrinter.syntax-rule-line `[a-zA-Z][a-zA-Z0-9]*\|[0-9]+`;
     others = [];
   |)
-
 
 
   % ref: https://golang.org/ref/spec#Keywords
@@ -177,7 +175,6 @@ end = struct
     identifier = CodePrinter.syntax-rule-line `[a-zA-Z][a-zA-Z0-9]*\|[0-9]+`;
     others = [];
   |)
-
 
 
   % ref: https://wiki.haskell.org/Keywords
@@ -347,7 +344,6 @@ end = struct
   |)
 
 
-
   % ref: https://docs.python.org/3/reference/lexical_analysis.html#keywords
   let python = CodePrinter.make-syntax (|
     line-comment = CodePrinter.syntax-rule-block `#` `$`;
@@ -398,11 +394,11 @@ end = struct
     block-comment = CodePrinter.syntax-rule-block `/\*` `\*/`;
     string = CodePrinter.syntax-rule-line (` "[^"]*" `);
     keywords = [`associatedtype`; `class`; `deinit`; `enum`; `extension`; `fileprivate`; `func`; `import`; `init`; `inout`; `internal`; `let`; `open`; `operator`; `private`; `protocol`; `public`; `rethrows`; `static`; `struct`; `subscript`; `typealias`; `var`;
-    `associativity`; `convenience`; `dynamic`; `didSet`; `final`; `get`; `infix`; `indirect`; `lazy`; `left`; `mutating`; `none`; `nonmutating`; `optional`; `override`; `postfix`; `precedence`; `prefix`; `Protocol`; `required`; `right`; `set`; `Type`; `unowned`; `weak`; `willSet`;
-    `as`; `Any`; `catch`; `false`; `is`; `nil`; `super`; `self`; `Self`; `throw`; `throws`; `true`; `try`;
-    `break`; `case`; `continue`; `default`; `defer`; `do`; `else`; `fallthrough`; `for`; `guard`; `if`; `in`; `repeat`; `return`; `switch`; `where`; `while`;
-    `#available`; `#colorLiteral`; `#column`; `#else`; `#elseif`; `#endif`; `#error`; `#file`; `#fileID`; `#fileLiteral`; `#filePath`; `#function`; `#if`; `#imageLiteral`; `#line`; `#selector`; `#sourceLocation`; `#warning`;
-    `_`;];
+      `associativity`; `convenience`; `dynamic`; `didSet`; `final`; `get`; `infix`; `indirect`; `lazy`; `left`; `mutating`; `none`; `nonmutating`; `optional`; `override`; `postfix`; `precedence`; `prefix`; `Protocol`; `required`; `right`; `set`; `Type`; `unowned`; `weak`; `willSet`;
+      `as`; `Any`; `catch`; `false`; `is`; `nil`; `super`; `self`; `Self`; `throw`; `throws`; `true`; `try`;
+      `break`; `case`; `continue`; `default`; `defer`; `do`; `else`; `fallthrough`; `for`; `guard`; `if`; `in`; `repeat`; `return`; `switch`; `where`; `while`;
+      `#available`; `#colorLiteral`; `#column`; `#else`; `#elseif`; `#endif`; `#error`; `#file`; `#fileID`; `#fileLiteral`; `#filePath`; `#function`; `#if`; `#imageLiteral`; `#line`; `#selector`; `#sourceLocation`; `#warning`;
+      `_`;];
     identifier = CodePrinter.syntax-rule-line `[a-zA-Z][a-zA-Z0-9_]*\|[0-9]+`;
     others = [];
   |)
@@ -449,7 +445,6 @@ end = struct
   |)
 
 
-
   let xml = CodePrinter.make-syntax (|
     line-comment = null-syntax-rule;
     block-comment = CodePrinter.syntax-rule-block `<!--` `-->`;
@@ -460,4 +455,3 @@ end = struct
   |)
 
 end
-

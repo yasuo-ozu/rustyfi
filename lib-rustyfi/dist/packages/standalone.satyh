@@ -1,12 +1,11 @@
-
 let-inline ctx \math m =
   embed-math ctx m
 
 let standalone bt =
   let ctx =
     get-initial-context 440pt (command \math)
-      |> set-dominant-narrow-script Latin
-      |> set-dominant-wide-script Kana
+    |> set-dominant-narrow-script Latin
+    |> set-dominant-wide-script Kana
   in
   let bb = read-block ctx bt in
   page-break A4Paper

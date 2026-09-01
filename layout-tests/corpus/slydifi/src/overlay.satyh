@@ -142,7 +142,7 @@ end = struct
 
   let on-slides nlst n-layer =
     nlst |> List.map (fun n -> n-layer == n)
-         |> List.fold-left ( || ) false
+      |> List.fold-left ( || ) false
 
 % figbox
   let fig-ghost dcf fb =
@@ -160,4 +160,3 @@ end = struct
     FigBox.rawbox embedf
 
 end
-

@@ -39,14 +39,14 @@ end = struct
     | None -> None
     | Some(_, v) ->
       (match m |> Set.mem-opt (key-eq eq) (k, v) with
-      | None -> None
-      | Some(_, v) -> Some(v))
+        | None -> None
+        | Some(_, v) -> Some(v))
 
   let bind k v m = Set.insert (k, v) m
 
   let unbind eq k m = match Set.choose m with
-  | None -> m
-  | Some(_, v) -> Set.remove (key-eq eq) (k, v) m
+    | None -> m
+    | Some(_, v) -> Set.remove (key-eq eq) (k, v) m
 
   let dom eq m = m |> Set.to-list (key-eq eq) |> List.map Pair.fst
 
@@ -54,8 +54,8 @@ end = struct
 
   let of-list alist =
     let-rec aux
-    | [] = empty
-    | ((k, v) :: alist) = bind k v (aux alist)
+      | [] = empty
+      | ((k, v) :: alist) = bind k v (aux alist)
     in aux (List.reverse alist)
 
   let to-list eq m = Set.to-list (key-eq eq) m

@@ -28,7 +28,7 @@ end = struct
   let yellow = rgb 1. 1. 0.
   let orange = rgb 1. 0.5 0.
   let blue   = rgb 0. 0. 1.
-  
+
   let srgb24 r g b = rgb (float r /. 256.) (float g /. 256.) (float b /. 256.)
   let css-color-selector-re = RegExp.of-string `#(\h\h)(\h\h)(\h\h)`
   let css-color-names = [

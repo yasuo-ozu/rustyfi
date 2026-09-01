@@ -60,8 +60,8 @@ end = struct
       let mag-y-ratio = (conf#amplitude /' 1pt) *. (1. /. (1. -. cos alpha)) in
       Rail.(
         (circular-sector ?:(to-degree alpha) 1pt) ^ (90.0)
-          |> reflect-x
-          |> scale mag-x-ratio mag-y-ratio
+        |> reflect-x
+        |> scale mag-x-ratio mag-y-ratio
       )
     in
 
@@ -70,30 +70,30 @@ end = struct
       let mag-x-ratio = (conf#lambda /' 1pt) *. (0.25 /. (sin alpha)) in
       let mag-y-ratio = (conf#amplitude /' 1pt) *. (1. /. (1. -. cos alpha)) in
       let wav-shape = match i mod 4 with
-      | 0 ->
+        | 0 ->
           let theta = asin (l *. (sin alpha)) in
           Rail.(
             (circular-sector ?:(to-degree theta) 1pt) ^ (90.0)
-              |> reflect-x
+            |> reflect-x
           )
-      | 1 -> 
+        | 1 ->
           let theta = alpha -. asin ((1. -. l) *. (sin alpha)) in
           Rail.(
             circular-sector ?:(to-degree theta) 1pt
-              ^ (270.0 -. (to-degree alpha))
+            ^ (270.0 -. (to-degree alpha))
           )
-      | 2 -> 
+        | 2 ->
           let theta = asin (l *. (sin alpha)) in
           Rail.(
             (circular-sector ?:(to-degree theta) 1pt) ^ (90.0)
-              |> reflect-x |> reflect-y
+            |> reflect-x |> reflect-y
           )
-      | _ -> 
+        | _ ->
           let theta = alpha -. asin ((1. -. l) *. (sin alpha)) in
           Rail.(
             circular-sector ?:(to-degree theta) 1pt
-              ^ (270.0 -. (to-degree alpha))
-              |> reflect-y
+            ^ (270.0 -. (to-degree alpha))
+            |> reflect-y
           )
       in
       wav-shape |> Rail.scale mag-x-ratio mag-y-ratio
@@ -105,7 +105,6 @@ end = struct
     ]
 
 % command
-
 
 
   let-inline ctx \uwave ?:conf it =
@@ -129,7 +128,7 @@ end = struct
 
     inline-frame-breakable
       (0pt, 0pt, 0pt, conf#amplitude *' 2.0 +' len-shift-down)
-        (deco-uwave, deco-uwave, deco-uwave, deco-uwave)
-          (read-inline ctx it)
+      (deco-uwave, deco-uwave, deco-uwave, deco-uwave)
+      (read-inline ctx it)
 
 end

@@ -120,7 +120,7 @@ end = struct
 
   let new-description ?:min-indent itf  it ctx idxlst =
     let min-indent = min-indent |> Option.from (get-font-size ctx *' 2.0) in
-    let indent wid = 
+    let indent wid =
       Length.max min-indent (wid +' get-font-size ctx *' 1.0)
     in
     (|
@@ -138,8 +138,8 @@ end = struct
   let set-indent indentf fmt  ctx idxlst =
     (|
       (fmt ctx idxlst) with
-        indent = (indentf ctx);
-        indent-right = 0pt;
+      indent = (indentf ctx);
+      indent-right = 0pt;
     |)
 
   let set-context-body ctxf fmt  ctx idxlst = (| (fmt ctx idxlst) with context-body = (fun ctx -> ctxf ctx idxlst); |)

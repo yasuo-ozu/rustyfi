@@ -50,7 +50,7 @@ end = struct
         Some (IntSingle (Slant, fa#slant));
         Some (Style fa#style);
       ]
-      |> List.fold-left f []
+        |> List.fold-left f []
     in
     And cs
 

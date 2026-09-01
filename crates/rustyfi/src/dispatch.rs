@@ -305,6 +305,7 @@ pub fn build_cli() -> Command {
             package_subcommands(compile_command("rustyfi"))
                 .subcommand(multicall_command())
                 .subcommand(lsp_command())
+                .subcommand(fmt_command())
                 .subcommand(man_command())
                 .args_conflicts_with_subcommands(true)
                 .subcommand_negates_reqs(true),
@@ -810,6 +811,83 @@ fn man_command() -> Command {
     Command::new("man")
         .about("Write the man page (roff) to stdout.")
         .hide(true)
+}
+
+/// `rustyfi fmt` — the source formatter, and the `--check` mode CI runs.
+///
+/// Not hidden: like `lsp`, and unlike `man`/`multicall`, this is something a
+/// user invokes and puts in a CI job, so it has to be discoverable in
+/// `--help`.
+///
+/// **There is deliberately no `--config-path`.** No configuration loader
+/// exists yet, so the formatter runs on `CstOptions::default()`; shipping a
+/// flag that reads a file format nobody has specified would be worse than not
+/// having the flag. When the loader lands the spelling is `--config-path`,
+/// matching rustfmt — *not* `--config`, which this CLI already uses for the
+/// satyrographos registry config.
+fn fmt_command() -> Command {
+    Command::new("fmt")
+        .about("Reformat SATySFi source files, or check that they are formatted.")
+        .arg(
+            Arg::new("paths")
+                .help(
+                    "Files and directories to format. A directory is walked for \
+                     .saty/.satyh/.satyg files; a named file is formatted whatever \
+                     its extension. `-` reads stdin and writes stdout. With no \
+                     PATHS, the project is formatted: the directory holding the \
+                     nearest Satyristes at or above the working directory. With no \
+                     Satyristes and no PATHS this is a usage error rather than a \
+                     walk of the working directory.",
+                )
+                .num_args(0..)
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("check")
+                .long("check")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Write nothing. Print a unified diff of what would change and \
+                     exit 1 if anything would; exit 6 if any file was declined \
+                     (it does not lex, so there is no token stream to re-emit).",
+                ),
+        )
+        .arg(
+            Arg::new("lang")
+                .long("lang")
+                .value_name("VERSION")
+                .help(
+                    "Format every file as this SATySFi generation: 0.0 or 0.1. Same \
+                     spelling as the compiler's --lang. When omitted, each file's \
+                     generation is sniffed from its own headers and the other \
+                     generation is tried as a fallback, so a file that lexes under \
+                     either one is formatted.",
+                ),
+        )
+        .arg(
+            Arg::new("emit")
+                .long("emit")
+                .value_name("DEST")
+                .value_parser(["stdout", "files"])
+                .conflicts_with("check")
+                .help(
+                    "Where formatted output goes: `files` (the default) rewrites \
+                     each input in place; `stdout` writes the formatted text and \
+                     leaves every file alone, concatenating with no separator if \
+                     given more than one input. Conflicts with --check, which is \
+                     the diff-only mode.",
+                ),
+        )
+        .after_help(
+            "Formatting has no configuration flag yet: it runs on the built-in \
+             defaults (max_width 100, tab_spaces 2, max_blank_lines 2). The \
+             --config listed above is the GLOBAL flag naming the Satyrographos \
+             registry configuration and has no effect on formatting; when a \
+             formatter configuration file is specified, the flag naming it will be \
+             --config-path.\n\nExit codes: 0 clean; 1 --check found files needing \
+             reformatting; 2 usage; 5 filesystem; 6 at least one file was declined \
+             (it does not lex). Precedence when several apply: 5, 6, 1, 0.",
+        )
 }
 
 /// `rustyfi lsp` — the editor-facing personality.

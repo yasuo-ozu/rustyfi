@@ -70,7 +70,7 @@ end = struct
     let (default, custom-opt, mutable) = param in
     mutable |> Ref.set false
 
-  let unfix param = 
+  let unfix param =
     let (default, custom-opt, mutable) = param in
     mutable |> Ref.set true
 
@@ -103,4 +103,3 @@ end = struct
     let () = set old-value param in
     ib
 end
-

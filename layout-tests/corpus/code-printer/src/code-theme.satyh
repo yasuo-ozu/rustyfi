@@ -56,12 +56,12 @@ end = struct
 
   let set-font-code font ctx =
     ctx |> set-font Latin font
-        |> set-font OtherScript font
+      |> set-font OtherScript font
 
 
   let set-font-and-text-color font color ctx =
     ctx |> set-font-code font
-        |> set-text-color color
+      |> set-text-color color
 
 
   let set-basic-color color =

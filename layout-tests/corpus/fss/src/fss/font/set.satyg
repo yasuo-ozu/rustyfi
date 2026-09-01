@@ -38,7 +38,7 @@ end = struct
         base#conditional-fonts
     in
     (| default-font =
-        List.append base-default-font override#default-font;
+      List.append base-default-font override#default-font;
       conditional-fonts =
         List.append base-conditional-fonts override#conditional-fonts;
       covered-area =

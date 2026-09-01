@@ -5,8 +5,8 @@
 %% Unlike ['a 'b result], ['a 'b either] should have
 %% no bias between ['a] and ['b].
 type 'a 'b either =
-| Left of 'a
-| Right of 'b
+  | Left of 'a
+  | Right of 'b
 
 module Either : sig
   val left : 'a -> 'a 'b either

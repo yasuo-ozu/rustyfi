@@ -98,8 +98,8 @@ end = struct
   % embed-math みたいな interface にしたかった．
   let embed-figbox ctx fb =
     match fb with
-      | Box(embedf) -> embedf ctx
-      | AxisDependingBox(embedf) -> inline-nil
+    | Box(embedf) -> embedf ctx
+    | AxisDependingBox(embedf) -> inline-nil
 
   % let embed-gap is-horizontal ctx fb =
   %   match fb with
@@ -151,8 +151,8 @@ end = struct
       | `jfi`  -> use-image-by-width (load-image pth) wid
       | `jif`  -> use-image-by-width (load-image pth) wid
       | _ ->
-          let () = display-message (`Failed to include image: [` ^ pth ^ `]`) in
-          inline-nil
+        let () = display-message (`Failed to include image: [` ^ pth ^ `]`) in
+        inline-nil
     in
     Box(embedf)
 
@@ -174,7 +174,7 @@ end = struct
       let scale = ht /' ht-orig in
       let gr =
         draw-text (0pt, 0pt) ib
-          |> Gr.scale-graphics (0pt, 0pt) 1. scale
+        |> Gr.scale-graphics (0pt, 0pt) 1. scale
       in
       let ((xmin, ymin), (xmax, ymax)) = get-graphics-bbox gr in
       inline-graphics (xmax -' xmin) (ymax -' ymin) 0pt (fun (x, y) -> [
@@ -214,7 +214,7 @@ end = struct
   let textbox ?:ctxf it =
     let embedf ctx =
       let ctxf = Option.from (fun x -> x) ctxf in
-          read-inline (ctxf ctx) it
+      read-inline (ctxf ctx) it
     in
     Box(embedf)
 
@@ -223,7 +223,7 @@ end = struct
       let ctxf = Option.from (fun x -> x) ctxf in
       embed-block-bottom (ctxf ctx) wid (
         fun ctx -> line-break false false ctx
-          (read-inline ctx it ++ inline-fil)
+        (read-inline ctx it ++ inline-fil)
       )
     in
     Box(embedf)
@@ -263,21 +263,21 @@ end = struct
       match (grlstf ctx) with
       | [] -> inline-nil
       | gr-init :: rest ->
-          let foldf ((xminprev, yminprev), (xmaxprev, ymaxprev)) ((xmin, ymin), (xmax, ymax)) =
-            let xmin = if xmin <' xminprev then xmin else xminprev in
-            let ymin = if ymin <' yminprev then ymin else yminprev in
-            let xmax = if xmax >' xmaxprev then xmax else xmaxprev in
-            let ymax = if ymax >' ymaxprev then ymax else ymaxprev in
-            ((xmin, ymin), (xmax, ymax))
-          in
-          let ((xmin, ymin), (xmax, ymax)) = rest
-            |> List.map get-graphics-bbox
-            |> List.fold-left foldf (get-graphics-bbox gr-init)
-          in
-          let wid = (xmax -' xmin) in
-          let ht = (ymax -' ymin) in
-          inline-graphics wid ht 0pt
-            (fun (x, y) -> grlstf ctx |> List.map (shift-graphics (x -' xmin, y -' ymin)))
+        let foldf ((xminprev, yminprev), (xmaxprev, ymaxprev)) ((xmin, ymin), (xmax, ymax)) =
+          let xmin = if xmin <' xminprev then xmin else xminprev in
+          let ymin = if ymin <' yminprev then ymin else yminprev in
+          let xmax = if xmax >' xmaxprev then xmax else xmaxprev in
+          let ymax = if ymax >' ymaxprev then ymax else ymaxprev in
+          ((xmin, ymin), (xmax, ymax))
+        in
+        let ((xmin, ymin), (xmax, ymax)) = rest
+          |> List.map get-graphics-bbox
+          |> List.fold-left foldf (get-graphics-bbox gr-init)
+        in
+        let wid = (xmax -' xmin) in
+        let ht = (ymax -' ymin) in
+        inline-graphics wid ht 0pt
+          (fun (x, y) -> grlstf ctx |> List.map (shift-graphics (x -' xmin, y -' ymin)))
     in
     Box(embedf)
 
@@ -335,15 +335,15 @@ end = struct
     let embedf gapinfo ctx =
       match gapinfo with
       | HorizontalGap(ht, dp) ->
-          let half-len = len *' 0.5 in
-          inline-graphics len ht dp (fun (x, y) ->
-             strokef (x +' half-len, y -' dp) (x +' half-len, y +' ht)
-          )
+        let half-len = len *' 0.5 in
+        inline-graphics len ht dp (fun (x, y) ->
+          strokef (x +' half-len, y -' dp) (x +' half-len, y +' ht)
+        )
       | VerticalGap(wid) ->
-          let half-len = len *' 0.5 in
-          inline-graphics wid half-len half-len (fun (x, y) ->
-              strokef (x, y) (x +' wid, y)
-          )
+        let half-len = len *' 0.5 in
+        inline-graphics wid half-len half-len (fun (x, y) ->
+          strokef (x, y) (x +' wid, y)
+        )
     in
     AxisDependingBox(embedf)
 
@@ -455,7 +455,7 @@ end = struct
       let ib-fig = embed-figbox ctx fb in
       let gr =
         draw-text (0pt, 0pt) ib-fig
-          |> Gr.rotate-graphics (0pt, 0pt) angle
+        |> Gr.rotate-graphics (0pt, 0pt) angle
       in
       let ((xmin, ymin), (xmax, ymax)) = get-graphics-bbox gr in
       inline-graphics (xmax -' xmin) (ymax -' ymin) 0pt (fun (x, y) -> [
@@ -470,7 +470,7 @@ end = struct
       let ib-fig = embed-figbox ctx fb in
       let gr =
         draw-text (0pt, 0pt) ib-fig
-          |> Gr.scale-graphics (0pt, 0pt) wdratio htratio
+        |> Gr.scale-graphics (0pt, 0pt) wdratio htratio
       in
       let ((xmin, ymin), (xmax, ymax)) = get-graphics-bbox gr in
       inline-graphics (xmax -' xmin) (ymax -' ymin) 0pt (fun (x, y) -> [

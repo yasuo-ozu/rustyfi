@@ -23,7 +23,7 @@ end = struct
     let exploded = string-explode x in
     let is-valid =
       exploded
-      |> List.all (fun c -> c < 0x80)
+        |> List.all (fun c -> c < 0x80)
     in
     if is-valid
     then Some exploded
@@ -39,8 +39,8 @@ end = struct
     | (_ :: _, []) -> Gt
     | (x :: xs, y :: ys) ->
       (match Ord.compare ord x y with
-      | Eq -> list-compare ord xs ys
-      | o -> o)
+        | Eq -> list-compare ord xs ys
+        | o -> o)
 
   let compare =
     list-compare Int.ord

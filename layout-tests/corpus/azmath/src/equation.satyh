@@ -142,7 +142,7 @@ end = struct
       let () =
         param-label-meta |> AZMathParam.set (|
           eqn-meta with
-            no-label-flag = true;
+          no-label-flag = true;
         |)
       in
       ${}
@@ -155,8 +155,8 @@ end = struct
       let () =
         param-label-meta |> AZMathParam.set (|
           eqn-meta with
-            tag = tagstr;
-            label = Some(label)
+          tag = tagstr;
+          label = Some(label)
         |)
       in
       ${}
@@ -169,7 +169,7 @@ end = struct
       let () =
         param-label-meta |> AZMathParam.set (|
           eqn-meta with
-            keep-page-flag = true;
+          keep-page-flag = true;
         |)
       in
       ${}
@@ -186,8 +186,8 @@ end = struct
       let tagstr = match meta#tag with
         | Some(tag) -> tag  % tag が指定されていたらそれを使う
         | None -> (  % デフォルトでは連番の数字
-            let v = ctr |> Counter.inc in
-            arabic v
+          let v = ctr |> Counter.inc in
+          arabic v
         )
       in
       let ib-tag = str-to-ib-f ctx tagstr in
@@ -195,12 +195,12 @@ end = struct
       let ib-ref = match meta#label with
         | None -> inline-nil
         | Some(label) ->
-            let (_, ht, _) = get-natural-metrics ib-tag in
-            let () = register-cross-reference (`eq:` ^ label ^ `:num`) tagstr in
-            (ib-annotation ?:ht (`eq:` ^ label))
-              ++ hook-page-break ( fun pbinfo _ ->
-                register-cross-reference (`eq:` ^ label ^ `:page`) (arabic pbinfo#page-number)
-              )
+          let (_, ht, _) = get-natural-metrics ib-tag in
+          let () = register-cross-reference (`eq:` ^ label ^ `:num`) tagstr in
+          (ib-annotation ?:ht (`eq:` ^ label))
+          ++ hook-page-break ( fun pbinfo _ ->
+            register-cross-reference (`eq:` ^ label ^ `:page`) (arabic pbinfo#page-number)
+          )
       in
       Some(ib-ref ++ ib-tag)
 
@@ -241,8 +241,8 @@ end = struct
       match lst with
       | [] -> []
       | lst ->
-          let (lst-take, lst-rest) = lst |> List.split-at n in
-          lst-take :: (aux lst-rest)
+        let (lst-take, lst-rest) = lst |> List.split-at n in
+        lst-take :: (aux lst-rest)
     in
     aux lst
 
@@ -253,17 +253,17 @@ end = struct
     let f idx m _ m-rightopt =
       % 右隣があるかどうか
       match m-rightopt with
-        | None -> embed-math ctx m
-        | Some(m-right) ->
-            if idx mod 2 == 1 then
+      | None -> embed-math ctx m
+      | Some(m-right) ->
+        if idx mod 2 == 1 then
               % 数式の右辺に相当するとき
-              (embed-math ctx m) ++ (inline-skip skip)
-            else
+          (embed-math ctx m) ++ (inline-skip skip)
+        else
               % 数式の左辺
-              let ib-space = space-between-maths ctx m m-right in
-              match ib-space with
-                | None -> embed-math ctx m
-                | Some(ib-space) -> (embed-math ctx m) ++ ib-space
+          let ib-space = space-between-maths ctx m m-right in
+          match ib-space with
+          | None -> embed-math ctx m
+          | Some(ib-space) -> (embed-math ctx m) ++ ib-space
     in
     let ib-lst = m-lst |> List.mapi-adjacent f in
 
@@ -278,11 +278,11 @@ end = struct
     let-rec vec-max v1 v2 =
       match (v1, v2) with
       | (l1::rest1, l2::rest2) ->
-          (length-max l1 l2) :: (vec-max rest1 rest2)
+        (length-max l1 l2) :: (vec-max rest1 rest2)
       | _ -> []
     in
     ib-llst |> List.map (fun ib-lst -> ib-lst |> List.map get-natural-width)  % length に変換
-            |> List.fold-left vec-max (0pt |> List.repeat ncol)
+      |> List.fold-left vec-max (0pt |> List.repeat ncol)
 
   % inline-boxes の前後に特定の比率で余白を付け加えたリストを返す。
   let add-spaces-with-ratio- ratio wid ib =
@@ -312,8 +312,8 @@ end = struct
   let align-eqn ctx tagfmt align-coefs lst-max-wid (ib-lst, meta) prev next =
     let ib-lst-with-space =
       List.zip (List.zip align-coefs lst-max-wid) ib-lst
-        |> List.map (fun ((ratio, wid), ib) -> add-spaces-with-ratio- ratio wid ib)
-        |> List.concat
+      |> List.map (fun ((ratio, wid), ib) -> add-spaces-with-ratio- ratio wid ib)
+      |> List.concat
     in
     let ib-concat = ib-lst-with-space |> List.fold-left (++) inline-nil in
     let wid-line = get-text-width ctx in
@@ -322,30 +322,30 @@ end = struct
     % 数式間の縦の余白を規定する
     let mgn-upper =
       match prev with
-        | Some(_) -> (AZMathParam.get vmargin-between-eqn) ctx
-        | None -> (AZMathParam.get vmargin-before-eqn) ctx
+      | Some(_) -> (AZMathParam.get vmargin-between-eqn) ctx
+      | None -> (AZMathParam.get vmargin-before-eqn) ctx
     in
     let mgn-lower =
       match next with
-        | Some(_) -> (AZMathParam.get vmargin-between-eqn) ctx
-        | None -> (AZMathParam.get vmargin-after-eqn) ctx
+      | Some(_) -> (AZMathParam.get vmargin-between-eqn) ctx
+      | None -> (AZMathParam.get vmargin-after-eqn) ctx
     in
     let ctx = ctx |> set-paragraph-margin mgn-upper mgn-lower in
 
     match (tagfmt ctx meta) with
     | None -> % 付けるべきタグが存在しないとき
-        [
+      [
           % 上側は allow-display-break パラメータで改行を許すか指定。
           % 下側は \keeppage が付いているかどうかで改行を許すか既定。
-          line-break (AZMathParam.get allow-display-break) (not meta#keep-page-flag) ctx (
-            (inline-skip wid-space-lr-math) ++ ib-concat ++ (inline-skip wid-space-lr-math)
-          )
-        ]
+        line-break (AZMathParam.get allow-display-break) (not meta#keep-page-flag) ctx (
+          (inline-skip wid-space-lr-math) ++ ib-concat ++ (inline-skip wid-space-lr-math)
+        )
+      ]
     | Some(ib-tag) -> % 付けるべきタグがあるとき
       % タグと数式が重なるかどうかには、最も右にある余白の情報が必要
       let wid-right-space =
         List.last ib-lst-with-space |> Option.from inline-nil
-                                    |> get-natural-width
+        |> get-natural-width
       in
       let min-gap = (AZMathParam.get min-gap-between-eqn-and-tag) ctx in
       let wid-tag = get-natural-width ib-tag in
@@ -359,7 +359,7 @@ end = struct
           % 下側は \keeppage が付いているかどうかで改行を許すか既定。
           line-break (AZMathParam.get allow-display-break) (not meta#keep-page-flag) ctx (
             (inline-skip wid-space-lr-math) ++ ib-concat
-              ++ (inline-skip wid-space-bwn-eqn-tag) ++ ib-tag
+            ++ (inline-skip wid-space-bwn-eqn-tag) ++ ib-tag
           )
         ]
       else
@@ -371,7 +371,7 @@ end = struct
           line-break (AZMathParam.get allow-display-break) false
             (ctx |> set-paragraph-margin mgn-upper mgn-mid) (
             (inline-skip wid-space-lr-math) ++ ib-concat ++ (inline-skip wid-space-lr-math)
-          );
+            );
           % 上側は数式との境目なので必ず false。
           % 下側は \keeppage が付いているかどうかで改行を許すか既定。
           line-break false (not meta#keep-page-flag) (ctx |> set-paragraph-margin mgn-mid mgn-lower) (
@@ -393,7 +393,7 @@ end = struct
     % 各列の幅の最大値
     let lst-max-wid =
       ib-meta-lst |> List.map (Pair.fst) % (inline-boxes list) list を得る
-                  |> calc-lst-max-wid 1
+        |> calc-lst-max-wid 1
     in
 
     let bb-lst = ib-meta-lst
@@ -405,12 +405,12 @@ end = struct
     let tagfmt = tagfmt |> Option.from default-tagfmt in
     inline-fil ++
       embed-block-breakable ctx (read-block ctx '<+gather?:(tagfmt)(mlst);>)
-        ++ omit-skip-after
+      ++ omit-skip-after
 
   let-block ctx +eqn ?:tagfmt m =
     % tagfmt の unwrap
     let tagfmt = tagfmt |> Option.from default-tagfmt in
-  read-block ctx '<
+    read-block ctx '<
     +gather?:(tagfmt)[m];
   >
 
@@ -419,7 +419,7 @@ end = struct
     let tagfmt = tagfmt |> Option.from default-tagfmt in
     inline-fil ++
       embed-block-breakable ctx (read-block ctx '<+eqn?:(tagfmt)(m);>)
-        ++ omit-skip-after
+      ++ omit-skip-after
 
 % +align
 
@@ -434,7 +434,7 @@ end = struct
     % 各列の幅の最大値
     let lst-max-wid =
       ib-meta-lst |> List.map (Pair.fst) % (inline-boxes list) list を得る
-                  |> calc-lst-max-wid 2
+        |> calc-lst-max-wid 2
     in
 
     let bb-lst = ib-meta-lst
@@ -446,7 +446,7 @@ end = struct
     let tagfmt = tagfmt |> Option.from default-tagfmt in
     inline-fil ++
       embed-block-breakable ctx (read-block ctx '<+align?:(tagfmt)(mlst);>)
-        ++ omit-skip-after
+      ++ omit-skip-after
 
 % +alignat
 
@@ -463,7 +463,7 @@ end = struct
     % 各列の幅の最大値
     let lst-max-wid =
       ib-meta-lst |> List.map (Pair.fst) % (inline-boxes list) list を得る
-                  |> calc-lst-max-wid (ncol * 2)
+        |> calc-lst-max-wid (ncol * 2)
     in
 
     let bb-lst = ib-meta-lst
@@ -475,7 +475,7 @@ end = struct
     let tagfmt = tagfmt |> Option.from notag in
     inline-fil ++
       embed-block-breakable ctx (read-block ctx '<+alignat?:(tagfmt)(ncol)(mlst);>)
-        ++ omit-skip-after
+      ++ omit-skip-after
 
 % \aligned
 
@@ -487,11 +487,11 @@ end = struct
       match mnextopt with
       | None -> ibm
       | Some(mnext) ->
-          let ibspaceopt = space-between-maths ctx m mnext in
-          ( match ibspaceopt with
-            | None          -> ibm
-            | Some(ibspace) -> ibm ++ ibspace
-          )
+        let ibspaceopt = space-between-maths ctx m mnext in
+        ( match ibspaceopt with
+          | None          -> ibm
+          | Some(ibspace) -> ibm ++ ibspace
+        )
     in
 
     if idx mod 2 == 0 then

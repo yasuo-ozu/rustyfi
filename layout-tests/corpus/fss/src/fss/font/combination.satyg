@@ -3,7 +3,7 @@
 
 type fss-font-combination-pair =
   (| script : FssFontScript.t ;
-     font : fss-font;
+    font : fss-font;
   |)
 
 type fss-font-combination =

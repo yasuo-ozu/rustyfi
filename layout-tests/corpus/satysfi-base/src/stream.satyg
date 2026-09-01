@@ -64,8 +64,8 @@ module Stream : sig
 end = struct
 
   type 'a state =
-  | Nil
-  | Cons of 'a * 'a u
+    | Nil
+    | Cons of 'a * 'a u
   and 'a u = ('a state) Promise.t
 
   type 'a t = 'a u
@@ -101,7 +101,7 @@ end = struct
       | None -> Option.none
       | Some(x, s) -> Option.some (f x, s)
     in
-      s |> unfold go
+    s |> unfold go
 
   let filter f s =
     let-rec go s =
@@ -113,7 +113,7 @@ end = struct
         else
           go s
     in
-      s |> unfold go
+    s |> unfold go
 
   let zip s1 s2 =
     let go (s1, s2) =
@@ -122,7 +122,7 @@ end = struct
       | (_, None) -> Option.none
       | (Some(x1, s1), Some(x2, s2)) -> Option.some ((x1, x2), (s1, s2))
     in
-      (s1, s2) |> unfold go
+    (s1, s2) |> unfold go
 
   let-rec unzip s =
     (map Pair.fst s, map Pair.snd s)
@@ -188,7 +188,7 @@ end = struct
       | None -> i
       | Some(_, s) -> go (i + 1) s
     in
-      go 0 s
+    go 0 s
 
   let last s =
     let-rec go x s =
@@ -196,7 +196,7 @@ end = struct
       | None -> x
       | Some(x, s) -> go (Option.some x) s
     in
-      go Option.none s
+    go Option.none s
 
   let nth n s =
     let-rec go i s =
@@ -208,7 +208,7 @@ end = struct
         else
           go (i - 1) s
     in
-      go n s
+    go n s
 
   let enumerate s =
     zip nat s
@@ -236,7 +236,7 @@ end = struct
       | None -> ()
       | Some(x, s) -> f x before go s
     in
-      go s
+    go s
 
   let filter-map f s =
     s |> map f |> filter Option.is-some |> map Option.unwrap
@@ -248,7 +248,7 @@ end = struct
       | Some(x, _) when not (f x) -> s
       | Some(_, s) -> go s
     in
-      Promise.delay-force (fun () -> go s)
+    Promise.delay-force (fun () -> go s)
 
   let-rec take-while f s =
     Promise.delay-force
@@ -256,10 +256,10 @@ end = struct
         match uncons s with
         | None -> nil ()
         | Some(x, s) ->
-            if f x then
-              cons (fun () -> x) (fun () -> take-while f s)
-            else
-              nil ()
+          if f x then
+            cons (fun () -> x) (fun () -> take-while f s)
+          else
+            nil ()
       ))
 
   let map-while f s =
@@ -288,7 +288,7 @@ end = struct
       | None -> x |> Option.ret
       | Some(y, s) -> x |> f y |> Option.and-then (go s)
     in
-      go s x
+    go s x
 
   let fold-result x f s =
     let-rec go s x =
@@ -296,7 +296,7 @@ end = struct
       | None -> x |> Result.ret
       | Some(y, s) -> x |> f y |> Result.and-then (go s)
     in
-      go s x
+    go s x
 
   let iter-option f s =
     let-rec go s =
@@ -304,7 +304,7 @@ end = struct
       | None -> () |> Option.ret
       | Some(x, s) -> x |> f |> Option.and-then (fun () -> go s)
     in
-      go s
+    go s
 
   let iter-result f s =
     let-rec go s =
@@ -312,7 +312,7 @@ end = struct
       | None -> Result.ret ()
       | Some(x, s) -> f x |> Result.and-then (fun () -> go s)
     in
-      go s
+    go s
 
   let find f s =
     s |> fold-result () (fun x () -> (
@@ -320,7 +320,7 @@ end = struct
         Result.err x
       else
         Result.ok ()
-      ))
+    ))
       |> Result.to-err
 
   let all f s =
@@ -335,14 +335,14 @@ end = struct
   let find-result f s =
     s |> fold-result () (fun x () -> (
       f x
-        |> Result.map-err Result.err
-        |> Result.and-then (fun b -> (
-          if b then
-            Result.err (Result.ok x)
-          else
-            Result.ok ()
-        ))
+      |> Result.map-err Result.err
+      |> Result.and-then (fun b -> (
+        if b then
+          Result.err (Result.ok x)
+        else
+          Result.ok ()
       ))
+    ))
       |> Result.to-err
       |> Option.transpose
 
@@ -360,13 +360,13 @@ end = struct
       else
         Option.some (Array.get i s, i + 1)
     in
-      0 |> unfold step
+    0 |> unfold step
 
   let of-option opt =
     let go opt =
       opt |> Option.map (fun x -> (x, Option.none))
     in
-      opt |> unfold go
+    opt |> unfold go
 
   let to-array s =
     match uncons s with
@@ -377,5 +377,5 @@ end = struct
         |> iter (fun (i, a) -> (
           result |> Array.set i a
         )) before
-      result
+        result
 end

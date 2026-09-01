@@ -33,7 +33,7 @@ end = struct
       | (false, false) -> Eq
       | (true, false) -> Gt
       | (false, true) -> Lt
-  ))
+    ))
 
   let max = ( || )
   let min = ( && )

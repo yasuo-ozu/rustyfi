@@ -9,9 +9,9 @@ module SlydifiGraphics : sig
 
   % 複数行のテキストを並べる。
   val put-texts : 'config -> length * length -> inline-boxes list -> graphics list
-      constraint 'config :: (|
-        align : float * float; text-align: float; leading: length
-      |)
+    constraint 'config :: (|
+      align : float * float; text-align: float; leading: length
+    |)
 
 end = struct
 
@@ -31,12 +31,12 @@ end = struct
           let ((xmin, ymin), (xmax, ymax)) = get-graphics-bbox gr in
           let ((xmin-old, ymin-old), (xmax-old, ymax-old)) = prev-info#bbox in
           (|
-          baseline = y +' config#leading;
-          bbox = (
-            (min xmin-old xmin, min ymin-old ymin),
-            (max xmax-old xmax, max ymax-old ymax)
-          );
-        |)
+            baseline = y +' config#leading;
+            bbox = (
+              (min xmin-old xmin, min ymin-old ymin),
+              (max xmax-old xmax, max ymax-old ymax)
+            );
+          |)
         in
         (new-info, gr :: grlst)
       in
@@ -46,7 +46,7 @@ end = struct
       let ((xmin, ymin), (xmax, ymax)) = info#bbox in
       let (xalign, yalign) = config#align in
       (xmin *' (1. -. xalign) +' xmax *' xalign,
-       ymin *' (1. -. yalign) +' ymax *' yalign)
+        ymin *' (1. -. yalign) +' ymax *' yalign)
     in
     grlst |> List.map (shift-graphics (x -' xadj, y -' yadj))
 
@@ -60,4 +60,3 @@ end = struct
     put-texts config pos [ib]
 
 end
-

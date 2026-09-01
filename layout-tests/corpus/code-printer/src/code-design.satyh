@@ -26,14 +26,13 @@ end = struct
       Some(Color.gray 0.8)
 
 
-
   let number-fun-null _ _ = inline-nil
 
   let number ctx i =
     let ctx = set-text-color Color.black ctx in
     i
-    |> arabic
-    |> embed-string
-    |> read-inline ctx
+      |> arabic
+      |> embed-string
+      |> read-inline ctx
 
 end

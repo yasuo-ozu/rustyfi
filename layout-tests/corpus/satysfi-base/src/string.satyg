@@ -65,7 +65,6 @@ end = struct
   let append s1 s2 = s1 ^ s2
 
 
-
   let concat ?:s xs =
     let s =
       match s with
@@ -96,8 +95,8 @@ end = struct
 
   let to-list s =
     s
-    |> string-explode
-    |> List.map Char.of-codepoint
+      |> string-explode
+      |> List.map Char.of-codepoint
 
   let of-list chars =
     chars |> List.map Char.to-string |> (fun slst -> concat slst)
@@ -115,8 +114,8 @@ end = struct
         (s, None)
       else if Char.equal (Char.at len s) d then
         (sub 0 len s, Some(sub (len + 1) (maxlen - len - 1) s))
-      else
-        aux maxlen (len + 1)
+        else
+          aux maxlen (len + 1)
     in aux (length s) 0
 
   let-rec split-by d s =
@@ -146,10 +145,8 @@ end = struct
 
   let get n str =
     str
-    |> to-list
-    |> List.nth n
-
-
+      |> to-list
+      |> List.nth n
 
 
   % Quick-Search
@@ -248,59 +245,58 @@ end = struct
 
   let uppercase-ascii str =
     str
-    |> to-list
-    |> List.map (fun c -> (
-      let n = Char.to-codepoint c in
-      if 0x61 <= n && n <= 0x7A then
-        Char.of-codepoint (n - 0x20)
-      else
-        c
-    ))
-    |> of-list
+      |> to-list
+      |> List.map (fun c -> (
+        let n = Char.to-codepoint c in
+        if 0x61 <= n && n <= 0x7A then
+          Char.of-codepoint (n - 0x20)
+        else
+          c
+      ))
+      |> of-list
 
   let lowercase-ascii str =
     str
-    |> to-list
-    |> List.map (fun c -> (
-      let n = Char.to-codepoint c in
-      if 0x41 <= n && n <= 0x5A then
-        Char.of-codepoint (n + 0x20)
-      else
-        c
-    ))
-    |> of-list
+      |> to-list
+      |> List.map (fun c -> (
+        let n = Char.to-codepoint c in
+        if 0x41 <= n && n <= 0x5A then
+          Char.of-codepoint (n + 0x20)
+        else
+          c
+      ))
+      |> of-list
 
   let capitalize-ascii str =
     str
-    |> to-list
-    |> List.mapi (fun i c -> (
-      let n = Char.to-codepoint c in
-      if i == 0 && 0x61 <= n && n <= 0x7A then
-        Char.of-codepoint (n - 0x20)
-      else
-        c
-    ))
-    |> of-list
+      |> to-list
+      |> List.mapi (fun i c -> (
+        let n = Char.to-codepoint c in
+        if i == 0 && 0x61 <= n && n <= 0x7A then
+          Char.of-codepoint (n - 0x20)
+        else
+          c
+      ))
+      |> of-list
 
   let uncapitalize-ascii str =
     str
-    |> to-list
-    |> List.mapi (fun i c -> (
-      let n = Char.to-codepoint c in
-      if i == 0 && 0x41 <= n && n <= 0x5A then
-        Char.of-codepoint (n + 0x20)
-      else
-        c
-    ))
-    |> of-list
-
+      |> to-list
+      |> List.mapi (fun i c -> (
+        let n = Char.to-codepoint c in
+        if i == 0 && 0x41 <= n && n <= 0x5A then
+          Char.of-codepoint (n + 0x20)
+        else
+          c
+      ))
+      |> of-list
 
 
   let index c s =
     let cs = to-list s in
     let-rec aux cs acc = match cs with
-    | [] -> None
-    | (x::xs) -> if Eq.equal Char.eq c x then Some(acc) else aux xs (acc + 1) in
+      | [] -> None
+      | (x::xs) -> if Eq.equal Char.eq c x then Some(acc) else aux xs (acc + 1) in
     aux cs 0
 
   let of-length l =
@@ -317,19 +313,19 @@ end = struct
       let lstl = string-explode sl in
       let lstr = string-explode sr in
       let-rec sub lstl lstr =
-          match (lstl, lstr) with
-          | ([],[]) -> Eq
-          | (_, []) -> Gt
-          | ([],_) -> Lt
-          | (nl::xl,nr::xr) -> (
-              if nl < nr then
-                  Lt
-              else
-                  if nl > nr then
-                      Gt
-                  else
-                      sub xl xr
-          )
+        match (lstl, lstr) with
+        | ([],[]) -> Eq
+        | (_, []) -> Gt
+        | ([],_) -> Lt
+        | (nl::xl,nr::xr) -> (
+          if nl < nr then
+            Lt
+          else
+            if nl > nr then
+              Gt
+            else
+              sub xl xr
+        )
       in
       sub lstl lstr
     ))
@@ -340,7 +336,6 @@ end = struct
   let (>=) = Ord.ge ord
   let (<=) = Ord.le ord
   let (==) = Ord.eq ord
-
 
 
   % let byte-length = string-byte-length

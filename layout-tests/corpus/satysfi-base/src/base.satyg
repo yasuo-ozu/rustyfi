@@ -47,5 +47,5 @@ type 'a thunk = unit -> 'a
 let run-thunk t = t ()
 
 type 'ok 'err result =
-| Ok of 'ok
-| Err of 'err
+  | Ok of 'ok
+  | Err of 'err

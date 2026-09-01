@@ -35,6 +35,6 @@ end = struct
       |> bezier-to (minus (x-len *' n), minus y-len) (minus x-len,  minus (y-len *' n)) (minus x-len, zero)
       |> close-with-bezier (minus x-len, y-len *' n) (minus (x-len *' n), y-len)
     in
-      shift center main
+    shift center main
 
 end

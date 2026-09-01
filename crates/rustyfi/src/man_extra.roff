@@ -190,6 +190,25 @@ reading for it;
 .B 1
 if the document fails to load, typecheck, evaluate or render; and a non-zero
 code if a package operation fails.
+.PP
+.B rustyfi fmt
+extends the scheme with one code of its own:
+.B 0
+clean;
+.B 1
+if
+.B \-\-check
+found files that need reformatting;
+.B 2
+usage;
+.B 5
+filesystem; and
+.B 6
+if at least one file was \fIdeclined\fR \(em it does not lex, so there is no
+token stream to re-emit. The last two are
+separate so that a CI job can tell \(lqsomebody forgot to run the
+formatter\(rq, a one-command fix, from \(lqsomebody committed a file that does
+not parse\(rq. When several apply the precedence is 5, 6, 1, 0.
 .SH EXAMPLES
 Compile a document with the packages and fonts from an unpacked release:
 .PP
@@ -221,6 +240,24 @@ $ rustyfi doc.saty \-\-format latex \-o doc.tex
 $ lualatex doc.tex
 .EE
 .RE
+Check that a project is formatted, the way a CI job does, then reformat it:
+.PP
+.RS 4
+.EX
+$ rustyfi fmt \-\-check                 # a unified diff on stdout, exit 1 if dirty
+$ rustyfi fmt                         # rewrite the project in place
+$ rustyfi fmt \-\-emit stdout doc.saty  # one file, to stdout, touching nothing
+$ rustyfi fmt \- < doc.saty            # a filter over stdin
+.EE
+.RE
+.PP
+There is no configuration flag: formatting runs on the built-in defaults
+(max_width 100, tab_spaces 2, max_blank_lines 2). A configuration file is not
+yet specified; when it is, the flag naming one will be
+.BR \-\-config\-path ,
+distinct from the global
+.B \-\-config
+that names the Satyrographos registry configuration.
 .SH SEE ALSO
 The project README and manual, and upstream SATySFi:
 .UR https://github.com/gfngfn/SATySFi

@@ -78,8 +78,8 @@ end = struct
           let new-x = x + (10 * k) in
           let new-y = y - k in
           sub1 (new-x::stack) (new-y::zs)
-        else
-          sub1 (x::stack) (y::zs)
+          else
+            sub1 (x::stack) (y::zs)
       )
     in
     % 一番上の桁が10以上のときに桁数を増やす
@@ -94,8 +94,8 @@ end = struct
           sub2 (k::new-x::xs)
         else if Int.(x < 0) then
           (false, lst)
-        else
-          (true, lst)
+          else
+            (true, lst)
       )
     in
     % 一番上の桁の0を消しつつリストを反転させる
@@ -110,36 +110,35 @@ end = struct
       )
     in
     match lst |> sub1 [] |> sub2 with
-      | (_, [0]) -> (true, [0])
-      | (true, new-lst) -> (is-positive, sub3 [] true new-lst)
-      | (false, new-lst) -> (
-        let new-lst =
-          new-lst
+    | (_, [0]) -> (true, [0])
+    | (true, new-lst) -> (is-positive, sub3 [] true new-lst)
+    | (false, new-lst) -> (
+      let new-lst =
+        new-lst
           |> List.reverse
           |> List.map Int.neg
           |> sub1 []
-        in
-        (not is-positive, sub3 [] true new-lst)
-      )
-
+      in
+      (not is-positive, sub3 [] true new-lst)
+    )
 
 
   let ord =
     Ord.make (fun tl tr -> (
       let-rec sub lstl lstr =
-          match (lstl, lstr) with
-          | ([],[]) -> Eq
-          | (_, []) -> panic `BigInt.ord: invalid data`
-          | ([],_) -> panic `BigInt.ord: invalid data`
-          | (nl::xl,nr::xr) -> (
-              if Int.(nl < nr) then
-                  Lt
-              else
-                  if Int.(nl > nr) then
-                      Gt
-                  else
-                      sub xl xr
-          )
+        match (lstl, lstr) with
+        | ([],[]) -> Eq
+        | (_, []) -> panic `BigInt.ord: invalid data`
+        | ([],_) -> panic `BigInt.ord: invalid data`
+        | (nl::xl,nr::xr) -> (
+          if Int.(nl < nr) then
+            Lt
+          else
+            if Int.(nl > nr) then
+              Gt
+            else
+              sub xl xr
+        )
       in
       match (carry-and-fix tl, carry-and-fix tr) with
       | ((_,[0]), (_,[0])) -> Eq
@@ -150,18 +149,18 @@ end = struct
           Lt
         else if Int.(List.length lstl > List.length lstr) then
           Gt
-        else
-          sub (List.reverse lstl) (List.reverse lstr)
+          else
+            sub (List.reverse lstl) (List.reverse lstr)
       | ((false,lstl), (false,lstr)) -> (
         if Int.(List.length lstl < List.length lstr) then
           Gt
         else if Int.(List.length lstl > List.length lstr) then
           Lt
-        else
-          match sub (List.reverse lstl) (List.reverse lstr) with
-          | Lt -> Gt
-          | Gt -> Lt
-          | Eq -> Eq
+          else
+            match sub (List.reverse lstl) (List.reverse lstr) with
+            | Lt -> Gt
+            | Gt -> Lt
+            | Eq -> Eq
       )
     ))
 
@@ -233,7 +232,7 @@ end = struct
   let-rec all-sum i lst-lst =
     let i-opt-lst =
       lst-lst
-      |> List.map (List.nth i)
+        |> List.map (List.nth i)
     in
     let sum =
       let f sum i-opt =
@@ -259,16 +258,15 @@ end = struct
   let mul-sub l1 l2 =
     l1
     % まず全桁同士かけ合わせる
-    |> List.map (fun i -> List.map (fun j -> i * j) l2)
+      |> List.map (fun i -> List.map (fun j -> i * j) l2)
     % 桁数の数だけ後ろに0をつけて桁を正しくする
-    |> List.mapi add-zero
+      |> List.mapi add-zero
     % 全て足す
-    |> all-sum 0
+      |> all-sum 0
 
   % 多くのSATySFiプログラムでは数百桁の多倍長整数は扱わないと予想するため、karatsuba法は採用していない
   let mul (is-positive-1, lst1) (is-positive-2, lst2) =
     carry-and-fix (Bool.equal is-positive-1 is-positive-2, mul-sub lst1 lst2)
-
 
 
   % lst2に0から9までをかけてlst1比較することで商と余りを出す
@@ -283,9 +281,9 @@ end = struct
     else if (true, lst1) == new-num then
       % ちょうど割り切れた場合
       (i + 1, [0])
-    else
+      else
       % まだ割られる数が大きいのでiを一つ大きくする
-      div-sub-sub2 (i + 1) new-num lst1 lst2
+        div-sub-sub2 (i + 1) new-num lst1 lst2
 
   % 一つ前の割り算の余りに一つ下に数字を足して割り算を行う
   let-rec div-sub-sub stack before-lst1 after-lst1 lst2 =
@@ -337,8 +335,8 @@ end = struct
         acc
       else if (mod- p two) == one then
         aux (div p two) (mul pp pp) (mul acc pp)
-      else
-        aux (div p two) (mul pp pp) acc
+        else
+          aux (div p two) (mul pp pp) acc
     in aux p base one
 
 
@@ -364,8 +362,8 @@ end = struct
         % 0x0039 == `9`
         % 数字の文字コードから0x0030を引くことで、数を表す文字を整数値に直している
       | x::xs when Int.(0x0030 <= x) && Int.(x <= 0x0039) -> (
-        let i = x - 0x0030 in
-        sub xs (i::lst)
+      let i = x - 0x0030 in
+      sub xs (i::lst)
       )
       | _ -> None
     in

@@ -8,19 +8,19 @@
 let bodoni-star-font-set : fss-font-set =
   let latin-font-pairs name =
     [(| script = FssFontScript.latn ;
+      font = (|
+        font-name = name ;
+        ratio = 1.0 ;
+        rising = 0.0 ;
+      |) ;
+    |);
+      (| script = FssFontScript.other ;
         font = (|
           font-name = name ;
           ratio = 1.0 ;
           rising = 0.0 ;
         |) ;
-    |);
-    (| script = FssFontScript.other ;
-        font = (|
-          font-name = name ;
-          ratio = 1.0 ;
-          rising = 0.0 ;
-        |) ;
-    |);
+      |);
     ]
   in
 
@@ -30,19 +30,19 @@ let bodoni-star-font-set : fss-font-set =
     in
     let pairs =
       [(| script = FssFontScript.latn ;
+        font = (|
+          font-name = name ;
+          ratio = 1.0 ;
+          rising = 0.0 ;
+        |) ;
+      |);
+        (| script = FssFontScript.other ;
           font = (|
             font-name = name ;
             ratio = 1.0 ;
             rising = 0.0 ;
           |) ;
-      |);
-      (| script = FssFontScript.other ;
-          font = (|
-            font-name = name ;
-            ratio = 1.0 ;
-            rising = 0.0 ;
-          |) ;
-      |);
+        |);
       ]
     in
     (cond, pairs)
@@ -143,7 +143,7 @@ let bodoni-star-font-set : fss-font-set =
   in
   (| default-font = latin-font-pairs `fonts-bodoni-star:Bodoni-06-Bold`;
     conditional-fonts =
-      [ 
+      [
         bodoni-star `06` 6pt;
         bodoni-star `11` 11pt;
         bodoni-star `16` 16pt;
@@ -152,9 +152,9 @@ let bodoni-star-font-set : fss-font-set =
         bodoni-star `48` 48pt;
         bodoni-star `72` 72pt;
       ]
-      |> List.concat;
+        |> List.concat;
     covered-area = Set.of-list [
-        FssFontScript.latn ;
-        FssFontScript.other ;
-      ];
+      FssFontScript.latn ;
+      FssFontScript.other ;
+    ];
   |)

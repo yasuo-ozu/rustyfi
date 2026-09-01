@@ -85,12 +85,12 @@ end = struct
   let default-config =
     let default-font-conf fsize ctx =
       ctx |> set-font Latin          (`lmsans`, 1.0, 0.0)
-          |> set-font Kana           (`ipaexg`, 1.0, 0.0)
-          |> set-font HanIdeographic (`ipaexg`, 1.0, 0.0)
-          |> set-font-size fsize
-          |> set-paragraph-margin (fsize *' 0.65) (fsize *' 0.65)
-          |> set-leading (fsize *' 1.4)
-          |> set-code-text-command (command \code)
+        |> set-font Kana           (`ipaexg`, 1.0, 0.0)
+        |> set-font HanIdeographic (`ipaexg`, 1.0, 0.0)
+        |> set-font-size fsize
+        |> set-paragraph-margin (fsize *' 0.65) (fsize *' 0.65)
+        |> set-leading (fsize *' 1.4)
+        |> set-code-text-command (command \code)
     in
     (|
       font-normal = SlydifiScheme.apply-font-cfg [default-font-conf 20pt;];
@@ -126,7 +126,7 @@ end = struct
     let f ctx () =
       (block-nil, [
         Gr.rectangle (0pt, 0pt) (layout#paper-width, layout#paper-height)
-          |> fill config#color-bg
+        |> fill config#color-bg
       ])
     in
     Frame.make layout f
@@ -166,7 +166,7 @@ end = struct
         let pos = (xrel 0.5, yrel 0.45 +' title-mgn) in
         SlydifiGraphics.put-texts
           (| align = (0.5, 0.0); text-align = 0.5; leading = (get-font-size ctx *' 1.6) |)
-            pos iblst
+          pos iblst
       in
 
       % 著者名のグラフィックス
@@ -176,7 +176,7 @@ end = struct
         let pos = (xrel 0.5, yrel 0.45 -' title-mgn) in
         SlydifiGraphics.put-texts
           (| align = (0.5, 1.0); text-align = 0.5; leading = (get-font-size ctx *' 1.6) |)
-            pos iblst
+          pos iblst
       in
 
       % 日付のグラフィックス
@@ -186,7 +186,7 @@ end = struct
         let pos = (xrel 0.5, yrel 0.2 -' title-mgn) in
         SlydifiGraphics.put-texts
           (| align = (0.5, 1.0); text-align = 0.5; leading = (get-font-size ctx *' 1.6) |)
-            pos iblst
+          pos iblst
       in
 
       (block-nil, [gr-frame-master; gr-title; gr-author; gr-date] |> List.concat)
@@ -205,7 +205,7 @@ end = struct
         let pos = (xrel 0.5, yrel 0.5) in
         SlydifiGraphics.put-texts
           (| align = (0.5, 0.5); text-align = 0.5; leading = (get-font-size ctx *' 1.6) |)
-            pos iblst
+          pos iblst
       in
 
       (block-nil, [gr-frame-master; gr-title] |> List.concat)
@@ -278,19 +278,19 @@ end = struct
     let bbf num =
       let it-num = embed-string (arabic num) in
       let ctx = config#font-footnote ctx in
-        line-break false false ctx (read-inline ctx {#it-num; #it;} ++ inline-fil)
+      line-break false false ctx (read-inline ctx {#it-num; #it;} ++ inline-fil)
     in
-      FootnoteScheme.main ctx (Some(ref-label)) (fun _ -> inline-nil) bbf
+    FootnoteScheme.main ctx (Some(ref-label)) (fun _ -> inline-nil) bbf
 
   let-inline ctx \footnotemark ref-label =
     let size = get-font-size ctx in
     let ctx =
       ctx |> set-font-size (size *' 0.75)
-          |> set-manual-rising (size *' 0.25)
+        |> set-manual-rising (size *' 0.25)
     in
     let ctx =
       ctx |> set-font-size (size *' 0.75)
-          |> set-manual-rising (size *' 0.25)
+        |> set-manual-rising (size *' 0.25)
     in
     match FootnoteScheme.get-footnote-num ref-label with
     | Some(n) ->
@@ -306,16 +306,16 @@ end = struct
       let it-num = embed-string (arabic num) in
       let ctx =
         ctx |> set-font-size (size *' 0.75)
-            |> set-manual-rising (size *' 0.25)
+          |> set-manual-rising (size *' 0.25)
       in
-        read-inline ctx {\*#it-num;}
+      read-inline ctx {\*#it-num;}
     in
     let bbf num =
       let it-num = embed-string (arabic num) in
       let ctx = config#font-footnote ctx in
-        line-break false false ctx (read-inline ctx {#it-num; #it;} ++ inline-fil)
+      line-break false false ctx (read-inline ctx {#it-num; #it;} ++ inline-fil)
     in
-      FootnoteScheme.main ctx None ibf bbf
+    FootnoteScheme.main ctx None ibf bbf
 
 end
 

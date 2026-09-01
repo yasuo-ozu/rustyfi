@@ -76,12 +76,12 @@ end = struct
   % standard な context を設定
   let get-standard-context wid =
     get-initial-context wid (command \math)
-      |> set-dominant-wide-script Kana
-      |> set-language Kana Japanese
-      |> set-language HanIdeographic Japanese
-      |> set-dominant-narrow-script Latin
-      |> set-language Latin English
-      |> set-hyphen-penalty 100
+    |> set-dominant-wide-script Kana
+    |> set-language Kana Japanese
+    |> set-language HanIdeographic Japanese
+    |> set-dominant-narrow-script Latin
+    |> set-language Latin English
+    |> set-hyphen-penalty 100
 
   let apply-font-cfg cfgs ctx =
     cfgs |> List.fold-left (fun ctx ctxf -> ctxf ctx) ctx
@@ -98,10 +98,10 @@ end = struct
     in
     let pagepartsf pbinfo =
       (|
-      header-origin  = (0pt, 0pt);
-      header-content = block-nil;
-      footer-origin  = (0pt, 0pt);
-      footer-content = block-nil;
+        header-origin  = (0pt, 0pt);
+        header-content = block-nil;
+        footer-origin  = (0pt, 0pt);
+        footer-content = block-nil;
       |)
     in
 
@@ -111,7 +111,7 @@ end = struct
     in
 
     let hook = line-break false false (get-standard-context 0pt)
-        (hook-page-break hookf)
+      (hook-page-break hookf)
     in
 
     page-break page pagecontf pagepartsf (bb-main +++ hook)
@@ -125,7 +125,7 @@ end = struct
   let-block ctx +namedframe frame name content =
     let new-map =
       namedframe |> SlydifiParam.get
-                 |> Map.bind name (1, '<+specific-frame(frame)(content);>)
+        |> Map.bind name (1, '<+specific-frame(frame)(content);>)
     in
     let () = namedframe |> SlydifiParam.set new-map in
     read-block ctx '<
@@ -139,16 +139,16 @@ end = struct
     let value = map |> Map.of- eq-string name in
     match value with
     | None ->
-        let () = display-message (
-          ``[Warning] Frame with name ` `` ^ name
-            ^ `` ` was not found. No page was inserted here. ``)
-        in
-        block-nil
+      let () = display-message (
+        ``[Warning] Frame with name ` `` ^ name
+          ^ `` ` was not found. No page was inserted here. ``)
+      in
+      block-nil
     | Some((lyr-prev, it)) ->
-        let lyr = lyr |> Option.from (lyr-prev + 1) in
-        let map = map |> Map.bind name (lyr, it) in
-        let () = namedframe |> SlydifiParam.set map in
-        read-block ctx '<
+      let lyr = lyr |> Option.from (lyr-prev + 1) in
+      let map = map |> Map.bind name (lyr, it) in
+      let () = namedframe |> SlydifiParam.set map in
+      read-block ctx '<
           +SlydifiOverlay.with-layer(lyr)<
             #it;
           >
@@ -165,7 +165,7 @@ end = struct
     let dcf = Option.from (fun _ -> true) dcf in
     SlydifiOverlay.select-from-two dcf
       (read-inline (ctx |> set-text-color clr) it)
-        (read-inline ctx it)
+      (read-inline ctx it)
 
   let-inline ctx \uline ?:dcf it =
     let dcf = Option.from (fun _ -> true) dcf in
@@ -177,7 +177,7 @@ end = struct
             (Gr.line (x, y -' d) (x +' w, y  -' d))
         ]
       )(
-        []
+          []
       )
     in
     inline-frame-breakable (0pt, 0pt, 0pt, 0pt) (pad, pad, pad, pad) ib
@@ -193,7 +193,7 @@ end = struct
             (Gr.line (x, y +' h-base) (x +' w, y +' h-base))
         ]
       )(
-        []
+          []
       )
     in
     inline-frame-breakable (0pt, 0pt, 0pt, 0pt) (pad, pad, pad, pad) ib
@@ -227,11 +227,11 @@ let-inline ctx \SLyDIFi =
   let f = read-inline ctx in
   let fd = ctx |> set-manual-rising (0pt -' (size *' 0.25)) |> read-inline in
   let fI = ctx |> set-font-size (size *' 0.72)
-               |> set-manual-rising (size *' 0.2)
-               |> read-inline
+    |> set-manual-rising (size *' 0.2)
+    |> read-inline
   in
-  let ib = 
+  let ib =
     f {SL} ++ kern(size *' 0.05) ++ fd{Y} ++ kern(size *' 0.03) ++ f{DIF}
-      ++ kern(size *' 0.05) ++ fd{I}
+    ++ kern(size *' 0.05) ++ fd{I}
   in
   script-guard Latin (no-break ib)

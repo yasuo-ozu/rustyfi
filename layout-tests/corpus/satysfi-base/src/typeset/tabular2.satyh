@@ -11,20 +11,20 @@ module Tabular2 : sig
   val r : inline-text -> cell
 end = struct
 
-type cell-align-spec = C | L | R
+  type cell-align-spec = C | L | R
 
-let c it = (C, it)
-let l it = (L, it)
-let r it = (R, it)
+  let c it = (C, it)
+  let l it = (L, it)
+  let r it = (R, it)
 
-type cell = cell-align-spec * inline-text
+  type cell = cell-align-spec * inline-text
 
-let-inline ctx \tabular2 dat =
-  let f t = dat |> List.map (List.map (fun x -> (match x with
-    | (C, it) -> t#c it
-    | (L, it) -> t#l it
-    | (R, it) -> t#r it))) in
-  ctx |> Inline.read {\tabular(f)(fun xs ys -> (
+  let-inline ctx \tabular2 dat =
+    let f t = dat |> List.map (List.map (fun x -> (match x with
+      | (C, it) -> t#c it
+      | (L, it) -> t#l it
+      | (R, it) -> t#r it))) in
+    ctx |> Inline.read {\tabular(f)(fun xs ys -> (
   let thin = Graphics.stroke 0.5pt Color.black in
   let (y0 :: ys, ylast :: _) = (ys, List.reverse ys) in
   let (_ :: ys) = List.reverse ys in

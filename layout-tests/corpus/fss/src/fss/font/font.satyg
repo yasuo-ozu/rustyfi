@@ -1,5 +1,5 @@
 type fss-font =
   (| font-name : string ;
-     ratio : float ;
-     rising : float ;
+    ratio : float ;
+    rising : float ;
   |)

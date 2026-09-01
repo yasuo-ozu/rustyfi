@@ -108,6 +108,7 @@ mod area;
 mod budget;
 mod features;
 mod format;
+mod format_cst;
 mod line_index;
 mod model;
 mod symbols;
@@ -129,6 +130,32 @@ pub use features::{
     Definition, Hover,
 };
 pub use format::{format, format_auto, FormatOptions};
+/// The CST-based formatter, under construction — see
+/// `docs/plans/formatter-cst/`. Slice 1 re-indents program text from CST depth
+/// under both grammars, keeping every line break the author wrote. It does NOT
+/// yet replace [`format`], which is what the **server** still calls (the
+/// playground has moved to this module, across `rustyfi_format`) — and which
+/// is now also its own **tier 2**: a buffer that lexes but
+/// does not parse gets `format`'s whitespace-only output, reported as
+/// [`CstOutcome::FellBack`] so that a caller can tell it from a real format.
+/// [`format_cst`] flattens that distinction back into an `Option` for callers
+/// that do not need it; anything with a `--check` mode does need it.
+pub use format_cst::{
+    cst_walk_desync, format_cst, format_cst_outcome, CstOptions, CstOutcome, DeclineReason,
+};
+
+/// Is `c` CJK **by the classifier `CstOptions::wrap_inline_text` uses**?
+///
+/// Exported for one caller: `crates/rustyfi/tests/ws_inline_rewrap.rs`, which
+/// asserts it agrees with `rustyfi-backend`'s `char_script` over the whole BMP
+/// plus the astral ranges. The table is a TRANSCRIPTION — this crate's
+/// analysis half promises nothing outside `rustyfi-syntax` (see the module
+/// header) and the browser playground links it into wasm, so it cannot call
+/// the backend — and a transcription that nothing compares against is a table
+/// that drifts. Not part of the formatter's API in any other sense.
+pub fn formatter_char_is_cjk(c: char) -> bool {
+    format_cst::inline::is_cjk(c)
+}
 pub use line_index::{LineIndex, Position};
 pub use model::{build_model, ByteRange, Def, HeaderKind, HeaderRef, Hit, Model, Ns, Opaque, Ref};
 pub use symbols::{

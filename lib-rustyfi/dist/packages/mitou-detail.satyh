@@ -32,10 +32,10 @@ end = struct
 
   let generate-fresh-label =
     let-mutable count <- 0 in
-      (fun () -> (
-        let () = count <- !count + 1 in
-          `generated:` ^ (arabic (!count))
-      ))
+    (fun () -> (
+      let () = count <- !count + 1 in
+      `generated:` ^ (arabic (!count))
+    ))
 
 
   let-inline ctx \ref key =
@@ -45,7 +45,7 @@ end = struct
       | None    -> {?}
       | Some(s) -> embed-string s
     in
-      read-inline ctx it
+    read-inline ctx it
 
 
   let-inline ctx \ref-page key =
@@ -55,7 +55,7 @@ end = struct
       | None    -> {?}
       | Some(s) -> embed-string s
     in
-      read-inline ctx it
+    read-inline ctx it
 
 
   let font-ratio-latin = 1.
@@ -88,23 +88,23 @@ end = struct
 
   let set-cjk-font font ctx =
     ctx |> set-font HanIdeographic font
-        |> set-font Kana           font
+      |> set-font Kana           font
 
 
   let get-standard-context wid =
     get-initial-context wid (command \math)
-      |> set-font-size (cjk-arranged-size 12pt)
-      |> set-leading 20pt
-      |> set-dominant-wide-script Kana
-      |> set-language Kana Japanese
-      |> set-language HanIdeographic Japanese
-      |> set-dominant-narrow-script Latin
-      |> set-language Latin English
-      |> set-font Kana           font-cjk-normal
-      |> set-font HanIdeographic font-cjk-normal
-      |> set-font Latin          font-latin-sans
-      |> set-math-font `lmodern`
-      |> set-hyphen-penalty 100
+    |> set-font-size (cjk-arranged-size 12pt)
+    |> set-leading 20pt
+    |> set-dominant-wide-script Kana
+    |> set-language Kana Japanese
+    |> set-language HanIdeographic Japanese
+    |> set-dominant-narrow-script Latin
+    |> set-language Latin English
+    |> set-font Kana           font-cjk-normal
+    |> set-font HanIdeographic font-cjk-normal
+    |> set-font Latin          font-latin-sans
+    |> set-math-font `lmodern`
+    |> set-hyphen-penalty 100
 
 
   let-mutable ref-float-boxes <- []
@@ -114,18 +114,18 @@ end = struct
 %    let () = display-message `get height` in
     let hopt =
       (!ref-float-boxes) |> List.fold-left (fun hopt (pn, bb) -> (
-        if pn < pageno then
-          let hadded = get-natural-length bb in
-          match hopt with
-          | Some(h) -> Some(h +' hadded)
-          | None    -> Some(hadded)
-        else
-          hopt
+      if pn < pageno then
+        let hadded = get-natural-length bb in
+        match hopt with
+        | Some(h) -> Some(h +' hadded)
+        | None    -> Some(hadded)
+      else
+        hopt
       )) None
     in
-      match hopt with
-      | Some(h) -> h +' 24pt
-      | None    -> 0pt
+    match hopt with
+    | Some(h) -> h +' 24pt
+    | None    -> 0pt
 
 
   let-mutable ref-figure <- 0
@@ -144,13 +144,13 @@ end = struct
       let d (_, _) _ _ _ = [] in
       block-frame-breakable ctx (2pt, 2pt, 2pt, 2pt) (d, d, d, d) (fun ctx -> (
         read-block ctx inner
-          +++ line-break true true ctx (inline-fil ++ read-inline ctx {図#it-num; #caption;} ++ inline-fil)
+        +++ line-break true true ctx (inline-fil ++ read-inline ctx {図#it-num; #caption;} ++ inline-fil)
       ))
     in
-      hook-page-break (fun pbinfo _ -> (
+    hook-page-break (fun pbinfo _ -> (
 %        let () = display-message (`register` ^ (arabic pbinfo#page-number)) in
-        ref-float-boxes <- (pbinfo#page-number, bb-inner) :: !ref-float-boxes
-      ))
+      ref-float-boxes <- (pbinfo#page-number, bb-inner) :: !ref-float-boxes
+    ))
 
 
   let single-line ctx =
@@ -173,19 +173,19 @@ end = struct
       single-centering-line (ctx-upper |> set-paragraph-margin 4pt 12pt)
         (read-inline ctx-upper {– #subtitle; –})
     in
-      bb1 +++ bb2
+    bb1 +++ bb2
 
 
   let make-section-title ctx =
     ctx |> set-font-size font-size-section
-        |> set-font Latin font-latin-sans
-        |> set-cjk-font font-cjk-bold
+      |> set-font Latin font-latin-sans
+      |> set-cjk-font font-cjk-bold
 
 
   let make-subsection-title ctx =
     ctx |> set-font-size font-size-subsection
-        |> set-font Latin font-latin-sans
-        |> set-cjk-font font-cjk-bold
+      |> set-font Latin font-latin-sans
+      |> set-cjk-font font-cjk-bold
 
 
   let get-cross-reference-number label =
@@ -213,7 +213,7 @@ end = struct
     let ib = read-inline ctx {.} ++ inline-skip 1pt in
     let wdot = get-natural-width ib in
     let n = round (w /' wdot) in
-      inline-fil ++ (repeat-inline n ib)
+    inline-fil ++ (repeat-inline n ib)
 
 
   let-mutable no-page-number-max-ref <- None
@@ -243,8 +243,8 @@ end = struct
     % -- main --
     let bb-main =
       read-block ctx-doc inner
-        +++ line-break false false ctx-doc (hook-page-break (fun pbinfo _ ->
-              (register-cross-reference `number-of-pages` (arabic pbinfo#page-number))) ++ inline-fil)
+      +++ line-break false false ctx-doc (hook-page-break (fun pbinfo _ ->
+        (register-cross-reference `number-of-pages` (arabic pbinfo#page-number))) ++ inline-fil)
     in
 
     % -- page settings --
@@ -261,21 +261,21 @@ end = struct
       let header =
         let ctx =
           get-standard-context hdrwid
-            |> set-paragraph-margin 0pt 0pt
+          |> set-paragraph-margin 0pt 0pt
         in
 %       let () = display-message `insert` in
         let (bb-float-boxes, acc) =
           (!ref-float-boxes) |> List.fold-left (fun (bbacc, acc) elem -> (
-            let (pn, bb) = elem in
-              if pn < pageno then
-                let bbs =
-                  line-break true true (ctx |> set-paragraph-margin 0pt 12pt)
-                    (inline-fil ++ embed-block-top ctx txtwid (fun _ -> bb) ++ inline-fil)
+          let (pn, bb) = elem in
+          if pn < pageno then
+            let bbs =
+              line-break true true (ctx |> set-paragraph-margin 0pt 12pt)
+                (inline-fil ++ embed-block-top ctx txtwid (fun _ -> bb) ++ inline-fil)
                       % 'ctx' is a dummy context
-                in
-                  (bbacc +++ bbs, acc)
-              else
-                (bbacc, elem :: acc)
+            in
+            (bbacc +++ bbs, acc)
+          else
+            (bbacc, elem :: acc)
           )) (block-nil, [])
         in
         let () = ref-float-boxes <- acc in
@@ -289,17 +289,17 @@ end = struct
           | None    -> {?}
           | Some(s) -> embed-string s
         in
-          line-break true true ctx
-            (inline-fil ++ (read-inline ctx {#it-pageno; / #it-numofpages;}) ++ inline-fil)
+        line-break true true ctx
+          (inline-fil ++ (read-inline ctx {#it-pageno; / #it-numofpages;}) ++ inline-fil)
       in
-        (|
-          header-origin  = hdrorg;
-          header-content = header;
-          footer-origin  = ftrorg;
-          footer-content = footer;
-        |)
+      (|
+        header-origin  = hdrorg;
+        header-content = header;
+        footer-origin  = ftrorg;
+        footer-content = footer;
+      |)
     in
-      page-break page pagecontf pagepartsf (bb-title +++ bb-main)
+    page-break page pagecontf pagepartsf (bb-title +++ bb-main)
 
 
   let-mutable num-section <- 0
@@ -312,12 +312,12 @@ end = struct
 
   let-block ctx +p inner =
     let ib-inner = read-inline ctx inner in
-      form-paragraph (ctx |> set-paragraph-margin 4pt 12pt) (quad-indent ctx ++ ib-inner ++ inline-fil)
+    form-paragraph (ctx |> set-paragraph-margin 4pt 12pt) (quad-indent ctx ++ ib-inner ++ inline-fil)
 
 
   let-block ctx +pn inner =
     let ib-inner = read-inline ctx inner in
-      form-paragraph (ctx |> set-paragraph-margin 4pt 12pt) (ib-inner ++ inline-fil)
+    form-paragraph (ctx |> set-paragraph-margin 4pt 12pt) (ib-inner ++ inline-fil)
 
 
   let page-number-string pbinfo =
@@ -332,21 +332,21 @@ end = struct
     let ib-num =
       match labelopt with
       | None ->
-          inline-nil
+        inline-nil
 
       | Some(label) ->
-          let () = num-section <- !num-section + 1 in
-          let s-num = arabic (!num-section) in
-          let () = register-cross-reference (label ^ `:num`) s-num in
-            read-inline ctx-title (embed-string (s-num ^ `.`))
-              ++ hook-page-break (fun pbinfo _ ->
-                register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
-              ++ inline-skip 10pt
+        let () = num-section <- !num-section + 1 in
+        let s-num = arabic (!num-section) in
+        let () = register-cross-reference (label ^ `:num`) s-num in
+        read-inline ctx-title (embed-string (s-num ^ `.`))
+        ++ hook-page-break (fun pbinfo _ ->
+          register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
+        ++ inline-skip 10pt
     in
     let ib-title = read-inline ctx-title title in
     let bb-title = section-heading ctx-title (ib-num ++ ib-title ++ inline-fil) in
     let bb-inner = read-block ctx inner in
-      bb-title +++ bb-inner
+    bb-title +++ bb-inner
 
 
   let subsection-scheme ctx labelopt title inner =
@@ -354,15 +354,15 @@ end = struct
     let ib-num =
       match labelopt with
       | None ->
-          inline-nil
+        inline-nil
 
       | Some(label) ->
-          let () = num-subsection <- !num-subsection + 1 in
-          let s-num = arabic (!num-section) ^ `.` ^ arabic (!num-subsection) in
-          let () = register-cross-reference (label ^ `:num`) s-num in
-            read-inline ctx-title (embed-string (s-num ^ `.`))
-              ++ hook-page-break (fun pbinfo _ -> register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
-              ++ inline-skip 10pt
+        let () = num-subsection <- !num-subsection + 1 in
+        let s-num = arabic (!num-section) ^ `.` ^ arabic (!num-subsection) in
+        let () = register-cross-reference (label ^ `:num`) s-num in
+        read-inline ctx-title (embed-string (s-num ^ `.`))
+        ++ hook-page-break (fun pbinfo _ -> register-cross-reference (label ^ `:page`) (page-number-string pbinfo))
+        ++ inline-skip 10pt
     in
     let ib-title = read-inline ctx-title title in
     let bb-title =
@@ -370,7 +370,7 @@ end = struct
         (ib-num ++ ib-title ++ inline-fil)
     in
     let bb-inner = read-block ctx inner in
-      bb-title +++ bb-inner
+    bb-title +++ bb-inner
 
 
   let-block ctx +section ?:labelopt title inner =
@@ -379,7 +379,7 @@ end = struct
       | None        -> generate-fresh-label ()
       | Some(label) -> label
     in
-      section-scheme ctx (Some(label)) title inner
+    section-scheme ctx (Some(label)) title inner
 
 
   let-block ctx +section-no-number title inner =
@@ -392,7 +392,7 @@ end = struct
       | None        -> generate-fresh-label ()
       | Some(label) -> label
     in
-      subsection-scheme ctx (Some(label)) title inner
+    subsection-scheme ctx (Some(label)) title inner
 
 
   let-block ctx +subsectin-no-number title inner =

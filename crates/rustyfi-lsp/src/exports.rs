@@ -15,14 +15,32 @@
 //!
 //! # Which names count
 //!
-//! Only FILE-LEVEL bindings: a name whose scope reaches the end of its file is
-//! one a consumer can see, and anything narrower is inside a function body or
-//! a local `let ... in` that no other file can name. That test is one
-//! comparison and it is exactly right for `.satyh` libraries, which is what
-//! dependencies are.
+//! Two kinds, and the second is the one that matters most in practice.
 //!
-//! Parameters are excluded by the same rule without a special case, since a
-//! parameter's scope ends with its body.
+//! **File-level bindings**: a name whose scope reaches the end of its file.
+//! Anything narrower is inside a function body or a local `let ... in` that no
+//! other file can name. Parameters fall out by the same rule with no special
+//! case, since a parameter's scope ends with its body.
+//!
+//! **`direct` declarations in a 0.0.6 module signature.** A file-level test
+//! alone was WRONG, and wrong for the commands a user reaches for first: the
+//! bundled document classes wrap everything in `module StdJaBook : sig … end
+//! = struct … end`, so `\emph` and `+subsection` have a scope that ends at
+//! `end`, not at EOF. They were excluded twice over -- once by the scope
+//! test, and again because a `sig` item is recorded with `declaration: true`
+//! and `scope: 0..0` (`walk006.rs`, the `declare` closure: "a declaration
+//! binds nothing, so it is visible nowhere").
+//!
+//! `direct` is exactly the right admission rule rather than a workaround for
+//! one package. In 0.0.6 a `direct` member is the one kind reachable UNQUALIFIED
+//! from a consumer -- that is what the keyword means -- so the set of `direct`
+//! declarations in a dependency's signature IS its unqualified surface, which
+//! is precisely the set completion should offer for a bare `\`/`+` word.
+//! An ordinary `val` in the same signature needs `M.name` and is deliberately
+//! not offered here; see the qualified-word case in `features::completions`,
+//! which does not consult this list at all.
+//!
+//! Reported as "\emph, \subsection is not complemented".
 
 use crate::model::{build_model, Ns};
 
@@ -51,14 +69,35 @@ pub fn from_source(source: &str, lang: Option<crate::RustyfiVersion>, origin: &s
     let end = source.len();
     let mut out: Vec<Export> = Vec::new();
     for d in &model.defs {
-        // A declaration (a `val` in a signature, say) names something without
-        // binding it here; the binding itself is elsewhere in the same file
-        // and is the one worth offering, so taking both would duplicate.
-        if d.declaration {
+        // A `direct` sig item is the module's UNQUALIFIED surface -- see the
+        // module doc. Admitted before the two filters below, because it fails
+        // both: it is a declaration, and its scope is the empty 0..0 a
+        // declaration carries.
+        let direct = d.declaration && d.form == "direct";
+        // Any other declaration names something without binding it here; the
+        // binding is elsewhere in the same file and is the one worth
+        // offering, so taking both would duplicate.
+        if d.declaration && !direct {
+            continue;
+        }
+        // A parameter is never an export, and the scope test alone does not
+        // say so: at the END of a file every open scope reaches EOF, so the
+        // parameters of the last binding pass it. Excluded by form.
+        if d.form == "parameter" {
             continue;
         }
         // File-level, per the module doc: scope reaches the end of the file.
-        if d.scope.end < end {
+        //
+        // KNOWN IMPRECISION, and it is one-directional. A local `let … in`
+        // in the LAST binding of a file has a scope that also reaches EOF,
+        // and nothing here distinguishes it from a top-level one -- the two
+        // are the same shape, and 0.0.6's top level IS a `let … in` chain.
+        // So a trailing local can be offered by another file. That is noise
+        // in a popup, never a wrong answer about a name that exists; the
+        // opposite error, dropping a real export, is the bug this whole
+        // module exists to fix. Pinned as a known case rather than left to
+        // be rediscovered.
+        if !direct && d.scope.end < end {
             continue;
         }
         // A type variable is scoped to one signature and means nothing to a

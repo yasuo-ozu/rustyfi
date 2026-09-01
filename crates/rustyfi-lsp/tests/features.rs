@@ -9,6 +9,9 @@ use rustyfi_lsp::{
     build_model, completions, definition, hover, record_label_slot, type_position_slot,
     Definition, Export, LineIndex, Ns, Position, RustyfiVersion,
 };
+use rustyfi_lsp::{
+    exports_from_source,
+};
 
 /// Ask a question the way a client does: by line and UTF-16 character.
 fn cursor(src: &str, line: u32, character: u32) -> usize {
@@ -842,4 +845,92 @@ fn prose_offers_nothing_however_many_dependencies_there_are() {
     let deps = vec![dep("\\word", Ns::InlineCmd, "let-inline", "p")];
     let got = completions(&m, after(src, "plain wo", 0), &deps);
     assert!(got.is_empty(), "prose offered: {got:?}");
+}
+
+// ---------------------------------------------------------------------------
+// What a dependency FILE offers — the collection side.
+// ---------------------------------------------------------------------------
+
+/// The shape of every bundled 0.0.6 document class: a `sig` naming the
+/// unqualified surface with `direct`, and a `struct` binding it.
+const CLASS: &str = "\
+module StdJaBook : sig
+  direct +subsection : [inline-text] block-cmd
+  direct \\emph : [inline-text] inline-cmd
+  val internal : int
+end = struct
+  let internal = 1
+  let-block ctx +subsection it = '<>
+  let-inline ctx \\emph it = it
+end
+";
+
+#[test]
+fn a_direct_declaration_is_an_export() {
+    // The reported bug: `\emph` and `+subsection` did not complete. Both sit
+    // inside a `module … = struct … end`, so their scope ends at `end` rather
+    // than at EOF, and the `sig` items that name them are declarations with
+    // an empty scope. A file-level test alone excluded them twice over.
+    let got = exports_from_source(CLASS, None, "stdjabook");
+    let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"\\emph"), "missing \\emph: {names:?}");
+    assert!(
+        names.contains(&"+subsection"),
+        "missing +subsection: {names:?}"
+    );
+}
+
+#[test]
+fn a_plain_val_in_a_signature_is_not_an_export() {
+    // `direct` is the admission rule, and it is not "everything in the sig".
+    // A `val` needs `M.name` at the call site, and a bare `\`/`+`/word
+    // completion must not offer a name that would not resolve as typed.
+    let got = exports_from_source(CLASS, None, "stdjabook");
+    let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+    assert!(
+        !names.contains(&"internal"),
+        "a qualified-only `val` leaked into the unqualified surface: {names:?}"
+    );
+}
+
+#[test]
+fn a_direct_export_keeps_the_namespace_its_sigil_implies() {
+    let got = exports_from_source(CLASS, None, "stdjabook");
+    let emph = got.iter().find(|e| e.name == "\\emph").expect("\\emph");
+    let sub = got
+        .iter()
+        .find(|e| e.name == "+subsection")
+        .expect("+subsection");
+    assert_eq!(emph.ns, Ns::InlineCmd);
+    assert_eq!(sub.ns, Ns::BlockCmd);
+    assert_eq!(emph.origin, "stdjabook");
+}
+
+#[test]
+fn a_local_binding_inside_a_function_is_not_an_export() {
+    // The file-level rule still holds for everything that is not `direct`.
+    // The trailing `let last` matters: without a binding after it, `hidden`'s
+    // scope runs to EOF and passes the file-level test. See the known
+    // imprecision documented in `exports.rs` -- this fixture is the ordinary
+    // library shape, where the rule is exact.
+    let src = "let f x =\n  let hidden = 1 in\n  hidden\nlet last = 2\n";
+    let got = exports_from_source(src, None, "dep");
+    let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"f"), "the top-level binding: {names:?}");
+    assert!(names.contains(&"last"), "the last binding: {names:?}");
+    assert!(!names.contains(&"hidden"), "a local leaked: {names:?}");
+    assert!(!names.contains(&"x"), "a parameter leaked: {names:?}");
+}
+
+#[test]
+fn a_parameter_of_the_last_binding_is_still_not_an_export() {
+    // The case the form-based filter exists for: nothing follows `f`, so
+    // `x`'s scope reaches EOF and the file-level test admits it. Only the
+    // `form == "parameter"` check keeps it out. Delete that check and this
+    // fails while the test above still passes.
+    let src = "let f x = x\n";
+    let got = exports_from_source(src, None, "dep");
+    let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"f"), "{names:?}");
+    assert!(!names.contains(&"x"), "a parameter at EOF leaked: {names:?}");
 }

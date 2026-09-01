@@ -220,7 +220,11 @@ pub struct Completion {
 ///   members, and offers nothing at all when `M` came from a `use` header —
 ///   its members live in a file this buffer cannot see.
 /// - **a type position offers types.** See `in_type_position`.
-pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
+pub fn completions(
+    model: &Model<'_>,
+    byte: usize,
+    deps: &[crate::Export],
+) -> Vec<Completion> {
     let source = model.source();
     let byte = crate::line_index::floor_boundary(source, byte);
     // A header being typed, before anything below can look at a token stream:
@@ -336,7 +340,33 @@ pub fn completions(model: &Model<'_>, byte: usize) -> Vec<Completion> {
                 range,
             });
         }
+
+        // What the buffer's DEPENDENCIES bind. Only for an unqualified word:
+        // a `M.` prefix is asking about one module's members, and this list
+        // is flat -- it records what a file binds, not the path a consumer
+        // would have to write to reach it.
+        //
+        // After the local candidates and never replacing one: a name bound in
+        // this file SHADOWS the imported name of the same spelling, so the
+        // local entry has to be the one that survives the `dedup_by` below.
+        if word.quals.is_empty() {
+            for e in deps.iter().filter(|e| e.ns == *ns) {
+                if !e.name.starts_with(needle) {
+                    continue;
+                }
+                out.push(Completion {
+                    label: e.name.clone(),
+                    detail: format!("{} — {}", e.form, e.origin),
+                    kind: completion_kind(e.ns),
+                    range,
+                });
+            }
+        }
     }
+    // `sort_by` is stable, so equal labels keep insertion order: local first,
+    // dependency second. `dedup_by` then drops the dependency copy and the
+    // shadowing rule above holds. Swap in an unstable sort here and a local
+    // binding can silently lose its detail line to an imported namesake.
     out.sort_by(|a, b| a.label.cmp(&b.label));
     out.dedup_by(|a, b| a.label == b.label);
     out

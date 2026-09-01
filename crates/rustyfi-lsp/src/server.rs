@@ -327,12 +327,38 @@ impl State {
         }
     }
 
+    /// The cached dependency exports for the buffer a request names.
+    #[cfg(feature = "typecheck")]
+    fn dep_exports(&self, params: &Value) -> Vec<crate::Export> {
+        // Only when the whole-program tier is on: without it nothing ever
+        // resolved a graph, and the cache is empty by construction.
+        if self.opts.project.is_none() {
+            return Vec::new();
+        }
+        params
+            .get("textDocument")
+            .and_then(|d| str_field(d, "uri"))
+            .and_then(crate::project::path_from_uri)
+            .map(|p| crate::project::exports_for(&p))
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(feature = "typecheck"))]
+    fn dep_exports(&self, _params: &Value) -> Vec<crate::Export> {
+        Vec::new()
+    }
+
     fn completion(&self, params: &Value) -> Value {
         let Some((text, byte)) = self.locate(params) else {
             return Value::Null;
         };
         let model = crate::build_model(text, self.opts.lang);
-        let items: Vec<Value> = crate::completions(&model, byte)
+        // What this buffer's `@require:`/`@import:` graph binds, from the last
+        // analysis of it. Without this the list is file-local, which in a real
+        // document means empty: every command comes from a package, so `\La`
+        // offered nothing while a `\code` defined in the file offered itself.
+        let deps = self.dep_exports(params);
+        let items: Vec<Value> = crate::completions(&model, byte, &deps)
             .into_iter()
             .map(|c| {
                 json!({

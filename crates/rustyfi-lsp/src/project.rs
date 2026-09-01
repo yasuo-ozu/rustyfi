@@ -54,7 +54,10 @@
 //! `(line, col, byte)` triple against the buffer and, when it does not hold
 //! up, the diagnostic is reported at the top of the file and says so.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use rustyfi_loader::{FileOrigin, LoadMode, LoadOptions, LoadedCst, LoadedFile, SourceProvider};
 use rustyfi_syntax::span::{Loc, Span};
@@ -143,6 +146,14 @@ pub struct Analysis {
     /// dependencies really were loaded rather than the check passing
     /// vacuously.
     pub files: usize,
+    /// What this buffer's dependencies bind, for completion.
+    ///
+    /// Collected HERE rather than on demand because this is the one place
+    /// that already resolved the graph: the loader has just read and parsed
+    /// every dependency, and asking again at completion time would pay that
+    /// cost on a keystroke. Empty whenever the analysis did not get far
+    /// enough to have a graph, which is the same condition as `files == 0`.
+    pub exports: Vec<crate::Export>,
 }
 
 impl Analysis {
@@ -153,6 +164,7 @@ impl Analysis {
             depth: Depth::Parse,
             note: None,
             files: 0,
+            exports: Vec::new(),
         }
     }
 
@@ -163,8 +175,102 @@ impl Analysis {
             depth: Depth::Parse,
             note: Some(note.into()),
             files: 0,
+            exports: Vec::new(),
         }
     }
+}
+
+/// Per-file export lists, keyed by path and invalidated by mtime.
+///
+/// A dependency is read and walked once and then reused until its file
+/// changes on disk, which for a package under a library root is ~never
+/// during an editing session. Without this, every diagnostics run would
+/// re-parse the whole `@require:` closure a second time -- the loader has
+/// already parsed it once, but into a CST this crate's model walk cannot
+/// consume, and re-parsing from text was the cheap way to reuse
+/// `build_model` rather than write a second walk.
+///
+/// A `Mutex` and not a thread-local: the analysis runs on a freshly spawned
+/// thread per check (see `ANALYSIS_STACK`), so a thread-local would be cold
+/// every single time.
+type ExportCache = HashMap<PathBuf, (Option<SystemTime>, Arc<Vec<crate::Export>>)>;
+static EXPORTS: OnceLock<Mutex<ExportCache>> = OnceLock::new();
+
+/// The last-known dependency exports PER BUFFER, so completion can have them
+/// without resolving the graph on a keystroke.
+///
+/// Written by [`check`], which runs on change and is already paying for the
+/// load; read by `textDocument/completion`, which is not. The two are
+/// deliberately decoupled rather than threaded through `State`: `diagnose`
+/// takes `&self`, and widening it to `&mut self` to carry a cache would put
+/// a mutable borrow across the whole request dispatch for the sake of one
+/// list.
+///
+/// Staleness is bounded by one analysis: a `@require:` added and then
+/// immediately completed against offers nothing until the next diagnostics
+/// run, which the client triggers on the same edit.
+static BUFFER_EXPORTS: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<crate::Export>>>>> = OnceLock::new();
+
+/// What the last [`check`] of this buffer found its dependencies to bind.
+///
+/// Empty when the buffer has never been checked, when its analysis degraded
+/// before resolving a graph, or when the typecheck tier is off — all of which
+/// are "no dependency completions", never a wrong answer.
+pub fn exports_for(path: &Path) -> Vec<crate::Export> {
+    let Some(cache) = BUFFER_EXPORTS.get() else {
+        return Vec::new();
+    };
+    let Ok(map) = cache.lock() else {
+        return Vec::new();
+    };
+    map.get(&normalize(path))
+        .map(|v| v.as_ref().clone())
+        .unwrap_or_default()
+}
+
+/// The file-level bindings of every dependency, the buffer itself excluded.
+///
+/// Errors are silence, never a diagnostic: a dependency that cannot be read
+/// here has already been reported by the loader if it matters, and the cost
+/// of getting this wrong is a shorter completion list, not a wrong answer.
+fn collect_exports(
+    files: &[LoadedFile],
+    buffer: &Path,
+    version: RustyfiVersion,
+) -> Vec<crate::Export> {
+    let cache = EXPORTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut out: Vec<crate::Export> = Vec::new();
+    for f in files {
+        // The buffer's own bindings are already in the model that completion
+        // consults; adding them here would duplicate every local name and,
+        // worse, do it with a stale copy from disk.
+        if f.path == buffer {
+            continue;
+        }
+        let mtime = std::fs::metadata(&f.path)
+            .and_then(|m| m.modified())
+            .ok();
+        if let Ok(map) = cache.lock() {
+            if let Some((cached_at, items)) = map.get(&f.path) {
+                // `None` mtime means the filesystem would not say; then the
+                // entry is not trusted and the file is re-read.
+                if cached_at.is_some() && *cached_at == mtime {
+                    out.extend(items.iter().cloned());
+                    continue;
+                }
+            }
+        }
+        let Ok(text) = std::fs::read_to_string(&f.path) else {
+            continue;
+        };
+        let origin = crate::origin_of(&f.path);
+        let items = Arc::new(crate::exports_from_source(&text, Some(version), &origin));
+        if let Ok(mut map) = cache.lock() {
+            map.insert(f.path.clone(), (mtime, Arc::clone(&items)));
+        }
+        out.extend(items.iter().cloned());
+    }
+    out
 }
 
 /// The stack the analysis runs on.
@@ -303,7 +409,7 @@ fn resolve_and_check(
                 program.files.insert(
                     at,
                     LoadedFile {
-                        path: buffer_path,
+                        path: buffer_path.clone(),
                         cst,
                         origin: FileOrigin::Local,
                         version,
@@ -313,6 +419,15 @@ fn resolve_and_check(
         }
     }
 
+    // Before `check_document_program` consumes the program: this is the only
+    // point where every dependency has been resolved AND is still in hand.
+    let exports = collect_exports(&program.files, &buffer_path, version);
+    {
+        let cache = BUFFER_EXPORTS.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut map) = cache.lock() {
+            map.insert(buffer_path.clone(), Arc::new(exports.clone()));
+        }
+    }
     let files = program.files.len();
     match rustyfi_lang::check_document_program(program, version) {
         Ok(()) => Analysis {
@@ -321,6 +436,7 @@ fn resolve_and_check(
             depth: Depth::Program,
             note: None,
             files,
+            exports,
         },
         Err(e) => Analysis {
             version,
@@ -328,6 +444,7 @@ fn resolve_and_check(
             depth: Depth::Program,
             note: None,
             files,
+            exports,
         },
     }
 }

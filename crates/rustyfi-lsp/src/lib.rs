@@ -106,6 +106,7 @@
 mod analysis;
 mod area;
 mod budget;
+mod exports;
 mod features;
 mod format;
 mod format_cst;
@@ -124,6 +125,7 @@ pub mod server;
 #[cfg(feature = "server")]
 mod workspace;
 
+pub use exports::{from_source as exports_from_source, origin_of, Export};
 pub use analysis::{analyze, analyze_auto, analyze_detected, detect_version, Diag, Severity};
 pub use features::{
     completions, definition, hover, record_label_slot, type_position_slot, Completion,

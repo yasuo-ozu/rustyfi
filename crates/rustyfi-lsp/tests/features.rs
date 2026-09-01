@@ -7,7 +7,7 @@
 
 use rustyfi_lsp::{
     build_model, completions, definition, hover, record_label_slot, type_position_slot,
-    Definition, LineIndex, Position, RustyfiVersion,
+    Definition, Export, LineIndex, Ns, Position, RustyfiVersion,
 };
 
 /// Ask a question the way a client does: by line and UTF-16 character.
@@ -27,7 +27,7 @@ fn after(src: &str, needle: &str, n: usize) -> usize {
 
 fn labels(src: &str, byte: usize, lang: Option<RustyfiVersion>) -> Vec<String> {
     let m = build_model(src, lang);
-    completions(&m, byte).into_iter().map(|c| c.label).collect()
+    completions(&m, byte, &[]).into_iter().map(|c| c.label).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -707,7 +707,7 @@ fn sweeping_every_cursor_position_of_real_files_never_panics() {
             // byte of it. A stride coprime with nothing in particular still
             // lands inside every token of more than a few characters.
             if byte % 13 == 0 {
-                let _ = completions(&m, byte);
+                let _ = completions(&m, byte, &[]);
             }
             swept += 1;
         }
@@ -719,10 +719,127 @@ fn sweeping_every_cursor_position_of_real_files_never_panics() {
 fn completion_offers_the_written_type_as_its_detail() {
     let src = "let width : length -> length = fun x -> x\nlet z = wid\n";
     let m = build_model(src, None);
-    let items = completions(&m, after(src, "let z = wid", 0));
+    let items = completions(&m, after(src, "let z = wid", 0), &[]);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].label, "width");
     assert_eq!(items[0].detail, "let : length -> length");
     assert_eq!(items[0].kind, 6, "LSP CompletionItemKind::Variable");
     assert_eq!(&src[items[0].range.start..items[0].range.end], "wid");
+}
+
+// ---------------------------------------------------------------------------
+// Dependency completions
+//
+// The unit here is `completions`' handling of the export list; WHERE that list
+// comes from (the loader, during `project::check`) is `project`'s business and
+// needs a filesystem, so it is tested through the server instead.
+// ---------------------------------------------------------------------------
+
+fn dep(name: &str, ns: Ns, form: &'static str, origin: &str) -> Export {
+    Export {
+        name: name.to_string(),
+        ns,
+        form,
+        origin: origin.to_string(),
+    }
+}
+
+#[test]
+fn a_dependency_command_completes_where_a_local_one_would() {
+    // The reported bug, at its smallest: the buffer defines nothing, so before
+    // dependency completions existed this returned an empty list.
+    let src = "let doc = {\\La}\n";
+    let m = build_model(src, None);
+    let deps = vec![
+        dep("\\LaTeX", Ns::InlineCmd, "let-inline", "stdjabook"),
+        dep("\\SATySFi", Ns::InlineCmd, "let-inline", "stdjabook"),
+        dep("\\other", Ns::InlineCmd, "let-inline", "stdjabook"),
+    ];
+    let got: Vec<String> = completions(&m, after(src, "{\\La", 0), &deps)
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
+    assert_eq!(got, vec!["\\LaTeX"]);
+}
+
+#[test]
+fn a_dependency_respects_the_namespace_the_area_asks_for() {
+    // A TYPE position offers types, not values.
+    //
+    // Deliberately not the `+cmd` / `\cmd` pair that reads as the obvious
+    // test here: a command's name carries its sigil, so `+pa` already fails
+    // to prefix-match `\para` and the assertion passes with the namespace
+    // filter DELETED. Measured, not assumed — that version of this test
+    // survived the mutation. Values and types share a namespace-free
+    // spelling, so this one cannot.
+    let src = "let x : fo = 1\n";
+    let m = build_model(src, None);
+    let deps = vec![
+        dep("fost", Ns::Type, "type", "stdjabook"),
+        dep("foval", Ns::Value, "let", "stdjabook"),
+    ];
+    let got: Vec<String> = completions(&m, after(src, ": fo", 0), &deps)
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
+    assert_eq!(got, vec!["fost"], "a value leaked into a type position");
+}
+
+#[test]
+fn a_local_binding_shadows_a_dependency_of_the_same_name() {
+    // Both are offered under one label, and the surviving entry must be the
+    // LOCAL one — its detail names the form the user can see in this file,
+    // and jumping to a dependency's definition for a name this file rebinds
+    // would be wrong. Guards the stability of the sort in `completions`.
+    let src = "let-inline \\emph it = it\nlet doc = {\\em}\n";
+    let m = build_model(src, None);
+    let deps = vec![dep("\\emph", Ns::InlineCmd, "let-inline", "stdjabook")];
+    let got = completions(&m, after(src, "{\\em", 0), &deps);
+    assert_eq!(got.len(), 1, "one entry per label: {got:?}");
+    assert_eq!(got[0].label, "\\emph");
+    assert!(
+        !got[0].detail.contains("stdjabook"),
+        "the LOCAL binding must win, not the dependency: {:?}",
+        got[0].detail
+    );
+}
+
+#[test]
+fn a_dependency_names_where_it_came_from() {
+    let src = "let doc = {\\La}\n";
+    let m = build_model(src, None);
+    let deps = vec![dep("\\LaTeX", Ns::InlineCmd, "let-inline", "stdjabook")];
+    let got = completions(&m, after(src, "{\\La", 0), &deps);
+    assert_eq!(got.len(), 1);
+    assert!(
+        got[0].detail.contains("stdjabook"),
+        "the popup should say which package it is from: {:?}",
+        got[0].detail
+    );
+}
+
+#[test]
+fn a_qualified_word_does_not_draw_on_the_flat_dependency_list() {
+    // `M.foo` asks about one module's members. The export list records what a
+    // FILE binds, with no module path, so answering a qualified word from it
+    // would offer names that are not reachable by the path the user typed.
+    let src = "let doc = M.fo\n";
+    let m = build_model(src, None);
+    let deps = vec![dep("foo", Ns::Value, "let", "stdjabook")];
+    let got: Vec<String> = completions(&m, after(src, "M.fo", 0), &deps)
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
+    assert!(got.is_empty(), "qualified word drew on the flat list: {got:?}");
+}
+
+#[test]
+fn prose_offers_nothing_however_many_dependencies_there_are() {
+    // A cursor in running text is not a completion site, and a long
+    // dependency list must not turn it into one.
+    let src = "let doc = {plain wo}\n";
+    let m = build_model(src, None);
+    let deps = vec![dep("\\word", Ns::InlineCmd, "let-inline", "p")];
+    let got = completions(&m, after(src, "plain wo", 0), &deps);
+    assert!(got.is_empty(), "prose offered: {got:?}");
 }

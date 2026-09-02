@@ -1973,6 +1973,129 @@ fn insert_box_interscript_glue(boxes: Vec<HorzBox>, ctx: &Context) -> Vec<HorzBo
     out
 }
 
+/// Upstream's source-whitespace rewrite around CJK
+/// (`lineBreakDataMap.ml:143-157`'s `normalization_rule`, folded over the whole
+/// character list by `append_property`'s inner `normalize`,
+/// `lineBreakDataMap.ml:315-332`):
+///
+///   CJK + (SP|BR) + Latin -> deleted      Latin + (SP|BR) + CJK -> deleted
+///   CJK + BR      + CJK   -> deleted      CJK   + SP      + CJK -> KEPT
+///   any remaining (SP|BR) touching CJK -> deleted
+///
+/// Every space/line break adjacent to CJK is dropped EXCEPT a single literal
+/// space between two CJK characters — the Latin/CJK boundary's spacing is
+/// supplied by `text_to_boxes`'s inter-script glue (0.24em), not by the
+/// author's whitespace, so keeping it both double-counted that boundary and
+/// turned every source line break into a space (the port set `あります。 1 つは`
+/// / `これは 指定した` where SATySFi sets both tight — figbox
+/// `manual.saty:116-120`).
+///
+/// **This runs BEFORE `uax14_boundaries` and before the box loop, which is
+/// upstream's own order** (`:482` classifies the ALREADY-normalized list) and
+/// is the whole point of it being a separate pass. The rewrite used to be a
+/// `continue` inside the box loop, which deleted the character but left both
+/// of the loop's lookaheads reading the RAW text: at `語\n日` the JLreq pair
+/// space (`cjk_pair_space`) saw the newline as the "next" character, decided
+/// the boundary was not CJK-CJK and emitted nothing, and `boundary[after]`
+/// answered for the `語`/`\n` boundary (LB6, PreventBreak) rather than for the
+/// `語`/`日` one (a legal break). So every wrapped CJK paragraph lost its pair
+/// spacing AND its break opportunity at one boundary per source line — and
+/// the bundled corpus is largely Japanese. Normalizing first makes
+/// `日本語\n日本語` and `日本語日本語` the same text, exactly as upstream.
+///
+/// Left context is the already-normalized output and right context is the raw
+/// remainder, matching `normalize`'s `(bihead :: Alist.to_list_rev biacc)` /
+/// `bitail` split. Borrows when nothing is deleted, so Latin-only text pays
+/// one scan and no allocation.
+///
+/// The second component is every NORMALIZED byte offset at which at least one
+/// character was deleted — the JOINS this pass creates, which `text_to_boxes`
+/// then treats specially. Deleting a character joins its two neighbours, and
+/// that join has two separable consequences:
+///
+///   * the two survivors must be SPACED as if the author had written them
+///     adjacent. That is the bug this pass exists to fix, and it is taken:
+///     `cjk_pair_space` is a property of the two characters, not of what stood
+///     between them.
+///   * UAX#14, run over the JOINED text, would also grant a BREAK between them
+///     that the author's own text never offered — `語\n日` classifies as `語日`,
+///     where the raw text's boundary was LB6, never break before a line feed.
+///     That is NOT taken.
+///
+/// Declining the second is a scope decision, and a measured one: granting the
+/// new break opportunities lets the line-breaker pack one extra line into
+/// `easytable` (`lines_dev` 2 -> 3, a `layout-tests/fidelity.py` gate) and
+/// inflate `floatfig`'s wrapped column, while the spacing alone leaves every
+/// gated metric at or better than baseline. It is also the conservative
+/// reading: upstream normalizes the whitespace away and then chunks the
+/// result per chunk, not by a UAX#14 sweep that can now see across the gap,
+/// so nothing here claims upstream grants that break either.
+fn normalize_source_whitespace(text: &str) -> (std::borrow::Cow<'_, str>, Vec<usize>) {
+    let is_cjk = |ch: char| matches!(char_script(ch), Script::HanIdeographic | Script::Kana);
+    // `Some` only once a character has actually been deleted; until then the
+    // output is a prefix of `text` and needs no buffer.
+    let mut out: Option<String> = None;
+    // The last character KEPT — upstream's left context. A kept space leaves
+    // `prev` a space, so `prev_cjk` is false for the next boundary, which is
+    // what the old in-loop version got from resetting `prev_script` to `None`.
+    let mut prev: Option<char> = None;
+    // Normalized offsets where a deletion joined two characters the source did
+    // not write adjacently. See the doc comment.
+    let mut joined: Vec<usize> = Vec::new();
+    for (i, c) in text.char_indices() {
+        let mut keep = true;
+        if c == ' ' || c == '\n' {
+            let prev_cjk = prev.is_some_and(is_cjk);
+            let rest = &text[i + c.len_utf8()..];
+            // Whether more whitespace follows. Upstream's "preserve a space
+            // between two nonspaced characters" rule
+            // (`([nonspaced; exact SP], [bispace], [nonspaced])`) tests the
+            // IMMEDIATE right neighbour against the RAW tail, so every member
+            // of a run but the LAST is deleted by the catch-all
+            // `([nonspaced; set [SP; INBR]], [], [])` — and the last one, now
+            // facing the CJK character directly, survives. A run between two
+            // CJK characters therefore collapses to exactly ONE space, not to
+            // nothing (`\n` + indent -> one space). Pinned by
+            // `cjk_source_newline_normalization::
+            // a_whitespace_run_between_two_cjk_runs_collapses_to_one_space`.
+            let run_continues = rest
+                .chars()
+                .next()
+                .is_some_and(|ch| matches!(ch, ' ' | '\n'));
+            let next_cjk = rest
+                .chars()
+                .find(|ch| !matches!(ch, ' ' | '\n'))
+                .is_some_and(is_cjk);
+            if prev_cjk || next_cjk {
+                keep = c == ' ' && !run_continues && prev_cjk && next_cjk;
+            }
+        }
+        if keep {
+            if let Some(buf) = out.as_mut() {
+                buf.push(c);
+            }
+            prev = Some(c);
+        } else {
+            // The length of the output SO FAR is the normalized offset of the
+            // join this deletion creates: the character before it ends there,
+            // the character after it begins there. Before the first deletion
+            // the output is still the borrowed prefix `text[..i]`, so that
+            // length is `i`. A whole run collapsing to nothing pushes the same
+            // offset more than once; the consumer only ever writes a flag, so
+            // that is harmless and cheaper than deduplicating.
+            joined.push(out.as_ref().map_or(i, String::len));
+            if out.is_none() {
+                out = Some(text[..i].to_string());
+            }
+        }
+    }
+    let normalized = match out {
+        Some(buf) => std::borrow::Cow::Owned(buf),
+        None => std::borrow::Cow::Borrowed(text),
+    };
+    (normalized, joined)
+}
+
 fn text_to_boxes(
     interp: &mut Interp,
     ctx: &Context,
@@ -1987,7 +2110,29 @@ fn text_to_boxes(
     // matching `Context::initial`'s own upstream-faithful defaults), so this
     // is a plain formula, no fallback needed.
     let space_width = ctx.font_size * ctx.space_natural;
-    let boundary = uax14_boundaries(text);
+    // Upstream's order: normalize the source whitespace over the WHOLE run
+    // first, then classify break opportunities and build boxes against the
+    // normalized text (`lineBreakDataMap.ml:482` — `append_property` then
+    // `cut_into_segment_record`). See `normalize_source_whitespace` for what
+    // reading the raw text here used to cost.
+    let (normalized, joined) = normalize_source_whitespace(text);
+    let text: &str = &normalized;
+    let mut boundary = uax14_boundaries(text);
+    // Parallel to `boundary`: whether the normalization JOINED two characters
+    // at this offset. A join takes the SPACING of a written-adjacent boundary
+    // and declines its BREAK, so `boundary` is cleared there — leaving exactly
+    // what the pre-normalization code read, since `boundary` was then indexed
+    // into the RAW text and `語`/`\n` answered LB6 — while `joined_at` keeps
+    // the fact around for the box loop to space against. See
+    // `normalize_source_whitespace` for why, and for what granting the break
+    // instead costs.
+    let mut joined_at = vec![false; boundary.len()];
+    for off in joined {
+        if off < boundary.len() {
+            boundary[off] = None;
+            joined_at[off] = true;
+        }
+    }
     let mut word = String::new();
     let flush_word =
         |word: &mut String, script: Script, out: &mut Vec<HorzBox>| -> Result<(), EvalError> {
@@ -2099,45 +2244,6 @@ fn text_to_boxes(
     // The preceding typeset char itself, for the `is_interscript_punct` guard.
     let mut prev_char: Option<char> = None;
     for (i, c) in text.char_indices() {
-        // Whitespace normalization around CJK — upstream's rewrite table
-        // (`lineBreakDataMap.ml:143-157`, applied before any box is built):
-        //
-        //   CJK + (SP|BR) + Latin -> deleted      Latin + (SP|BR) + CJK -> deleted
-        //   CJK + BR      + CJK   -> deleted      CJK   + SP      + CJK -> KEPT
-        //   any remaining (SP|BR) touching CJK -> deleted; a leftover BR -> space
-        //
-        // Every space/line break adjacent to CJK is dropped EXCEPT a single
-        // literal space between two CJK characters — the Latin/CJK boundary's
-        // spacing is supplied by the inter-script glue below (0.24em), not by
-        // the author's whitespace, so keeping it both double-counted that
-        // boundary and turned every source line break into a space (the port
-        // set `あります。 1 つは`/`これは 指定した` where SATySFi sets both
-        // tight — figbox `manual.saty:116-120`). Deleting is a plain
-        // `continue`: the characters either side still space against each
-        // other through the inter-script rule, as if the whitespace had never
-        // been written.
-        if c == ' ' || c == '\n' {
-            let is_cjk_script = |s| matches!(s, Script::HanIdeographic | Script::Kana);
-            let prev_cjk = prev_script.is_some_and(is_cjk_script);
-            let rest = &text[i + c.len_utf8()..];
-            // Whether more whitespace follows: upstream's rules only ever match
-            // ONE space between the two CJK characters (a longer run falls
-            // through to the delete-everything rules), so a run collapses away.
-            let run_continues = rest
-                .chars()
-                .next()
-                .is_some_and(|ch| matches!(ch, ' ' | '\n'));
-            let next_cjk = rest
-                .chars()
-                .find(|ch| !matches!(ch, ' ' | '\n'))
-                .is_some_and(|ch| is_cjk_script(char_script(ch)));
-            if prev_cjk || next_cjk {
-                let keep = c == ' ' && !run_continues && prev_cjk && next_cjk;
-                if !keep {
-                    continue;
-                }
-            }
-        }
         if c == ' ' || c == '\n' {
             if let Some(s) = word_script.take() {
                 flush_word(&mut word, s, out)?;
@@ -2299,6 +2405,9 @@ fn text_to_boxes(
             // be breakable. A line with no give has to FILL its measure with
             // characters, which is part of why the port packs more per line than
             // SATySFi.
+            // `boundary[after]` is already `None` at a join (see above);
+            // `joined_at[after]` is which of the two `None`s this is.
+            let joined_here = joined_at[after];
             match boundary[after] {
                 Some(kind) => {
                     flush_word(&mut word, script, out)?;
@@ -2345,29 +2454,49 @@ fn text_to_boxes(
                 // that line 2.5pt -> 6.5pt).
                 //
                 // Completing it needs the per-character kerns at CJK<->Latin
-                // boundaries and run edges too, which needs the source-
-                // whitespace rewrite applied BEFORE `uax14_boundaries` rather
-                // than during this loop (upstream's own order). Without that a
-                // `。` before a deleted source newline gets its trailing kern
-                // while the class space that pays it back is skipped (the
-                // lookahead sees the newline, not the character after it), and
-                // the layout-fidelity gate fails 12 ways. So the natural-width
-                // bug the rigid half would fix — `」。`/`」、` a half-em too
-                // wide, `末・雲` a quarter — stays exactly as open as before.
+                // boundaries and run edges too. Its stated PREREQUISITE has
+                // since landed: the source-whitespace rewrite now runs as its
+                // own pass ahead of `uax14_boundaries`
+                // (`normalize_source_whitespace`, upstream's own order), so a
+                // `。` before a deleted source newline no longer gets its
+                // trailing kern while the class space paying it back is
+                // skipped — that half of the old blocker is gone. What remains
+                // is the per-PAIR vs per-CHARACTER asymmetry above, which the
+                // reordering does not touch, so the natural-width bug the
+                // rigid half would fix — `」。`/`」、` a half-em too wide,
+                // `末・雲` a quarter — stays open on its own merits.
+                //
+                // A JOINED boundary takes this arm too — it is not a break
+                // candidate — but keeps the RIGID half as well. The asymmetry
+                // argued above is about boundaries where UPSTREAM itself emits
+                // `LBPure`, and a join is not one of those: upstream deletes
+                // the whitespace and then spaces the two survivors exactly as
+                // if the author had written them adjacent. Dropping the kern
+                // here would set `・\nあ` a quarter em WIDER than `・あ` at
+                // every source line end, which is the same class of gap this
+                // pass exists to close. Only the BREAK is withheld. Pinned by
+                // `cjk_source_newline_normalization::
+                // a_joined_boundary_keeps_the_rigid_half_of_the_pair_space`.
                 None => {
-                    if let Some((_, sh, st)) = pair {
-                        if sh != Length::ZERO || st != Length::ZERO {
+                    if let Some((n, sh, st)) = pair {
+                        let kern = if joined_here { n } else { Length::ZERO };
+                        if kern != Length::ZERO || sh != Length::ZERO || st != Length::ZERO {
                             flush_word(&mut word, script, out)?;
                             word_script = None;
+                            let mut no_break = Vec::new();
+                            if kern != Length::ZERO {
+                                no_break.push(PureHorzBox::FixedEmpty { width: kern });
+                            }
+                            no_break.push(PureHorzBox::OuterEmpty {
+                                natural: Length::ZERO,
+                                shrinkable: sh,
+                                stretchable: st,
+                            });
                             out.push(HorzBox::Pure(PureHorzBox::Discretionary {
                                 penalty: NO_BREAK_PENALTY,
                                 pre_break: Vec::new(),
                                 post_break: Vec::new(),
-                                no_break: vec![PureHorzBox::OuterEmpty {
-                                    natural: Length::ZERO,
-                                    shrinkable: sh,
-                                    stretchable: st,
-                                }],
+                                no_break,
                             }));
                         }
                     }

@@ -881,12 +881,32 @@ It answers **diagnostics**, **hover**, **go-to-definition**, **completion**,
 **symbols** and **formatting** — for both SATySFi generations, and on
 half-typed buffers.
 
-A **Visual Studio Code extension** wrapping this server, the formatter and a
-live Markdown preview lives in [`editors/vscode/`](editors/vscode/README.md).
+### Editor plugins
 
-A **Vim and Neovim plugin** — filetype, `:RustyfiFmt`, this server, and a live
-unicode-math preview in a scratch split — lives in
-[`editors/vim/`](editors/vim/README.md).
+Two plugins wrap the three things this binary offers an editor — the language
+server above, `rustyfi fmt`, and the compiler itself.
+
+| | [`editors/vim/`](editors/vim/README.md) | [`editors/vscode/`](editors/vscode/README.md) |
+|---|---|---|
+| **Language server** | `vim.lsp.enable('rustyfi')` on Neovim 0.11+; `require('rustyfi.lsp').setup()` on 0.9/0.10 or with nvim-lspconfig; vim-lsp on Vim 8 | `vscode-languageclient`, started automatically |
+| **Formatting** | `:RustyfiFmt`, format-on-save | Format Document, `editor.formatOnSave` |
+| **Live preview** | Markdown with unicode equations (`x²`, `∑ₐᵇ`) in a scratch split — no browser, no webview | PDF by default, rendered with pdf.js; Markdown as the other mode, with five choices for how equations are written |
+| **Build** | `:RustyfiBuild`, `:RustyfiBuildOpen` → quickfix | *Build PDF*, *Build PDF and Open* → Problems panel |
+
+Both format the **buffer** rather than the file on disk, so an unsaved
+document formats what you can actually see, and both refuse rather than
+guess when the formatter declines: a document that does not lex, or one that
+lexes but does not parse, leaves your text untouched.
+
+The preview and the build are deliberately different commands. The preview
+renders a scratch copy of the buffer, continuously, and reports one error in
+a status line — it is a glance. A build compiles the file **on disk**, once,
+writes the PDF where the author expects it, and reports failures somewhere
+you can walk them (`:cnext`, or the Problems panel), because a build failure
+is a thing you fix.
+
+Neither plugin needs `rustyfi` installed: both walk up from the document for
+a `target/release/rustyfi`, so a checkout works with no configuration.
 
 ### Diagnostics
 
